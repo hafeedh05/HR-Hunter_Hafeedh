@@ -1,0 +1,11 @@
+.DS_Store
+.env
+.pytest_cache/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+output/search/*.json
+output/search/*.csv
