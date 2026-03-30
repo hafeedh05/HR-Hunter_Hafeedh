@@ -3,7 +3,7 @@ name = "hr-hunter"
 version = "0.1.0"
 description = "Executive search assistant focused on fast, verifiable candidate retrieval."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
   "httpx>=0.28.0",
   "PyYAML>=6.0.2",
@@ -17,9 +17,13 @@ api = [
 dev = [
   "pytest>=8.3.0",
 ]
+mcp = [
+  "mcp[cli]>=1.0.0",
+]
 
 [project.scripts]
 hr-hunter = "hr_hunter.cli:main"
+hr-hunter-gcp-mcp = "hr_hunter.gcp_mcp:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]

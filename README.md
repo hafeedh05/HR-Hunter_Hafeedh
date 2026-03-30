@@ -51,6 +51,12 @@ If you want the optional API surface:
 uv sync --extra dev --extra api
 ```
 
+If you want the local GCP deployment MCP:
+
+```bash
+uv sync --extra mcp
+```
+
 ## Environment
 
 Create a local `.env` file from `.env.example`.
@@ -166,3 +172,29 @@ The included sample brief is based on:
 - This version is retrieval-first. It does not waste money on LLM adjudication in the hot path.
 - The second-pass verifier is code-first. If you add an LLM later, use it after evidence collection, not instead of evidence collection.
 - If you want a service wrapper, the engine is already structured for it. The CLI is just the fastest operational surface.
+
+## GCP MCP
+
+This repo includes a local MCP server for Google Cloud that uses your local `gcloud` auth to inspect Compute Engine VMs, SSH into them, copy files, and install the current workspace onto an existing VM.
+
+Files:
+
+- `src/hr_hunter/gcp_mcp.py`
+- `scripts/install_on_gcp_vm.sh`
+- `docs/gcp-mcp.md`
+
+Quick start:
+
+```bash
+gcloud auth login
+gcloud auth application-default login
+gcloud config set project <PROJECT_ID>
+uv sync --extra mcp
+python src/hr_hunter/gcp_mcp.py
+```
+
+For client installation with the official Python MCP SDK:
+
+```bash
+uv run mcp install src/hr_hunter/gcp_mcp.py --with-editable .
+```
