@@ -60,6 +60,33 @@ def test_candidate_parser_keeps_matched_irish_location_hint() -> None:
     assert candidate.current_company == "Unilever"
 
 
+def test_candidate_parser_does_not_infer_current_role_from_historical_snippet() -> None:
+    provider = ScrapingBeeGoogleProvider({})
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-historical-role-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Procter & Gamble"],
+            "company_aliases": {"Procter & Gamble": ["P&G"]},
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+        }
+    )
+
+    candidate = provider._candidate_from_result(
+        {
+            "title": "Jonathan Gordon",
+            "description": "Before joining McKinsey, Jonathan worked as a brand manager at Procter & Gamble. Originally from Ireland.",
+            "url": "https://www.mckinsey.com/our-people/jonathan-gordon",
+        },
+        brief,
+    )
+
+    assert candidate is not None
+    assert candidate.current_company == ""
+    assert candidate.current_title == "Jonathan Gordon"
+
+
 def test_scrapingbee_builds_public_query_families() -> None:
     provider = ScrapingBeeGoogleProvider({})
     brief = build_search_brief(

@@ -68,6 +68,25 @@ PUBLIC_QUERY_FAMILY_TERMS = {
     "org_chart_profile_pages": ['"org chart"', '"org"', '"profile"', '"leadership"'],
     "profile_like_public_pages": ['"profile"', '"profiles"', '"bio"', '"biography"', '"people"'],
 }
+HISTORICAL_ROLE_MARKERS = (
+    "before joining",
+    "before he joined",
+    "before she joined",
+    "began his career",
+    "began her career",
+    "career at",
+    "former",
+    "formerly",
+    "prior to joining",
+    "prior to his",
+    "prior to her",
+    "previously",
+    "started his career",
+    "started her career",
+    "used to",
+    "worked as",
+    "worked at",
+)
 
 
 class ScrapingBeeGoogleClient:
@@ -346,13 +365,18 @@ class ScrapingBeeGoogleProvider(SearchProvider):
             return hint
         return ""
 
+    @staticmethod
+    def _looks_historical_role_text(text: str) -> bool:
+        normalized = normalize_text(text)
+        return any(marker in normalized for marker in HISTORICAL_ROLE_MARKERS)
+
     def _infer_title_from_description(
         self,
         description: str,
         brief: SearchBrief,
         current_company: str,
     ) -> str:
-        if not description:
+        if not description or self._looks_historical_role_text(description):
             return ""
         company_candidates = [current_company] if current_company else []
         if current_company in brief.company_aliases:
@@ -531,7 +555,7 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         name_guess, current_title, current_company = self._parse_title_fields(title, url or "")
         location_name = self._extract_location_name(brief, f"{title} {description}")
 
-        if not current_company:
+        if not current_company and not self._looks_historical_role_text(description):
             current_company = self._find_company_match(f"{title} {description} {url or ''}", brief)
         if not current_title or normalize_text(current_title) == normalize_text(title):
             inferred_title = self._infer_title_from_description(description, brief, current_company)
