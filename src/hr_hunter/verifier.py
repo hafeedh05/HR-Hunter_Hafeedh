@@ -16,13 +16,26 @@ from hr_hunter.scoring import sort_candidates, status_from_score
 YEAR_PATTERN = re.compile(r"\b(19|20)\d{2}\b")
 CURRENT_EMPLOYMENT_BLOCKERS = (
     "alumni",
+    "before joining",
+    "before he joined",
+    "before she joined",
+    "began his career",
+    "began her career",
+    "career at",
     "ex ",
     "former",
     "formerly",
     "left",
+    "prior to joining",
+    "prior to his",
+    "prior to her",
     "previous role",
     "previously",
+    "started his career",
+    "started her career",
     "used to",
+    "worked as",
+    "worked at",
     "ex-",
     "retired",
     "past ",
@@ -492,6 +505,12 @@ class PublicEvidenceVerifier:
                 missing.append("current title")
             if (brief.geography.location_name or brief.geography.country) and not candidate.current_location_confirmed:
                 missing.append("current Ireland location")
+            if getattr(candidate, "location_precision_bucket", "") in {
+                "country_only_ireland",
+                "unknown_location",
+                "outside_ireland",
+            }:
+                missing.append("precise Ireland location")
             if brief.industry_keywords and not candidate.industry_aligned:
                 missing.append("industry fit")
             if not candidate.current_employment_confirmed:

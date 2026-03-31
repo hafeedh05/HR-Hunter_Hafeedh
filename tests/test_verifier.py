@@ -269,6 +269,59 @@ def test_apply_evidence_caps_historical_only_public_match() -> None:
     assert "historical_only_public_evidence" in getattr(updated, "cap_reasons")
 
 
+def test_apply_evidence_rejects_before_joining_profile_as_current_role_proof() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-before-joining-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Procter & Gamble"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+            "industry_keywords": ["FMCG"],
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Jonathan Gordon",
+            current_title="Brand Manager",
+            current_company="Procter & Gamble",
+            location_name="Ireland",
+            summary="Brand leader in Ireland.",
+        ),
+        brief,
+    )
+    evidence = [
+        EvidenceRecord(
+            source_url="https://www.mckinsey.com/our-people/jonathan-gordon",
+            source_domain="mckinsey.com",
+            title="Jonathan Gordon",
+            snippet="Before joining McKinsey, Jonathan worked as a brand manager at Procter & Gamble. Originally from Ireland.",
+            name_match=True,
+            company_match="Procter & Gamble",
+            title_matches=["Brand Manager"],
+            location_match=True,
+            profile_signal=True,
+            current_employment_signal=True,
+            confidence=0.91,
+        )
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.current_employment_confirmed is False
+    assert updated.current_company_confirmed is False
+    assert updated.current_title_confirmed is False
+    assert updated.verification_status != "verified"
+    assert "historical_only_public_evidence" in getattr(updated, "cap_reasons")
+
+
 def test_apply_evidence_caps_stale_current_role_proof() -> None:
     verifier = PublicEvidenceVerifier()
     brief = build_search_brief(
@@ -319,3 +372,53 @@ def test_apply_evidence_caps_stale_current_role_proof() -> None:
     assert updated.current_employment_confirmed is False
     assert updated.verification_status != "verified"
     assert getattr(updated, "evidence_freshness_year") == 2022
+
+
+def test_apply_evidence_caps_country_only_ireland_from_verified() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-country-only-ireland-cap-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Procter & Gamble"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "location_hints": ["Ireland", "Dublin"],
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+            "industry_keywords": ["FMCG"],
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Country Only FMCG",
+            current_title="Brand Director",
+            current_company="Procter & Gamble",
+            location_name="Ireland",
+            summary="Brand Director at Procter & Gamble Ireland with FMCG leadership experience.",
+        ),
+        brief,
+    )
+    evidence = [
+        EvidenceRecord(
+            source_url="https://example.com/people/country-only-fmcg",
+            source_domain="example.com",
+            name_match=True,
+            company_match="Procter & Gamble",
+            title_matches=["Brand Manager"],
+            location_match=True,
+            profile_signal=True,
+            current_employment_signal=True,
+            confidence=0.88,
+        )
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.location_precision_bucket == "country_only_ireland"
+    assert updated.verification_status != "verified"
+    assert "precise Ireland location" in getattr(updated, "cap_reasons")

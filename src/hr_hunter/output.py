@@ -141,8 +141,6 @@ def _infer_current_fmcg_fit(candidate: CandidateProfile) -> float:
 
 
 def _infer_qualification_tier(candidate: CandidateProfile, function_fit: float, fmcg_fit: float) -> str:
-    if candidate.qualification_tier and candidate.qualification_tier != "weak":
-        return candidate.qualification_tier
     if candidate.verification_status == "verified":
         return "strict_verified"
     if candidate.verification_status == "review":

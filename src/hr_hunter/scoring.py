@@ -442,7 +442,9 @@ def evaluate_location_precision(
     precise_location_hits = [
         hint
         for hint in unique_preserving_order([brief.geography.location_name, *brief.geography.location_hints])
-        if normalize_text(hint) and normalize_text(hint) in location_haystack
+        if normalize_text(hint)
+        and normalize_text(hint) in location_haystack
+        and normalize_text(hint) != normalize_text(brief.geography.country)
     ]
     if precise_location_hits:
         notes.append(f"location_precision: small_boost (named Irish locality: {precise_location_hits[0]})")
