@@ -217,3 +217,105 @@ def test_report_roundtrip_preserves_evidence_fields(tmp_path: Path) -> None:
     assert loaded.candidates[0].evidence_confidence == 0.84
     assert loaded.candidates[0].evidence_records[0].source_domain == "example.com"
     assert loaded.candidates[0].evidence_records[0].current_employment_signal is True
+
+
+def test_apply_evidence_caps_historical_only_public_match() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-historical-only-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+            "industry_keywords": ["FMCG"],
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Historical FMCG",
+            current_title="Senior Brand Manager",
+            current_company="Unilever",
+            location_name="Drogheda, Ireland",
+            location_geo="53.7179,-6.3561",
+            summary="Senior FMCG brand leader.",
+        ),
+        brief,
+    )
+    evidence = [
+        EvidenceRecord(
+            source_url="https://example.com/article",
+            source_domain="example.com",
+            name_match=True,
+            company_match="Unilever",
+            title_matches=["Brand Manager"],
+            location_match=True,
+            profile_signal=False,
+            current_employment_signal=False,
+            confidence=0.82,
+        )
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.current_employment_confirmed is False
+    assert updated.verification_status != "verified"
+    assert "historical_only_public_evidence" in getattr(updated, "cap_reasons")
+
+
+def test_apply_evidence_caps_stale_current_role_proof() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-stale-proof-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+            "industry_keywords": ["FMCG"],
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Stale FMCG",
+            current_title="Senior Brand Manager",
+            current_company="Unilever",
+            location_name="Drogheda, Ireland",
+            location_geo="53.7179,-6.3561",
+            summary="Senior FMCG brand leader.",
+        ),
+        brief,
+    )
+    evidence = [
+        EvidenceRecord(
+            source_url="https://example.com/people/stale-fmcg",
+            source_domain="example.com",
+            name_match=True,
+            company_match="Unilever",
+            title_matches=["Brand Manager"],
+            location_match=True,
+            profile_signal=True,
+            current_employment_signal=True,
+            recency_year=2022,
+            confidence=0.84,
+        )
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.stale_data_risk is True
+    assert updated.current_employment_confirmed is False
+    assert updated.verification_status != "verified"
+    assert getattr(updated, "evidence_freshness_year") == 2022

@@ -294,6 +294,10 @@ class PublicEvidenceVerifier:
             candidate.current_employment_confirmed = False
             candidate.verification_notes.append("no public corroboration found")
             candidate.verification_status = "review" if candidate.score >= 50.0 else "reject"
+            setattr(candidate, "source_quality_score", 0.0)
+            setattr(candidate, "evidence_freshness_year", None)
+            setattr(candidate, "current_role_proof_count", 0)
+            setattr(candidate, "cap_reasons", ["missing_public_evidence"])
             return candidate
 
         strong_records = [record for record in evidence_records if record.confidence >= 0.65]
@@ -316,6 +320,15 @@ class PublicEvidenceVerifier:
                 or (record.profile_signal and record.confidence >= 0.75)
             )
         ]
+        historical_only_records = [
+            record
+            for record in evidence_records
+            if record.name_match
+            and record.company_match
+            and record.title_matches
+            and not record.current_employment_signal
+            and not record.profile_signal
+        ]
         current_role_years = [record.recency_year for record in current_role_records if record.recency_year]
         latest_year = max(current_role_years, default=0)
         stale_data_risk = bool(latest_year and latest_year < datetime.now(timezone.utc).year - 2)
@@ -329,6 +342,19 @@ class PublicEvidenceVerifier:
         if stale_data_risk:
             evidence_confidence -= 0.1
         evidence_confidence = round(min(max(evidence_confidence, 0.0), 1.0), 2)
+
+        source_quality_score = 0.0
+        if current_role_records:
+            source_quality_score += 0.5
+        elif strong_records:
+            source_quality_score += 0.3
+        if non_linkedin_domains:
+            source_quality_score += 0.25
+        if any(record.profile_signal for record in evidence_records):
+            source_quality_score += 0.15
+        if stale_data_risk:
+            source_quality_score -= 0.1
+        source_quality_score = round(min(max(source_quality_score, 0.0), 1.0), 2)
 
         candidate.evidence_confidence = evidence_confidence
         candidate.stale_data_risk = stale_data_risk
@@ -356,6 +382,9 @@ class PublicEvidenceVerifier:
             for record in evidence_records
         )
         candidate.current_employment_confirmed = bool(current_role_records) and not stale_data_risk
+        setattr(candidate, "source_quality_score", source_quality_score)
+        setattr(candidate, "evidence_freshness_year", latest_year or None)
+        setattr(candidate, "current_role_proof_count", len(current_role_records))
 
         if len(current_role_records) >= 2:
             candidate.evidence_verdict = "corroborated"
@@ -394,6 +423,16 @@ class PublicEvidenceVerifier:
         if not candidate.current_employment_confirmed:
             candidate.verification_notes.append("current role not yet publicly confirmed")
             candidate.score = round(max(0.0, candidate.score - 10.0), 2)
+        if historical_only_records and not current_role_records:
+            candidate.verification_notes.append("public evidence appears historical rather than current")
+
+        cap_reasons = []
+        if stale_data_risk:
+            cap_reasons.append("stale_public_evidence")
+        if historical_only_records and not current_role_records:
+            cap_reasons.append("historical_only_public_evidence")
+        if not candidate.current_employment_confirmed:
+            cap_reasons.append("missing_current_role_proof")
 
         candidate.verification_status = status_from_score(candidate.score)
         if candidate.verification_status == "verified":
@@ -417,9 +456,11 @@ class PublicEvidenceVerifier:
                 candidate.verification_notes.append(
                     f"status capped pending {'/'.join(missing)}"
                 )
+                cap_reasons.extend(missing)
         elif candidate.verification_status == "review" and not candidate.current_employment_confirmed and candidate.score < 60.0:
             candidate.verification_status = "reject"
 
+        setattr(candidate, "cap_reasons", unique_preserving_order([str(reason) for reason in cap_reasons]))
         candidate.verification_notes = unique_preserving_order(candidate.verification_notes)
         return candidate
 

@@ -237,3 +237,112 @@ def test_score_candidate_demotes_low_seniority_specialist_role() -> None:
     assert scored.current_target_company_match is True
     assert scored.score < 70.0
     assert scored.verification_status != "verified"
+
+
+def test_score_candidate_caps_off_function_current_role_even_with_relevant_history() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-off-function-cap-test",
+            "role_title": "Brand / Category Lead",
+            "titles": ["Brand Manager", "Category Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 120,
+            },
+            "industry_keywords": ["consumer goods", "FMCG"],
+            "required_keywords": ["brand", "category", "commercial"],
+            "minimum_years_experience": 8,
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Off Function FMCG",
+        current_title="Customer Development Manager",
+        current_company="Unilever",
+        location_name="Dublin, Ireland",
+        location_geo="53.3498,-6.2603",
+        summary="Consumer goods leader with historic category experience.",
+        experience=[
+            {
+                "company": {"name": "Unilever"},
+                "title": "Category Development Manager",
+                "start_date": "2012-01-01",
+            }
+        ],
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.verification_status != "verified"
+    assert getattr(scored, "current_function_fit") == 0.0
+    assert "customer development" in getattr(scored, "disqualifier_reasons")
+
+
+def test_score_candidate_country_only_ireland_signal_caps_verified() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-country-only-location-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+            "industry_keywords": ["consumer goods", "FMCG"],
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Country Only FMCG",
+        current_title="Senior Brand Manager",
+        current_company="Unilever",
+        location_name="Ireland",
+        summary="FMCG brand leader based in Ireland.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert getattr(scored, "location_precision_bucket") == "country_only_ireland"
+    assert scored.verification_status != "verified"
+
+
+def test_score_candidate_outside_search_area_is_rejected() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-outside-area-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+            "industry_keywords": ["consumer goods", "FMCG"],
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Far Away FMCG",
+        current_title="Senior Brand Manager",
+        current_company="Unilever",
+        location_name="London, United Kingdom",
+        location_geo="51.5072,-0.1276",
+        summary="FMCG brand leader currently based in London.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert getattr(scored, "location_precision_bucket") == "outside_ireland"
+    assert scored.location_aligned is False
+    assert scored.score < 70.0

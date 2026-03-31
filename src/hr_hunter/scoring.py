@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from hr_hunter.briefing import normalize_text, unique_preserving_order
 from hr_hunter.geo import distance_from_center
@@ -72,6 +72,17 @@ LOW_SENIORITY_KEYWORDS = [
     "coordinator",
     "executive",
 ]
+OFF_FUNCTION_KEYWORDS = [
+    "sales",
+    "customer development",
+    "content",
+    "digital",
+    "ecommerce",
+    "communications",
+    "commercial excellence",
+    "specialist",
+    "coordinator",
+]
 TITLE_PROXIMITY_STOPWORDS = {
     "a",
     "an",
@@ -88,6 +99,21 @@ TITLE_PROXIMITY_STOPWORDS = {
     "the",
     "to",
     "uk",
+}
+TITLE_ROLE_SIGNAL_MAP = {
+    "brand": ["brand"],
+    "category": ["category", "category development", "category insights"],
+    "product_marketing": ["product marketing"],
+    "portfolio": ["portfolio", "commercialization", "proposition"],
+    "innovation": ["innovation", "commercialization", "proposition"],
+    "shopper_marketing": [
+        "shopper marketing",
+        "customer marketing",
+        "trade marketing",
+        "commercial category",
+        "category and insights",
+    ],
+    "product": ["product", "product development"],
 }
 
 
@@ -328,6 +354,115 @@ def title_similarity_score(title: str, targets: Iterable[str], keywords: Iterabl
     return {"score": round(best_score, 2), "match": best_match}
 
 
+def current_role_signal_phrases(brief: SearchBrief) -> List[str]:
+    phrases: List[str] = []
+    families = brief_target_title_families(brief)
+    for family in families:
+        phrases.extend(TITLE_ROLE_SIGNAL_MAP.get(family, []))
+    normalized_targets = [normalize_text(value) for value in [*brief.titles, *brief.title_keywords]]
+    if any("product marketing" in value for value in normalized_targets):
+        phrases.append("product marketing")
+    return unique_preserving_order(phrases)
+
+
+def evaluate_location_precision(
+    candidate: CandidateProfile,
+    brief: SearchBrief,
+) -> Tuple[str, float, bool, List[str]]:
+    notes: List[str] = []
+    candidate.distance_miles = distance_from_center(brief.geography, candidate.location_geo)
+
+    if candidate.distance_miles is not None:
+        if candidate.distance_miles <= brief.geography.radius_miles:
+            notes.append("within target radius")
+            return "within_radius", 35.0, True, notes
+        if brief.geography.radius_miles and candidate.distance_miles <= brief.geography.radius_miles * 2:
+            notes.append("within expanded search radius")
+            return "within_expanded_radius", 20.0, True, notes
+        notes.append("outside Ireland search area")
+        return "outside_ireland", -30.0, False, notes
+
+    precise_location_hits = keyword_hits(
+        [candidate.location_name, candidate.summary],
+        [brief.geography.location_name, *brief.geography.location_hints],
+    )
+    country_only_hits = keyword_hits(
+        [candidate.location_name, candidate.summary],
+        [brief.geography.country],
+    )
+    if precise_location_hits:
+        notes.append("specific Ireland location matched")
+        return "named_ireland_location", 10.0, True, notes
+    if country_only_hits:
+        notes.append("Ireland country signal matched")
+        return "country_only_ireland", 2.0, True, notes
+    if candidate.location_name:
+        notes.append("location mentioned but not evidenced in Ireland")
+        return "unknown_location", -12.0, False, notes
+    notes.append("current location not evidenced")
+    return "unknown_location", -12.0, False, notes
+
+
+def evaluate_current_function_fit(
+    candidate: CandidateProfile,
+    brief: SearchBrief,
+    family_overlap: set[str],
+    title_proximity: Dict[str, object],
+) -> Tuple[float, float, bool, List[str], List[str]]:
+    normalized_title = normalize_text(candidate.current_title)
+    target_signals = current_role_signal_phrases(brief)
+    has_target_role_signal = any(signal in normalized_title for signal in target_signals if signal)
+    disqualifiers = [keyword for keyword in OFF_FUNCTION_KEYWORDS if keyword in normalized_title]
+    notes: List[str] = []
+
+    if disqualifiers and not has_target_role_signal:
+        notes.append("current function blocked by off-function title")
+        return 0.0, -28.0, True, notes, disqualifiers
+
+    if family_overlap.difference(GENERIC_PRODUCT_FAMILY):
+        notes.append("current function strongly aligned")
+        return 1.0, 16.0, False, notes, disqualifiers
+    if title_proximity["score"] >= 0.6:
+        notes.append("current function adjacent-title aligned")
+        return 0.8, 10.0, False, notes, disqualifiers
+    if family_overlap:
+        notes.append("current function generically aligned")
+        return 0.55, 4.0, False, notes, disqualifiers
+    if has_target_role_signal:
+        notes.append("current function weakly aligned by target-role noun")
+        return 0.45, 2.0, False, notes, disqualifiers
+    if candidate.current_title:
+        notes.append("current function not aligned")
+    return 0.15, -12.0, False, notes, disqualifiers
+
+
+def evaluate_current_fmcg_fit(
+    candidate: CandidateProfile,
+    brief: SearchBrief,
+    experience_parts: List[str],
+) -> Tuple[float, float, List[str]]:
+    notes: List[str] = []
+    fmcg_keywords = unique_preserving_order([*FMCG_SIGNAL_KEYWORDS, *brief.industry_keywords])
+    current_hits = keyword_hits(
+        [candidate.current_title, candidate.current_company, candidate.summary, candidate.industry or ""],
+        fmcg_keywords,
+    )
+    history_hits = keyword_hits(experience_parts, fmcg_keywords)
+
+    if candidate.current_target_company_match or current_hits >= 2:
+        notes.append("current role carries strong fmcg signal")
+        return 1.0, 14.0, notes
+    if current_hits:
+        notes.append("current role carries some fmcg signal")
+        return 0.7, 8.0, notes
+    if history_hits:
+        notes.append("historical fmcg experience only")
+        return 0.35, 3.0, notes
+    if brief.industry_keywords:
+        notes.append("fmcg background not evidenced")
+    return 0.0, -12.0 if brief.industry_keywords else 0.0, notes
+
+
 def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> CandidateProfile:
     notes: List[str] = []
     title_match = best_title_match(candidate.current_title, brief.titles, brief.title_keywords)
@@ -341,6 +476,9 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
     family_overlap = candidate_title_families.intersection(target_title_families)
     title_proximity = title_similarity_score(candidate.current_title, brief.titles, brief.title_keywords)
     experience_parts = experience_text_parts(candidate)
+    current_function_fit, current_function_points, off_function_blocked, function_notes, disqualifiers = (
+        evaluate_current_function_fit(candidate, brief, family_overlap, title_proximity)
+    )
 
     candidate.matched_titles = list(title_match["matches"])
     candidate.matched_companies = list(company_match["matches"])
@@ -355,6 +493,8 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
     score = 0.0
     score += float(title_match["score"])
     score += float(company_match["score"])
+    score += current_function_points
+    notes.extend(function_notes)
 
     if candidate.current_target_company_match:
         notes.append("current employer matches target company")
@@ -384,6 +524,9 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
     if not candidate.current_title_match and not family_overlap and candidate.current_title:
         score -= 20.0
         notes.append("current function not aligned")
+    if off_function_blocked:
+        score -= 10.0
+        notes.append("off-function current role requires review")
 
     normalized_title = normalize_text(candidate.current_title)
     normalized_company = normalize_text(candidate.current_company)
@@ -407,40 +550,10 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
         score += min(8.0, float(scope_hits * 2.5))
         notes.append("global or multi-market scope matched")
 
-    candidate.distance_miles = distance_from_center(brief.geography, candidate.location_geo)
-    candidate.location_aligned = False
-    if candidate.distance_miles is not None:
-        if candidate.distance_miles <= brief.geography.radius_miles:
-            score += 32.0
-            candidate.location_aligned = True
-            notes.append("within target radius")
-        elif brief.geography.radius_miles and candidate.distance_miles <= brief.geography.radius_miles * 2:
-            score += 16.0
-            candidate.location_aligned = True
-            notes.append("within expanded search radius")
-        else:
-            score -= 24.0
-            notes.append("outside target radius")
-    else:
-        precise_location_hits = keyword_hits(
-            [candidate.location_name, candidate.summary],
-            [brief.geography.location_name, *brief.geography.location_hints],
-        )
-        country_only_hits = keyword_hits(
-            [candidate.location_name, candidate.summary],
-            [brief.geography.country],
-        )
-        if precise_location_hits:
-            score += min(14.0, float(precise_location_hits * 4))
-            candidate.location_aligned = True
-            notes.append("specific Ireland location matched")
-        elif country_only_hits:
-            score += 4.0
-            candidate.location_aligned = True
-            notes.append("Ireland country signal matched")
-        else:
-            score -= 16.0
-            notes.append("current location not evidenced")
+    location_bucket, location_points, location_aligned, location_notes = evaluate_location_precision(candidate, brief)
+    candidate.location_aligned = location_aligned
+    score += location_points
+    notes.extend(location_notes)
 
     industry_hits = keyword_hits(
         [candidate.current_title, candidate.summary, candidate.industry or "", candidate.current_company],
@@ -456,6 +569,9 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
         score -= 14.0
         notes.append("industry signal missing")
 
+    current_fmcg_fit, current_fmcg_points, fmcg_notes = evaluate_current_fmcg_fit(candidate, brief, experience_parts)
+    score += current_fmcg_points
+    notes.extend(fmcg_notes)
     fmcg_hits = keyword_hits(
         [
             candidate.current_title,
@@ -466,12 +582,6 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
         ],
         unique_preserving_order([*FMCG_SIGNAL_KEYWORDS, *brief.industry_keywords]),
     )
-    if fmcg_hits:
-        score += min(14.0, float(fmcg_hits * 3))
-        notes.append("fmcg signal matched")
-    elif brief.industry_keywords and not candidate.current_target_company_match:
-        score -= 10.0
-        notes.append("fmcg background not evidenced")
 
     current_role_relevance_hits = keyword_hits(
         [candidate.current_title, candidate.summary, candidate.industry or ""],
@@ -590,7 +700,14 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
         ),
     )
     if relevant_experience_hits:
-        score += min(12.0, float(relevant_experience_hits * 2))
+        history_points = min(12.0, float(relevant_experience_hits * 2))
+        if off_function_blocked:
+            history_points = min(history_points, 2.0)
+            notes.append("historical relevance capped by off-function current role")
+        elif current_function_fit < 0.45:
+            history_points = min(history_points, 4.0)
+            notes.append("historical relevance reduced by weak current function")
+        score += history_points
         notes.append("relevant experience history matched")
     elif experience_parts and not candidate.current_target_company_match:
         score -= 8.0
@@ -614,6 +731,10 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
         score += 10.0
         notes.append("location plus fmcg core fit")
 
+    if location_bucket == "outside_ireland":
+        score = min(score, 45.0)
+        notes.append("outside Ireland candidates cannot clear review")
+
     candidate.score = round(min(max(score, 0.0), 100.0), 2)
 
     candidate.verification_status = status_from_score(candidate.score)
@@ -627,9 +748,21 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
             missing.append("location match")
         if brief.industry_keywords and not candidate.industry_aligned:
             missing.append("industry match")
+        if off_function_blocked:
+            missing.append("current function fit")
+        if location_bucket in {"country_only_ireland", "unknown_location", "outside_ireland"}:
+            missing.append("precise Ireland location")
+        if current_fmcg_fit < 0.7:
+            missing.append("current fmcg fit")
         if missing:
             candidate.verification_status = "review"
             notes.append(f"status capped pending {'/'.join(missing)}")
+
+    setattr(candidate, "matched_title_family", sorted(family_overlap)[0] if family_overlap else "")
+    setattr(candidate, "location_precision_bucket", location_bucket)
+    setattr(candidate, "current_function_fit", round(current_function_fit, 2))
+    setattr(candidate, "current_fmcg_fit", round(current_fmcg_fit, 2))
+    setattr(candidate, "disqualifier_reasons", disqualifiers)
 
     candidate.verification_notes = notes
     return candidate
