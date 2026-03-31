@@ -1,0 +1,275 @@
+id: sr-product-lead-ai-jan26-fmcg-history-knn-public
+role_title: Global Product Manager / FMCG Brand-Product Lead
+brief_document_path: /Users/ahmad/Downloads/Sr Product Lead_AI_Jan26.docx
+brief_summary: >
+  Ireland-first public-web pass for candidates currently in relevant FMCG brand,
+  category, product marketing, portfolio, or commercialization roles who
+  previously worked at the target FMCG companies. Keep the final verified bar
+  strict and use this pass mainly to widen the review pool without repeating
+  already-seen current-company candidates.
+titles:
+  - Global Product Manager
+  - Senior Product Manager
+  - Product Marketing Director
+  - Head of Product Marketing
+  - Global Product Director
+  - Product Portfolio Manager
+  - Senior Product Marketing Manager
+  - Category Manager
+title_keywords:
+  - Brand Manager
+  - Senior Brand Manager
+  - Trade Marketing Manager
+  - Customer Marketing Manager
+  - Shopper Marketing Manager
+  - Category Development Manager
+  - Proposition Manager
+  - Commercialization Manager
+company_targets:
+  - Procter & Gamble
+  - Unilever
+  - Johnson & Johnson
+  - Colgate-Palmolive
+  - Beiersdorf
+  - DCC plc
+  - McBride plc
+  - Trona Products Ltd
+  - Kinvara Skincare
+  - Voya
+  - The Handmade Soap Company
+  - Pestle & Mortar
+  - Bellamianta
+  - Human+Kind
+company_aliases:
+  Procter & Gamble:
+    - Procter & Gamble
+    - Procter and Gamble
+    - P&G
+  Johnson & Johnson:
+    - Johnson & Johnson
+    - Johnson and Johnson
+    - J&J
+  Colgate-Palmolive:
+    - Colgate-Palmolive
+    - Colgate Palmolive
+  DCC plc:
+    - DCC plc
+    - DCC
+  McBride plc:
+    - McBride plc
+    - McBride
+  Trona Products Ltd:
+    - Trona Products Ltd
+    - Trona Products
+  The Handmade Soap Company:
+    - The Handmade Soap Company
+    - Handmade Soap Company
+  Pestle & Mortar:
+    - Pestle & Mortar
+    - Pestle and Mortar
+  Human+Kind:
+    - Human+Kind
+    - Human and Kind
+geography:
+  location_name: Drogheda, Ireland
+  country: Ireland
+  center_latitude: 53.7179
+  center_longitude: -6.3561
+  radius_miles: 120
+  location_hints:
+    - Drogheda
+    - Dublin
+    - Dundalk
+    - Galway
+    - Cork
+    - County Meath
+    - County Louth
+    - County Dublin
+    - Leinster
+    - Ireland
+required_keywords:
+  - fmcg
+  - consumer goods
+  - brand
+  - category
+  - product marketing
+  - portfolio
+preferred_keywords:
+  - innovation
+  - commercialization
+  - product portfolio
+  - retail
+portfolio_keywords:
+  - portfolio
+  - proposition
+  - commercialization
+commercial_keywords:
+  - commercial
+  - go to market
+  - retail
+  - growth
+leadership_keywords:
+  - senior
+  - director
+  - head
+  - lead
+scope_keywords:
+  - global
+  - regional
+  - international
+industry_keywords:
+  - fmcg
+  - cpg
+  - consumer goods
+  - personal care
+  - skincare
+  - hygiene
+exclude_title_keywords:
+  - software
+  - engineering
+  - project manager
+  - program manager
+  - technical product manager
+  - product owner
+  - saas
+  - platform
+  - ai
+  - developer
+  - fintech
+  - cloud
+  - sales
+  - specialist
+  - customer development
+  - ecommerce
+  - digital
+  - content
+seniority_levels:
+  - senior
+  - manager
+  - director
+  - head
+minimum_years_experience: 8
+result_target_min: 30
+result_target_max: 80
+max_profiles: 80
+provider_settings:
+  pdl:
+    include_strict_slice: false
+    include_broad_slice: false
+    include_discovery_slices: false
+    include_history_slices: true
+    company_chunk_size: 4
+    results_per_slice: 20
+    history_query_terms:
+      - formerly
+      - previously
+      - before joining
+      - prior to joining
+      - ex
+  scrapingbee_google:
+    pages_per_query: 1
+    country_code: ie
+    language: en
+    light_request: true
+    request_timeout_seconds: 12
+    max_retries: 2
+    retry_backoff_seconds: 2.0
+    include_country_only_queries: true
+    include_relaxed_queries: true
+    company_slice_location_group_limit: 0
+    max_queries: 90
+    max_company_aliases_per_query: 2
+    location_probe_queries: 2
+    company_location_probe_queries: 1
+    include_query_terms:
+      - FMCG
+      - consumer goods
+      - brand
+      - category
+      - product marketing
+      - portfolio
+      - Ireland
+    location_source_terms:
+      - appointed
+      - appointment
+      - joins
+      - promoted
+      - named
+      - speaker
+      - bio
+      - team
+      - leadership
+      - directory
+    company_location_source_terms:
+      - office
+      - contact
+      - address
+      - our presence
+      - head office
+      - ireland
+    include_site_terms:
+      - site:shelflife.ie
+      - site:drinksindustryireland.ie
+      - site:checkout.ie
+      - site:retailnews.ie
+      - site:bordbia.ie
+      - site:mii.ie
+      - site:marketing.ie
+      - site:foodmatterslive.com
+      - site:foodtogosummit.eu
+    location_include_site_terms:
+      - site:shelflife.ie
+      - site:drinksindustryireland.ie
+      - site:checkout.ie
+      - site:retailnews.ie
+      - site:bordbia.ie
+      - site:mii.ie
+      - site:marketing.ie
+      - site:foodmatterslive.com
+      - site:foodtogosummit.eu
+    exclude_site_terms:
+      - -site:linkedin.com/jobs
+      - -site:ie.linkedin.com/jobs
+      - -site:linkedin.com/company
+      - -site:ie.linkedin.com/company
+      - -site:linkedin.com/posts
+      - -site:ie.linkedin.com/posts
+      - -site:theorg.com/compare
+      - -site:theorg.com/teams
+      - -site:wellfound.com/jobs
+      - -site:wellfound.com/company
+      - -site:rocketreach.co/search
+      - -site:zoominfo.com
+    allowed_url_substrings:
+      - linkedin.com/in/
+      - /org-chart/
+      - /people/
+      - /person/
+      - /team/
+      - /our-team/
+      - /leadership/
+      - /management/
+      - /staff/
+      - /news/
+      - /press/
+      - /articles/
+      - /awards/
+      - /speaker/
+      - /speakers/
+      - /directory/
+      - /member/
+      - /members/
+    blocked_url_substrings:
+      - /jobs
+      - /company
+      - /posts
+      - /compare
+      - /careers
+      - /blog
+    query_family_budgets:
+      appointment_news_pages: 18
+      speaker_bio_pages: 14
+      award_industry_pages: 14
+      industry_association_pages: 12
+      trade_directory_pages: 12
+      profile_like_public_pages: 10

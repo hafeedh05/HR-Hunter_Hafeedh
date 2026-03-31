@@ -111,3 +111,31 @@ def test_query_planner_discovery_slices_stay_fmcg_adjacent() -> None:
     assert all("global" not in slice_config.query_keywords for slice_config in discovery_like)
     assert any("FMCG" in slice_config.query_keywords for slice_config in discovery_like)
     assert any("brand" in slice_config.query_keywords for slice_config in discovery_like)
+
+
+def test_query_planner_can_add_history_slices() -> None:
+    brief = build_search_brief(
+        {
+            "id": "planner-history-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever", "Procter & Gamble"],
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+            "provider_settings": {
+                "pdl": {
+                    "include_strict_slice": False,
+                    "include_broad_slice": False,
+                    "include_discovery_slices": False,
+                    "include_history_slices": True,
+                    "history_query_terms": ["formerly", "previously"],
+                }
+            },
+        }
+    )
+
+    slices = build_search_slices(brief)
+    history_slices = [slice_config for slice_config in slices if slice_config.search_mode == "history"]
+
+    assert len(history_slices) == 1
+    assert history_slices[0].companies == ["Unilever", "Procter & Gamble"]
+    assert history_slices[0].query_keywords == ["formerly", "previously"]

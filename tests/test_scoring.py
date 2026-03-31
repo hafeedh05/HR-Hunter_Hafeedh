@@ -1,6 +1,14 @@
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.models import CandidateProfile
-from hr_hunter.scoring import score_candidate
+from hr_hunter.scoring import score_candidate, status_from_score
+
+
+def test_status_from_score_respects_explicit_user_bands() -> None:
+    assert status_from_score(100.0) == "verified"
+    assert status_from_score(70.0) == "verified"
+    assert status_from_score(69.99) == "review"
+    assert status_from_score(50.0) == "review"
+    assert status_from_score(49.99) == "reject"
 
 
 def test_score_candidate_marks_high_fit_as_verified() -> None:

@@ -114,6 +114,7 @@ class CandidateProfile:
     current_function_fit: float = 0.0
     current_fmcg_fit: float = 0.0
     verification_notes: List[str] = field(default_factory=list)
+    search_strategies: List[str] = field(default_factory=list)
     evidence_records: List[EvidenceRecord] = field(default_factory=list)
     evidence_confidence: float = 0.0
     evidence_verdict: str = ""

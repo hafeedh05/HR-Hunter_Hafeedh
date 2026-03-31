@@ -446,6 +446,37 @@ class ScrapingBeeGoogleProvider(SearchProvider):
 
                 for family, family_terms in PUBLIC_QUERY_FAMILY_TERMS.items():
                     family_clause = f"({' OR '.join(family_terms)})"
+                    if slice_config.search_mode == "history":
+                        history_terms = self._adjacent_query_terms(slice_config)
+                        if not history_terms:
+                            continue
+                        for company in company_targets:
+                            company_aliases = brief.company_aliases.get(company, [company])
+                            company_terms = " OR ".join(
+                                f'"{alias}"'
+                                for alias in company_aliases[: self.max_company_aliases_per_query]
+                                if alias
+                            )
+                            if not company_terms:
+                                continue
+                            for variant, location_clause in family_location_terms:
+                                self._append_query_plan(
+                                    plans,
+                                    seen_fingerprints,
+                                    slice_config,
+                                    family,
+                                    variant,
+                                    self._combine_query_parts(
+                                        f"({title_terms})",
+                                        f"({company_terms})",
+                                        f"({history_terms})",
+                                        location_clause,
+                                        family_clause,
+                                        query_filters,
+                                        site_filters,
+                                    ),
+                                )
+                        continue
                     for variant, location_clause in family_location_terms:
                         if slice_config.search_mode in {"discovery", "market"}:
                             self._append_query_plan(

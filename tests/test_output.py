@@ -29,6 +29,7 @@ def test_report_roundtrip_preserves_reporting_fields(tmp_path: Path) -> None:
         evidence_freshness_year=2026,
         current_function_fit=1.0,
         current_fmcg_fit=1.0,
+        search_strategies=["current-target-strict", "trade-media-location-probe"],
         cap_reasons=["missing_none"],
         disqualifier_reasons=[],
         score=88.0,
@@ -66,6 +67,7 @@ def test_report_roundtrip_preserves_reporting_fields(tmp_path: Path) -> None:
     assert restored.evidence_freshness_year == 2026
     assert restored.current_function_fit == 1.0
     assert restored.current_fmcg_fit == 1.0
+    assert restored.search_strategies == ["current-target-strict", "trade-media-location-probe"]
 
 
 def test_build_reporting_summary_counts_strict_and_search_qualified() -> None:
