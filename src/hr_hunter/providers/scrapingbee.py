@@ -58,6 +58,11 @@ DEFAULT_PROFILE_URL_SUBSTRINGS = [
     "/press/",
     "/articles/",
     "/awards/",
+    "/directory/",
+    "/member/",
+    "/members/",
+    "/committee/",
+    "/board/",
 ]
 
 PUBLIC_QUERY_FAMILY_TERMS = {
@@ -65,6 +70,8 @@ PUBLIC_QUERY_FAMILY_TERMS = {
     "appointment_news_pages": ['"appointed"', '"appointment"', '"joins"', '"promoted"', '"named"'],
     "speaker_bio_pages": ['"speaker"', '"speakers"', '"bio"', '"biography"', '"panel"'],
     "award_industry_pages": ['"award"', '"awards"', '"finalist"', '"judge"', '"conference"'],
+    "industry_association_pages": ['"steering group"', '"committee"', '"member"', '"members"', '"forum"', '"board"'],
+    "trade_directory_pages": ['"directory"', '"supplier"', '"buyers guide"', '"contact"', '"members"'],
     "org_chart_profile_pages": ['"org chart"', '"org"', '"profile"', '"leadership"'],
     "profile_like_public_pages": ['"profile"', '"profiles"', '"bio"', '"biography"', '"people"'],
 }
@@ -329,6 +336,11 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                 "/press/",
                 "/articles/",
                 "/awards/",
+                "/directory/",
+                "/member/",
+                "/members/",
+                "/committee/",
+                "/board/",
             )
         )
         if not looks_profile_like:

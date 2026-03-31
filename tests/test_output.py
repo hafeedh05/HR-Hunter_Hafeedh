@@ -18,6 +18,7 @@ def test_report_roundtrip_preserves_reporting_fields(tmp_path: Path) -> None:
         current_company_confirmed=True,
         current_title_confirmed=True,
         current_location_confirmed=True,
+        precise_location_confirmed=True,
         current_employment_confirmed=True,
         verification_status="verified",
         qualification_tier="strict_verified",
@@ -59,6 +60,7 @@ def test_report_roundtrip_preserves_reporting_fields(tmp_path: Path) -> None:
     assert restored.qualification_tier == "strict_verified"
     assert restored.matched_title_family == "brand"
     assert restored.location_precision_bucket == "within_expanded_radius"
+    assert restored.precise_location_confirmed is True
     assert restored.current_role_proof_count == 2
     assert restored.source_quality_score == 0.9
     assert restored.evidence_freshness_year == 2026

@@ -66,6 +66,8 @@ class EvidenceRecord:
     company_match: str = ""
     title_matches: List[str] = field(default_factory=list)
     location_match: bool = False
+    location_match_text: str = ""
+    precise_location_match: bool = False
     profile_signal: bool = False
     current_employment_signal: bool = False
     recency_year: Optional[int] = None
@@ -98,6 +100,7 @@ class CandidateProfile:
     current_company_confirmed: bool = False
     current_title_confirmed: bool = False
     current_location_confirmed: bool = False
+    precise_location_confirmed: bool = False
     current_employment_confirmed: bool = False
     verification_status: str = "review"
     qualification_tier: str = "weak"

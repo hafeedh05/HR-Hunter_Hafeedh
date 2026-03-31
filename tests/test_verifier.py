@@ -57,6 +57,9 @@ def test_apply_evidence_promotes_review_candidate_to_verified() -> None:
             name_match=True,
             company_match="Procter & Gamble",
             title_matches=["Senior Product Manager"],
+            location_match=True,
+            location_match_text="Drogheda, Ireland",
+            precise_location_match=True,
             profile_signal=True,
             current_employment_signal=True,
             confidence=0.82,
@@ -68,6 +71,8 @@ def test_apply_evidence_promotes_review_candidate_to_verified() -> None:
             company_match="Procter & Gamble",
             title_matches=["Senior Product Manager"],
             location_match=True,
+            location_match_text="Drogheda, Ireland",
+            precise_location_match=True,
             profile_signal=True,
             current_employment_signal=True,
             confidence=0.76,
@@ -80,6 +85,7 @@ def test_apply_evidence_promotes_review_candidate_to_verified() -> None:
     assert updated.verification_status == "verified"
     assert updated.score >= 68.0
     assert updated.current_employment_confirmed is True
+    assert updated.precise_location_confirmed is True
 
 
 def test_apply_evidence_caps_verified_without_current_role_proof() -> None:
@@ -179,6 +185,147 @@ def test_apply_evidence_accepts_strong_profile_page_as_current_role_proof() -> N
     assert updated.verification_status == "verified"
 
 
+def test_build_queries_adds_location_probe_for_imprecise_location() -> None:
+    verifier = PublicEvidenceVerifier({"queries_per_candidate": 2, "location_probe_queries": 1})
+    brief = build_search_brief(
+        {
+            "id": "verify-location-probe-query-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "location_hints": ["Dublin", "County Louth", "County Meath"],
+            },
+        }
+    )
+    candidate = CandidateProfile(
+        full_name="Jane Search",
+        current_title="Senior Brand Manager",
+        current_company="Unilever",
+        location_name="Ireland",
+        location_precision_bucket="country_only_ireland",
+    )
+
+    queries = verifier.build_queries(candidate, brief)
+
+    assert len(queries) == 3
+    assert any('"based in"' in query for query in queries)
+    assert any('"Dublin"' in query for query in queries)
+
+
+def test_build_queries_adds_site_targeted_location_probe_when_configured() -> None:
+    verifier = PublicEvidenceVerifier(
+        {
+            "queries_per_candidate": 2,
+            "location_probe_queries": 2,
+            "location_include_site_terms": ["site:shelflife.ie", "site:retailnews.ie"],
+            "location_source_terms": ["appointed", "speaker"],
+        }
+    )
+    brief = build_search_brief(
+        {
+            "id": "verify-site-targeted-location-probe-query-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "location_hints": ["Dublin", "County Louth", "County Meath"],
+            },
+        }
+    )
+    candidate = CandidateProfile(
+        full_name="Jane Search",
+        current_title="Senior Brand Manager",
+        current_company="Unilever",
+        location_name="Ireland",
+        location_precision_bucket="country_only_ireland",
+    )
+
+    queries = verifier.build_queries(candidate, brief)
+
+    assert any("site:shelflife.ie" in query for query in queries)
+    assert any('"appointed"' in query for query in queries)
+
+
+def test_build_company_location_queries_use_location_sites() -> None:
+    verifier = PublicEvidenceVerifier(
+        {
+            "company_location_probe_queries": 1,
+            "location_include_site_terms": ["site:knorr.com/ie", "site:jnj.com"],
+            "company_location_source_terms": ["office", "contact"],
+        }
+    )
+    brief = build_search_brief(
+        {
+            "id": "verify-company-location-query-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "company_aliases": {"Unilever": ["Knorr"]},
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "location_hints": ["Dublin", "County Meath"],
+            },
+        }
+    )
+    candidate = CandidateProfile(
+        full_name="Jane Search",
+        current_title="Senior Brand Manager",
+        current_company="Unilever",
+        location_name="Ireland",
+        location_precision_bucket="country_only_ireland",
+    )
+
+    queries = verifier.build_company_location_queries(candidate, brief)
+
+    assert len(queries) == 1
+    assert "site:knorr.com/ie" in queries[0]
+    assert '"office"' in queries[0]
+
+
+def test_build_record_prefers_precise_location_over_country_only() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-build-record-location-priority-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "location_hints": ["Dublin", "County Louth"],
+            },
+        }
+    )
+    candidate = CandidateProfile(
+        full_name="Jane Search",
+        current_title="Senior Brand Manager",
+        current_company="Unilever",
+        location_name="Ireland",
+    )
+
+    record = verifier.build_record(
+        candidate,
+        brief,
+        '"Jane Search" "Unilever"',
+        {
+            "title": "Jane Search - Senior Brand Manager at Unilever",
+            "description": "Senior FMCG leader based in Dublin, Ireland.",
+            "url": "https://example.com/people/jane-search",
+        },
+    )
+
+    assert record.location_match is True
+    assert record.location_match_text == "Dublin"
+    assert record.precise_location_match is True
+
+
 def test_report_roundtrip_preserves_evidence_fields(tmp_path: Path) -> None:
     candidate = CandidateProfile(
         full_name="Jane Search",
@@ -193,6 +340,9 @@ def test_report_roundtrip_preserves_evidence_fields(tmp_path: Path) -> None:
                 source_url="https://example.com/profile",
                 source_domain="example.com",
                 title="Jane Search - Senior Product Manager",
+                location_match=True,
+                location_match_text="Dublin",
+                precise_location_match=True,
                 profile_signal=True,
                 current_employment_signal=True,
                 confidence=0.84,
@@ -217,6 +367,8 @@ def test_report_roundtrip_preserves_evidence_fields(tmp_path: Path) -> None:
     assert loaded.candidates[0].evidence_confidence == 0.84
     assert loaded.candidates[0].evidence_records[0].source_domain == "example.com"
     assert loaded.candidates[0].evidence_records[0].current_employment_signal is True
+    assert loaded.candidates[0].evidence_records[0].location_match_text == "Dublin"
+    assert loaded.candidates[0].evidence_records[0].precise_location_match is True
 
 
 def test_apply_evidence_caps_historical_only_public_match() -> None:
@@ -422,3 +574,120 @@ def test_apply_evidence_caps_country_only_ireland_from_verified() -> None:
     assert updated.location_precision_bucket == "country_only_ireland"
     assert updated.verification_status != "verified"
     assert "precise Ireland location" in getattr(updated, "cap_reasons")
+
+
+def test_apply_evidence_promotes_precise_location_probe_result() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-precise-location-promotion-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Procter & Gamble"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "location_hints": ["Ireland", "Dublin", "County Louth"],
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 120,
+            },
+            "industry_keywords": ["FMCG"],
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Precise Location FMCG",
+            current_title="Brand Manager",
+            current_company="Procter & Gamble",
+            location_name="Ireland",
+            summary="Brand manager at Procter & Gamble Ireland.",
+        ),
+        brief,
+    )
+    evidence = [
+        EvidenceRecord(
+            source_url="https://example.com/people/precise-location-fmcg",
+            source_domain="example.com",
+            name_match=True,
+            company_match="Procter & Gamble",
+            title_matches=["Brand Manager"],
+            location_match=True,
+            location_match_text="Dublin",
+            precise_location_match=True,
+            profile_signal=True,
+            current_employment_signal=True,
+            confidence=0.92,
+        )
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.precise_location_confirmed is True
+    assert updated.location_name == "Dublin, Ireland"
+    assert updated.location_precision_bucket == "named_ireland_location"
+    assert updated.verification_status == "verified"
+
+
+def test_apply_evidence_refines_country_only_ireland_with_company_office_location() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-company-office-location-refinement-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "company_aliases": {"Unilever": ["Knorr"]},
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "location_hints": ["Ireland", "Dublin", "Citywest"],
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 120,
+            },
+            "industry_keywords": ["FMCG"],
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Ireland Only FMCG",
+            current_title="Senior Brand Manager",
+            current_company="Unilever",
+            location_name="Ireland",
+            summary="Senior brand manager at Unilever Ireland.",
+        ),
+        brief,
+    )
+    evidence = [
+        EvidenceRecord(
+            source_url="https://example.com/people/ireland-only-fmcg",
+            source_domain="example.com",
+            name_match=True,
+            company_match="Unilever",
+            title_matches=["Brand Manager"],
+            location_match=True,
+            location_match_text="Ireland",
+            precise_location_match=False,
+            profile_signal=True,
+            current_employment_signal=True,
+            confidence=0.88,
+        ),
+        EvidenceRecord(
+            source_url="https://www.knorr.com/ie/contact-us.html",
+            source_domain="knorr.com",
+            source_type="company_location",
+            company_match="Unilever",
+            location_match=True,
+            location_match_text="Citywest",
+            precise_location_match=True,
+            confidence=0.72,
+        ),
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.precise_location_confirmed is True
+    assert updated.location_name == "Citywest, Ireland"
+    assert updated.location_precision_bucket == "named_ireland_location"
+    assert "precise Ireland location inferred from company office/contact evidence" in updated.verification_notes

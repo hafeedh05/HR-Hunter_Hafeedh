@@ -57,6 +57,36 @@ PROFILE_PATH_HINTS = (
     "/about/team",
     "/org-chart/",
 )
+LOCATION_PROBE_PHRASES = (
+    '"based in"',
+    '"based out of"',
+    '"located in"',
+    '"works in"',
+    '"county"',
+)
+LOCATION_SOURCE_TERMS = (
+    "appointed",
+    "appointment",
+    "joins",
+    "promoted",
+    "named",
+    "speaker",
+    "speakers",
+    "bio",
+    "biography",
+    "team",
+    "leadership",
+    "directory",
+    "member",
+)
+COMPANY_LOCATION_SOURCE_TERMS = (
+    "office",
+    "contact",
+    "address",
+    "our presence",
+    "head office",
+    "ireland",
+)
 
 
 def parse_year(value: str) -> int | None:
@@ -95,7 +125,61 @@ class PublicEvidenceVerifier:
         self.light_request = bool(settings.get("light_request", True))
         self.pages_per_query = int(settings.get("pages_per_query", 1))
         self.queries_per_candidate = int(settings.get("queries_per_candidate", 2))
+        self.location_probe_queries = int(settings.get("location_probe_queries", 1))
+        self.company_location_probe_queries = int(settings.get("company_location_probe_queries", 0))
         self.results_per_query = int(settings.get("results_per_query", 10))
+        self.include_site_terms = unique_preserving_order(
+            [str(value).strip() for value in settings.get("include_site_terms", []) if str(value).strip()]
+        )
+        self.exclude_site_terms = unique_preserving_order(
+            [str(value).strip() for value in settings.get("exclude_site_terms", []) if str(value).strip()]
+        )
+        self.location_include_site_terms = unique_preserving_order(
+            [
+                str(value).strip()
+                for value in settings.get("location_include_site_terms", self.include_site_terms)
+                if str(value).strip()
+            ]
+        )
+        self.location_source_terms = unique_preserving_order(
+            [
+                str(value).strip()
+                for value in settings.get("location_source_terms", list(LOCATION_SOURCE_TERMS))
+                if str(value).strip()
+            ]
+        )
+        self.company_location_source_terms = unique_preserving_order(
+            [
+                str(value).strip()
+                for value in settings.get("company_location_source_terms", list(COMPANY_LOCATION_SOURCE_TERMS))
+                if str(value).strip()
+            ]
+        )
+
+    @staticmethod
+    def _combine_query_parts(*parts: str) -> str:
+        return " ".join(part.strip() for part in parts if part and part.strip())
+
+    @staticmethod
+    def _format_query_terms(terms: Iterable[str]) -> str:
+        formatted: List[str] = []
+        for value in terms:
+            stripped = str(value).strip()
+            if not stripped:
+                continue
+            if stripped.startswith(("site:", "-site:", '"', "(")):
+                formatted.append(stripped)
+            else:
+                formatted.append(f'"{stripped}"')
+        return " OR ".join(formatted)
+
+    def _site_filters(self, include_terms: Iterable[str] | None = None) -> str:
+        include_values = [value for value in (include_terms or []) if str(value).strip()]
+        exclude_values = [value for value in self.exclude_site_terms if str(value).strip()]
+        include_clause = ""
+        if include_values:
+            include_clause = f"({' OR '.join(include_values)})"
+        return self._combine_query_parts(include_clause, " ".join(exclude_values))
 
     @staticmethod
     def _is_profile_like_source(source_url: str, source_domain: str) -> bool:
@@ -113,6 +197,20 @@ class PublicEvidenceVerifier:
     @staticmethod
     def _record_text(record: EvidenceRecord) -> str:
         return " ".join([record.title, record.snippet, record.source_url])
+
+    @staticmethod
+    def _is_country_only_location(value: str, country: str) -> bool:
+        normalized_value = normalize_text(value)
+        normalized_country = normalize_text(country)
+        return bool(normalized_value and normalized_country and normalized_value == normalized_country)
+
+    def _location_is_imprecise(self, candidate: CandidateProfile, brief: SearchBrief) -> bool:
+        bucket = getattr(candidate, "location_precision_bucket", "")
+        if bucket in {"country_only_ireland", "unknown_location", "outside_ireland"}:
+            return True
+        if not candidate.location_name:
+            return True
+        return self._is_country_only_location(candidate.location_name, brief.geography.country)
 
     def _supports_current_role(self, record: EvidenceRecord) -> bool:
         if not (record.name_match and record.company_match and record.title_matches):
@@ -151,7 +249,7 @@ class PublicEvidenceVerifier:
                     f"({company_terms})" if company_terms else "",
                     f"({title_terms})" if title_terms else "",
                     f"({location_terms})" if location_terms else "",
-                    "-site:linkedin.com -site:ie.linkedin.com",
+                    self._site_filters(["-site:linkedin.com", "-site:ie.linkedin.com"]),
                 ]
                 if part
             ),
@@ -161,7 +259,7 @@ class PublicEvidenceVerifier:
                     name_term,
                     f"({company_terms})" if company_terms else "",
                     f'("{brief.geography.country}")' if brief.geography.country else "",
-                    "-site:linkedin.com -site:ie.linkedin.com",
+                    self._site_filters(["-site:linkedin.com", "-site:ie.linkedin.com"]),
                 ]
                 if part
             ),
@@ -171,12 +269,81 @@ class PublicEvidenceVerifier:
                     name_term,
                     f"({title_terms})" if title_terms else "",
                     f"({company_terms})" if company_terms else "",
-                    "-site:linkedin.com -site:ie.linkedin.com",
+                    self._site_filters(["-site:linkedin.com", "-site:ie.linkedin.com"]),
                 ]
                 if part
             ),
         ]
-        return unique_preserving_order([query for query in queries if query])[: self.queries_per_candidate]
+
+        queries = unique_preserving_order([query for query in queries if query])[: self.queries_per_candidate]
+
+        if self.location_probe_queries > 0 and self._location_is_imprecise(candidate, brief):
+            precise_hints = [
+                hint
+                for hint in unique_preserving_order(
+                    [brief.geography.location_name, *brief.geography.location_hints[:6]]
+                )
+                if hint and not self._is_country_only_location(hint, brief.geography.country)
+            ]
+            precise_location_terms = " OR ".join(f'"{hint}"' for hint in precise_hints)
+            probe_phrases = " OR ".join(LOCATION_PROBE_PHRASES)
+            location_probe = " ".join(
+                part
+                for part in [
+                    name_term,
+                    f"({company_terms})" if company_terms else "",
+                    f"({title_terms})" if title_terms else "",
+                    f"({precise_location_terms})" if precise_location_terms else "",
+                    f"({probe_phrases})" if probe_phrases else "",
+                    self._site_filters(["-site:linkedin.com", "-site:ie.linkedin.com"]),
+                ]
+                if part
+            )
+            targeted_location_probe = self._combine_query_parts(
+                name_term,
+                f"({company_terms})" if company_terms else "",
+                f"({title_terms})" if title_terms else "",
+                f"({precise_location_terms})" if precise_location_terms else "",
+                f"({probe_phrases})" if probe_phrases else "",
+                (
+                    f"({self._format_query_terms(self.location_source_terms)})"
+                    if self.location_source_terms
+                    else ""
+                ),
+                self._site_filters([*self.location_include_site_terms, "-site:linkedin.com", "-site:ie.linkedin.com"]),
+            )
+            probes = [query for query in [location_probe, targeted_location_probe] if query]
+            if probes:
+                queries.extend(unique_preserving_order(probes)[: self.location_probe_queries])
+
+        return unique_preserving_order([query for query in queries if query])
+
+    def build_company_location_queries(self, candidate: CandidateProfile, brief: SearchBrief) -> List[str]:
+        if self.company_location_probe_queries <= 0 or not candidate.current_company:
+            return []
+        company_terms = " OR ".join(f'"{alias}"' for alias in company_aliases(candidate, brief)[:3])
+        precise_hints = [
+            hint
+            for hint in unique_preserving_order([brief.geography.location_name, *brief.geography.location_hints[:6]])
+            if hint and not self._is_country_only_location(hint, brief.geography.country)
+        ]
+        precise_location_terms = " OR ".join(f'"{hint}"' for hint in precise_hints)
+        source_terms = self._format_query_terms(self.company_location_source_terms)
+        queries = [
+            self._combine_query_parts(
+                f"({company_terms})" if company_terms else "",
+                f"({precise_location_terms})" if precise_location_terms else "",
+                f"({source_terms})" if source_terms else "",
+                self._site_filters(self.location_include_site_terms),
+            ),
+            self._combine_query_parts(
+                f"({company_terms})" if company_terms else "",
+                f'"{brief.geography.country}"' if brief.geography.country else "",
+                f"({source_terms})" if source_terms else "",
+                self._site_filters(self.location_include_site_terms),
+            ),
+        ]
+        return unique_preserving_order([query for query in queries if query])[: self.company_location_probe_queries]
 
     def build_record(
         self,
@@ -207,12 +374,26 @@ class PublicEvidenceVerifier:
                 matched_titles.append(token)
 
         location_match = False
-        for hint in unique_preserving_order(
-            [candidate.location_name, brief.geography.location_name, brief.geography.country, *brief.geography.location_hints]
-        ):
+        location_match_text = ""
+        precise_location_match = False
+        precise_hints = [
+            hint
+            for hint in unique_preserving_order(
+                [brief.geography.location_name, *brief.geography.location_hints, candidate.location_name]
+            )
+            if hint and not self._is_country_only_location(hint, brief.geography.country)
+        ]
+        fallback_hints = [
+            hint
+            for hint in unique_preserving_order([candidate.location_name, brief.geography.country])
+            if hint and self._is_country_only_location(hint, brief.geography.country)
+        ]
+        for hint in [*precise_hints, *fallback_hints]:
             normalized_hint = normalize_text(hint)
             if normalized_hint and normalized_hint in normalized:
                 location_match = True
+                location_match_text = hint
+                precise_location_match = not self._is_country_only_location(hint, brief.geography.country)
                 break
 
         profile_signal = self._is_profile_like_source(source_url, source_domain)
@@ -247,9 +428,85 @@ class PublicEvidenceVerifier:
             company_match=matched_company,
             title_matches=unique_preserving_order(matched_titles),
             location_match=location_match,
+            location_match_text=location_match_text,
+            precise_location_match=precise_location_match,
             profile_signal=profile_signal,
             current_employment_signal=current_employment_signal,
             recency_year=recency_year,
+            confidence=round(min(confidence, 1.0), 2),
+            raw=result,
+        )
+
+    def build_company_location_record(
+        self,
+        candidate: CandidateProfile,
+        brief: SearchBrief,
+        query: str,
+        result: Dict[str, Any],
+    ) -> EvidenceRecord:
+        title = result.get("title", "") or ""
+        snippet = result.get("description") or result.get("snippet") or ""
+        source_url = result.get("url") or result.get("link") or ""
+        source_domain = (urlparse(source_url).netloc or result.get("domain") or "").lower()
+        combined = " ".join([title, snippet, source_url])
+        normalized = normalize_text(combined)
+
+        matched_company = ""
+        for alias in company_aliases(candidate, brief):
+            normalized_alias = normalize_text(alias)
+            if normalized_alias and normalized_alias in normalized:
+                matched_company = candidate.current_company or alias
+                break
+
+        location_match = False
+        location_match_text = ""
+        precise_location_match = False
+        precise_hints = [
+            hint
+            for hint in unique_preserving_order([brief.geography.location_name, *brief.geography.location_hints])
+            if hint and not self._is_country_only_location(hint, brief.geography.country)
+        ]
+        fallback_hints = [
+            hint
+            for hint in unique_preserving_order([brief.geography.country])
+            if hint and self._is_country_only_location(hint, brief.geography.country)
+        ]
+        for hint in [*precise_hints, *fallback_hints]:
+            normalized_hint = normalize_text(hint)
+            if normalized_hint and normalized_hint in normalized:
+                location_match = True
+                location_match_text = hint
+                precise_location_match = not self._is_country_only_location(hint, brief.geography.country)
+                break
+
+        confidence = 0.0
+        if matched_company:
+            confidence += 0.35
+        if precise_location_match:
+            confidence += 0.35
+        elif location_match:
+            confidence += 0.15
+        if source_domain and "linkedin.com" not in source_domain:
+            confidence += 0.1
+        if any(term in normalized for term in ("office", "contact", "address", "our presence", "head office")):
+            confidence += 0.1
+
+        return EvidenceRecord(
+            query=query,
+            source_url=source_url,
+            source_domain=source_domain,
+            title=title,
+            snippet=snippet,
+            source_type="company_location",
+            name_match=False,
+            company_match=matched_company,
+            title_matches=[],
+            location_match=location_match,
+            location_match_text=location_match_text,
+            precise_location_match=precise_location_match,
+            profile_signal=False,
+            current_employment_signal=False,
+            recency_year=parse_year(combined),
             confidence=round(min(confidence, 1.0), 2),
             raw=result,
         )
@@ -298,6 +555,32 @@ class PublicEvidenceVerifier:
                         existing = evidence.get(key)
                         if existing is None or record.confidence > existing.confidence:
                             evidence[key] = record
+            if self._location_is_imprecise(candidate, brief):
+                for query in self.build_company_location_queries(candidate, brief):
+                    for page in range(1, self.pages_per_query + 1):
+                        try:
+                            response = await self.client.search(
+                                client,
+                                query,
+                                page=page,
+                                country_code=self.country_code,
+                                language=self.language,
+                                light_request=self.light_request,
+                            )
+                            request_count += 1
+                        except httpx.HTTPError:
+                            continue
+                        if response.status_code >= 400:
+                            continue
+                        payload = response.json()
+                        for result in payload.get("organic_results", [])[: self.results_per_query]:
+                            record = self.build_company_location_record(candidate, brief, query, result)
+                            if not (record.company_match and record.location_match):
+                                continue
+                            key = record.source_url or f"{record.source_domain}:{record.title}"
+                            existing = evidence.get(key)
+                            if existing is None or record.confidence > existing.confidence:
+                                evidence[key] = record
         ordered = sorted(
             evidence.values(),
             key=lambda record: (
@@ -414,10 +697,84 @@ class PublicEvidenceVerifier:
             and record.confidence >= 0.45
             for record in evidence_records
         )
+        candidate.precise_location_confirmed = (
+            candidate.location_precision_bucket
+            not in {"country_only_ireland", "unknown_location", "outside_ireland", ""}
+            or any(
+                record.precise_location_match
+                and self._supports_current_role(record)
+                and not self._is_stale(record, current_year)
+                and record.confidence >= 0.45
+                for record in evidence_records
+            )
+        )
         candidate.current_employment_confirmed = bool(fresh_current_role_records)
         setattr(candidate, "source_quality_score", source_quality_score)
         setattr(candidate, "evidence_freshness_year", latest_year or None)
         setattr(candidate, "current_role_proof_count", len(fresh_current_role_records))
+
+        precise_location_records = [
+            record
+            for record in evidence_records
+            if record.precise_location_match
+            and record.source_type != "company_location"
+            and self._supports_current_role(record)
+            and not self._is_stale(record, current_year)
+            and record.confidence >= 0.45
+        ]
+        company_location_records = [
+            record
+            for record in evidence_records
+            if record.source_type == "company_location"
+            and record.company_match
+            and record.location_match
+            and record.confidence >= 0.45
+        ]
+        if precise_location_records:
+            precise_location_text = precise_location_records[0].location_match_text
+            if precise_location_text:
+                if self._is_country_only_location(candidate.location_name, brief.geography.country) or not candidate.location_name:
+                    if (
+                        brief.geography.country
+                        and normalize_text(brief.geography.country) not in normalize_text(precise_location_text)
+                    ):
+                        candidate.location_name = f"{precise_location_text}, {brief.geography.country}"
+                    else:
+                        candidate.location_name = precise_location_text
+                if candidate.location_precision_bucket in {"country_only_ireland", "unknown_location", "outside_ireland", ""}:
+                    candidate.location_precision_bucket = "named_ireland_location"
+                candidate.location_aligned = True
+        elif (
+            company_location_records
+            and candidate.current_company_confirmed
+            and candidate.location_precision_bucket != "outside_ireland"
+            and (
+                candidate.current_location_confirmed
+                or getattr(candidate, "location_precision_bucket", "") == "country_only_ireland"
+            )
+        ):
+            precise_company_location = next(
+                (record for record in company_location_records if record.precise_location_match),
+                None,
+            )
+            if precise_company_location and precise_company_location.location_match_text:
+                precise_location_text = precise_company_location.location_match_text
+                if self._is_country_only_location(candidate.location_name, brief.geography.country) or not candidate.location_name:
+                    if (
+                        brief.geography.country
+                        and normalize_text(brief.geography.country) not in normalize_text(precise_location_text)
+                    ):
+                        candidate.location_name = f"{precise_location_text}, {brief.geography.country}"
+                    else:
+                        candidate.location_name = precise_location_text
+                if candidate.location_precision_bucket in {"country_only_ireland", "unknown_location", ""}:
+                    candidate.location_precision_bucket = "named_ireland_location"
+                candidate.location_aligned = True
+                candidate.current_location_confirmed = True
+                candidate.precise_location_confirmed = True
+                candidate.verification_notes.append(
+                    "precise Ireland location inferred from company office/contact evidence"
+                )
 
         if len(fresh_current_role_records) >= 2:
             candidate.evidence_verdict = "corroborated"
@@ -446,6 +803,10 @@ class PublicEvidenceVerifier:
             candidate.verification_notes.append(
                 f"{len(non_linkedin_domains)} non-LinkedIn domains corroborate the profile"
             )
+        if company_location_records:
+            candidate.verification_notes.append(
+                f"{len(company_location_records)} company office/contact sources support Ireland locality"
+            )
 
         if stale_data_risk:
             candidate.verification_notes.append(
@@ -473,6 +834,8 @@ class PublicEvidenceVerifier:
             candidate.verification_notes.append("current title publicly corroborated")
         if candidate.current_location_confirmed:
             candidate.verification_notes.append("Ireland location signal corroborated")
+        if candidate.precise_location_confirmed:
+            candidate.verification_notes.append("precise Ireland location corroborated")
         if not candidate.current_employment_confirmed:
             if stale_data_risk:
                 candidate.verification_notes.append("current role proof is stale and cannot verify current employment")
@@ -505,7 +868,7 @@ class PublicEvidenceVerifier:
                 missing.append("current title")
             if (brief.geography.location_name or brief.geography.country) and not candidate.current_location_confirmed:
                 missing.append("current Ireland location")
-            if getattr(candidate, "location_precision_bucket", "") in {
+            if not candidate.precise_location_confirmed or getattr(candidate, "location_precision_bucket", "") in {
                 "country_only_ireland",
                 "unknown_location",
                 "outside_ireland",
