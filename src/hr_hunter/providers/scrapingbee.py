@@ -10,6 +10,7 @@ import httpx
 
 from hr_hunter.briefing import normalize_text, unique_preserving_order
 from hr_hunter.config import resolve_secret
+from hr_hunter.identity import canonical_query_fingerprint
 from hr_hunter.models import CandidateProfile, ProviderRunResult, SearchBrief, SearchSlice
 from hr_hunter.providers.base import SearchProvider
 
@@ -31,6 +32,41 @@ NON_PERSON_NAME_TOKENS = {
     "speakers",
     "staff",
     "team",
+}
+
+DEFAULT_PROFILE_URL_SUBSTRINGS = [
+    "linkedin.com/in/",
+    "theorg.com/org/",
+    "/people/",
+    "/person/",
+    "/profile",
+    "/profiles/",
+    "/bio",
+    "/biography",
+    "/speaker",
+    "/speakers/",
+    "/staff/",
+    "/team/",
+    "/leadership/",
+    "/management/",
+    "/our-team",
+    "/our-people",
+    "/our-leadership",
+    "/executive-team",
+    "/leadership-team",
+    "/news/",
+    "/press/",
+    "/articles/",
+    "/awards/",
+]
+
+PUBLIC_QUERY_FAMILY_TERMS = {
+    "team_leadership_pages": ['"team"', '"leadership"', '"management"', '"people"'],
+    "appointment_news_pages": ['"appointed"', '"appointment"', '"joins"', '"promoted"', '"named"'],
+    "speaker_bio_pages": ['"speaker"', '"speakers"', '"bio"', '"biography"', '"panel"'],
+    "award_industry_pages": ['"award"', '"awards"', '"finalist"', '"judge"', '"conference"'],
+    "org_chart_profile_pages": ['"org chart"', '"org"', '"profile"', '"leadership"'],
+    "profile_like_public_pages": ['"profile"', '"profiles"', '"bio"', '"biography"', '"people"'],
 }
 
 
@@ -105,19 +141,30 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                 ],
             )
         )
-        self.allowed_url_substrings = [
-            value.lower()
-            for value in settings.get("allowed_url_substrings", ["linkedin.com/in/"])
-            if str(value).strip()
-        ]
+        configured_allowed_url_substrings = list(settings.get("allowed_url_substrings", []))
+        self.allowed_url_substrings = self._unique(
+            [
+                *(str(value).lower().strip() for value in configured_allowed_url_substrings if str(value).strip()),
+                *DEFAULT_PROFILE_URL_SUBSTRINGS,
+            ]
+        )
         self.blocked_url_substrings = [
             value.lower()
             for value in settings.get(
                 "blocked_url_substrings",
-                ["/jobs", "/company", "/posts", "/careers", "/news", "/press", "/blog", "/articles"],
+                ["/jobs", "/company", "/posts", "/careers"],
             )
             if str(value).strip()
         ]
+        raw_query_family_budgets = settings.get(
+            "query_family_budgets",
+            settings.get("max_queries_per_family", {}),
+        )
+        self.query_family_budgets = {
+            str(family).strip(): max(0, int(limit))
+            for family, limit in dict(raw_query_family_budgets or {}).items()
+            if str(family).strip()
+        }
 
     def is_configured(self) -> bool:
         return self.client.is_configured()
@@ -192,11 +239,80 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                 parts.append(f"-{term}")
         return " ".join(parts)
 
+    @staticmethod
+    def _combine_query_parts(*parts: str) -> str:
+        return " ".join(part.strip() for part in parts if part and part.strip())
+
+    @staticmethod
+    def _family_budget_remaining(
+        family: str,
+        family_query_counts: Dict[str, int],
+        family_query_budgets: Dict[str, int],
+    ) -> bool:
+        budget = family_query_budgets.get(family, 0)
+        if budget <= 0:
+            return True
+        return family_query_counts.get(family, 0) < budget
+
+    def _adjacent_query_terms(self, slice_config: SearchSlice) -> str:
+        keywords = self._unique(slice_config.query_keywords)[:8]
+        return " OR ".join(f'"{keyword}"' for keyword in keywords if keyword)
+
+    def _append_query_plan(
+        self,
+        plans: List[Dict[str, str]],
+        seen_fingerprints: set[str],
+        slice_config: SearchSlice,
+        family: str,
+        variant: str,
+        search_query: str,
+    ) -> None:
+        cleaned_query = self._combine_query_parts(search_query)
+        if not cleaned_query:
+            return
+        fingerprint = canonical_query_fingerprint(cleaned_query)
+        if not fingerprint or fingerprint in seen_fingerprints:
+            return
+        seen_fingerprints.add(fingerprint)
+        plans.append(
+            {
+                "slice_id": slice_config.id,
+                "family": family,
+                "variant": variant,
+                "tag": f"{slice_config.id}:{family}:{variant}",
+                "search": cleaned_query,
+                "fingerprint": fingerprint,
+            }
+        )
+
     def _is_profile_url(self, url: str) -> bool:
         lowered = url.lower().strip()
         if not lowered:
             return False
-        if self.allowed_url_substrings and not any(token in lowered for token in self.allowed_url_substrings):
+        parsed = urlparse(lowered if "://" in lowered else f"https://{lowered}")
+        path = parsed.path.lower()
+        looks_profile_like = any(token in lowered for token in self.allowed_url_substrings) or any(
+            token in path
+            for token in (
+                "/people/",
+                "/person/",
+                "/profile",
+                "/profiles/",
+                "/bio",
+                "/biography",
+                "/speaker",
+                "/speakers/",
+                "/staff/",
+                "/team/",
+                "/leadership/",
+                "/management/",
+                "/news/",
+                "/press/",
+                "/articles/",
+                "/awards/",
+            )
+        )
+        if not looks_profile_like:
             return False
         if any(token in lowered for token in self.blocked_url_substrings):
             return False
@@ -255,7 +371,7 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                     return title
         return ""
 
-    def build_search_queries(self, brief: SearchBrief, slice_config: SearchSlice) -> List[str]:
+    def _build_query_plans(self, brief: SearchBrief, slice_config: SearchSlice) -> List[Dict[str, str]]:
         title_groups = self._title_groups(brief, slice_config)
         location_groups = self._location_groups(brief)
         if (
@@ -264,13 +380,12 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         ):
             location_groups = location_groups[: self.company_slice_location_group_limit]
         company_targets = slice_config.companies or [""]
-        queries = []
+        plans: List[Dict[str, str]] = []
+        seen_fingerprints: set[str] = set()
         site_filters = self._site_filters()
         query_filters = self._query_filters()
         country_terms = f'"{brief.geography.country}"' if brief.geography.country else ""
-        query_terms = " OR ".join(
-            f'"{keyword}"' for keyword in self._unique(slice_config.query_keywords)[:8] if keyword
-        )
+        query_terms = self._adjacent_query_terms(slice_config)
 
         for title_group in title_groups:
             title_terms = " OR ".join(f'"{title}"' for title in title_group if title)
@@ -282,47 +397,67 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                 if not location_terms:
                     continue
 
-                if slice_config.search_mode in {"discovery", "market"}:
-                    if not query_terms:
-                        continue
-                    queries.append(
-                        f"({title_terms}) ({query_terms}) ({location_terms}) {query_filters} {site_filters}"
-                    )
-                    if self.include_country_only_queries and country_terms:
-                        queries.append(
-                            f"({title_terms}) ({query_terms}) ({country_terms}) {query_filters} {site_filters}"
-                        )
-                    if self.include_relaxed_queries:
-                        relaxed_location = country_terms or f"({location_terms})"
-                        queries.append(
-                            f"({title_terms}) ({query_terms}) {relaxed_location} {query_filters} {site_filters}"
-                        )
+                family_location_terms = [
+                    ("local", f"({location_terms})"),
+                ]
+                if self.include_country_only_queries and country_terms:
+                    family_location_terms.append(("country", f"({country_terms})"))
+                if self.include_relaxed_queries:
+                    family_location_terms.append(("relaxed", country_terms or f"({location_terms})"))
+
+                if slice_config.search_mode in {"discovery", "market"} and not query_terms:
                     continue
 
-                for company in company_targets:
-                    company_aliases = brief.company_aliases.get(company, [company])
-                    company_terms = " OR ".join(
-                        f'"{alias}"' for alias in company_aliases[: self.max_company_aliases_per_query] if alias
-                    )
-                    if not company_terms:
-                        continue
-                    queries.append(
-                        f"({title_terms}) ({company_terms}) ({location_terms}) {query_filters} {site_filters}"
-                    )
-                    if query_terms:
-                        queries.append(
-                            f"({title_terms}) ({company_terms}) ({query_terms}) ({location_terms}) {query_filters} {site_filters}"
-                        )
-                    if self.include_country_only_queries and country_terms:
-                        queries.append(
-                            f"({title_terms}) ({company_terms}) ({country_terms}) {query_filters} {site_filters}"
-                        )
-                    if self.include_relaxed_queries:
-                        relaxed_location = country_terms or f"({location_terms})"
-                        queries.append(
-                            f"({title_terms}) ({company_terms}) {relaxed_location} {query_filters} {site_filters}"
-                        )
-        return self._unique(queries)
+                for family, family_terms in PUBLIC_QUERY_FAMILY_TERMS.items():
+                    family_clause = f"({' OR '.join(family_terms)})"
+                    for variant, location_clause in family_location_terms:
+                        if slice_config.search_mode in {"discovery", "market"}:
+                            self._append_query_plan(
+                                plans,
+                                seen_fingerprints,
+                                slice_config,
+                                family,
+                                variant,
+                                self._combine_query_parts(
+                                    f"({title_terms})",
+                                    f"({query_terms})",
+                                    location_clause,
+                                    family_clause,
+                                    query_filters,
+                                    site_filters,
+                                ),
+                            )
+                            continue
+
+                        for company in company_targets:
+                            company_aliases = brief.company_aliases.get(company, [company])
+                            company_terms = " OR ".join(
+                                f'"{alias}"'
+                                for alias in company_aliases[: self.max_company_aliases_per_query]
+                                if alias
+                            )
+                            if not company_terms:
+                                continue
+                            self._append_query_plan(
+                                plans,
+                                seen_fingerprints,
+                                slice_config,
+                                family,
+                                variant,
+                                self._combine_query_parts(
+                                    f"({title_terms})",
+                                    f"({company_terms})",
+                                    f"({query_terms})" if query_terms else "",
+                                    location_clause,
+                                    family_clause,
+                                    query_filters,
+                                    site_filters,
+                                ),
+                            )
+        return plans
+
+    def build_search_queries(self, brief: SearchBrief, slice_config: SearchSlice) -> List[str]:
+        return [plan["search"] for plan in self._build_query_plans(brief, slice_config)]
 
     def _find_company_match(self, text: str, brief: SearchBrief) -> str:
         lowered = normalize_text(text)
@@ -426,20 +561,71 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         exclude_queries: set[str] | None = None,
     ) -> ProviderRunResult:
         excluded_queries = {value.strip() for value in (exclude_queries or set()) if value and value.strip()}
-        diagnostics = {"queries": [], "skipped_query_count": 0, "query_budget_exhausted": False}
+        excluded_fingerprints = {
+            canonical_query_fingerprint(value) for value in excluded_queries if canonical_query_fingerprint(value)
+        }
+        diagnostics = {
+            "queries": [],
+            "skipped_query_count": 0,
+            "query_budget_exhausted": False,
+            "query_budget": {
+                "max_queries_per_run": self.max_queries,
+                "max_queries_per_family": dict(self.query_family_budgets),
+                "executed_per_family": {},
+                "skipped_per_family": {},
+                "planned_per_family": {},
+                "family_budget_exhausted": [],
+            },
+        }
+        family_query_counts: Dict[str, int] = {}
+        skipped_per_family: Dict[str, int] = {}
+
+        def record_query_entry(
+            plan: Dict[str, str],
+            *,
+            skipped: bool,
+            skip_reason: str = "",
+        ) -> None:
+            family = plan["family"]
+            diagnostics["query_budget"]["planned_per_family"][family] = (
+                diagnostics["query_budget"]["planned_per_family"].get(family, 0) + 1
+            )
+            if skipped:
+                skipped_per_family[family] = skipped_per_family.get(family, 0) + 1
+                diagnostics["skipped_query_count"] += 1
+            diagnostics["queries"].append(
+                {
+                    "slice_id": plan["slice_id"],
+                    "family": family,
+                    "variant": plan["variant"],
+                    "tag": plan["tag"],
+                    "fingerprint": plan["fingerprint"],
+                    "search": plan["search"],
+                    "skipped": skipped,
+                    "skip_reason": skip_reason,
+                }
+            )
+
         if dry_run:
             for slice_config in slices:
-                for search_query in self.build_search_queries(brief, slice_config):
-                    diagnostics["queries"].append(
-                        {
-                            "slice_id": slice_config.id,
-                            "search": search_query,
-                            "skipped": search_query in excluded_queries,
-                        }
-                    )
-            diagnostics["skipped_query_count"] = len(
-                [item for item in diagnostics["queries"] if item.get("skipped")]
-            )
+                for plan in self._build_query_plans(brief, slice_config):
+                    family = plan["family"]
+                    if self.max_queries > 0 and sum(family_query_counts.values()) >= self.max_queries:
+                        diagnostics["query_budget_exhausted"] = True
+                        record_query_entry(plan, skipped=True, skip_reason="run_budget")
+                        continue
+                    if not self._family_budget_remaining(family, family_query_counts, self.query_family_budgets):
+                        if family not in diagnostics["query_budget"]["family_budget_exhausted"]:
+                            diagnostics["query_budget"]["family_budget_exhausted"].append(family)
+                        record_query_entry(plan, skipped=True, skip_reason="family_budget")
+                        continue
+                    if plan["search"] in excluded_queries or plan["fingerprint"] in excluded_fingerprints:
+                        record_query_entry(plan, skipped=True, skip_reason="exclude_query")
+                        continue
+                    family_query_counts[family] = family_query_counts.get(family, 0) + 1
+                    record_query_entry(plan, skipped=False)
+            diagnostics["query_budget"]["executed_per_family"] = family_query_counts
+            diagnostics["query_budget"]["skipped_per_family"] = skipped_per_family
             return ProviderRunResult(
                 provider_name=self.name,
                 executed=False,
@@ -466,22 +652,23 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                 if len(candidates) >= limit:
                     break
 
-                for search_query in self.build_search_queries(brief, slice_config):
+                for plan in self._build_query_plans(brief, slice_config):
+                    search_query = plan["search"]
+                    family = plan["family"]
                     if self.max_queries > 0 and executed_queries >= self.max_queries:
                         diagnostics["query_budget_exhausted"] = True
                         break
-                    if search_query in excluded_queries:
-                        diagnostics["skipped_query_count"] += 1
-                        diagnostics["queries"].append(
-                            {
-                                "slice_id": slice_config.id,
-                                "search": search_query,
-                                "skipped": True,
-                            }
-                        )
+                    if not self._family_budget_remaining(family, family_query_counts, self.query_family_budgets):
+                        if family not in diagnostics["query_budget"]["family_budget_exhausted"]:
+                            diagnostics["query_budget"]["family_budget_exhausted"].append(family)
+                        record_query_entry(plan, skipped=True, skip_reason="family_budget")
+                        continue
+                    if search_query in excluded_queries or plan["fingerprint"] in excluded_fingerprints:
+                        record_query_entry(plan, skipped=True, skip_reason="exclude_query")
                         continue
 
-                    diagnostics["queries"].append({"slice_id": slice_config.id, "search": search_query})
+                    family_query_counts[family] = family_query_counts.get(family, 0) + 1
+                    record_query_entry(plan, skipped=False)
                     executed_queries += 1
                     for page in range(1, self.pages_per_query + 1):
                         response = None
@@ -531,6 +718,14 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                             candidate = self._candidate_from_result(result, brief)
                             if candidate is None:
                                 continue
+                            candidate.raw = {
+                                **candidate.raw,
+                                "query_family": family,
+                                "query_variant": plan["variant"],
+                                "query_tag": plan["tag"],
+                                "query_fingerprint": plan["fingerprint"],
+                                "search_query": search_query,
+                            }
                             candidates.append(candidate)
                             if len(candidates) >= limit:
                                 break
@@ -540,6 +735,9 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                         break
                 if diagnostics.get("query_budget_exhausted"):
                     break
+
+        diagnostics["query_budget"]["executed_per_family"] = family_query_counts
+        diagnostics["query_budget"]["skipped_per_family"] = skipped_per_family
 
         return ProviderRunResult(
             provider_name=self.name,

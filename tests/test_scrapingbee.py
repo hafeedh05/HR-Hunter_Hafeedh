@@ -1,5 +1,9 @@
+import asyncio
+
 from hr_hunter.briefing import build_search_brief
+from hr_hunter.identity import canonical_query_fingerprint
 from hr_hunter.providers.scrapingbee import ScrapingBeeGoogleProvider
+from hr_hunter.query_planner import build_search_slices
 
 
 def test_candidate_parser_skips_non_person_team_pages() -> None:
@@ -54,3 +58,101 @@ def test_candidate_parser_keeps_matched_irish_location_hint() -> None:
     assert candidate is not None
     assert candidate.location_name == "Dublin, Ireland"
     assert candidate.current_company == "Unilever"
+
+
+def test_scrapingbee_builds_public_query_families() -> None:
+    provider = ScrapingBeeGoogleProvider({})
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-families-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "industry_keywords": ["FMCG"],
+            "required_keywords": ["brand", "category"],
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+        }
+    )
+    strict_slice = next(
+        slice_config for slice_config in build_search_slices(brief) if slice_config.search_mode == "strict"
+    )
+
+    plans = provider._build_query_plans(brief, strict_slice)
+    families = {plan["family"] for plan in plans}
+
+    assert families == {
+        "team_leadership_pages",
+        "appointment_news_pages",
+        "speaker_bio_pages",
+        "award_industry_pages",
+        "org_chart_profile_pages",
+        "profile_like_public_pages",
+    }
+
+
+def test_scrapingbee_dry_run_skips_queries_by_fingerprint() -> None:
+    provider = ScrapingBeeGoogleProvider({})
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-fingerprint-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "industry_keywords": ["FMCG"],
+            "required_keywords": ["brand"],
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+        }
+    )
+    strict_slice = next(
+        slice_config for slice_config in build_search_slices(brief) if slice_config.search_mode == "strict"
+    )
+    first_plan = provider._build_query_plans(brief, strict_slice)[0]
+    exclude_query = first_plan["search"].replace(") (", ")   (")
+
+    result = asyncio.run(
+        provider.run(
+            brief,
+            [strict_slice],
+            limit=10,
+            dry_run=True,
+            exclude_queries={exclude_query},
+        )
+    )
+
+    skipped = next(item for item in result.diagnostics["queries"] if item["fingerprint"] == first_plan["fingerprint"])
+    assert canonical_query_fingerprint(exclude_query) == first_plan["fingerprint"]
+    assert skipped["skipped"] is True
+    assert skipped["skip_reason"] == "exclude_query"
+
+
+def test_scrapingbee_dry_run_enforces_family_and_run_budgets() -> None:
+    provider = ScrapingBeeGoogleProvider(
+        {
+            "max_queries": 3,
+            "query_family_budgets": {
+                "team_leadership_pages": 1,
+            },
+        }
+    )
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-budget-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "industry_keywords": ["FMCG"],
+            "required_keywords": ["brand", "category"],
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+        }
+    )
+    strict_slice = next(
+        slice_config for slice_config in build_search_slices(brief) if slice_config.search_mode == "strict"
+    )
+
+    result = asyncio.run(provider.run(brief, [strict_slice], limit=10, dry_run=True))
+    query_budget = result.diagnostics["query_budget"]
+
+    assert result.diagnostics["query_budget_exhausted"] is True
+    assert query_budget["executed_per_family"]["team_leadership_pages"] == 1
+    assert query_budget["skipped_per_family"]["team_leadership_pages"] >= 1
+    assert "team_leadership_pages" in query_budget["family_budget_exhausted"]

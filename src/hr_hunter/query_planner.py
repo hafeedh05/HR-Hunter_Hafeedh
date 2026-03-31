@@ -67,8 +67,6 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
         + brief.preferred_keywords
         + brief.portfolio_keywords
         + brief.commercial_keywords
-        + brief.leadership_keywords
-        + brief.scope_keywords
     )
     if discovery_keywords and include_discovery_slices:
         for index, keyword_group in enumerate(
@@ -78,7 +76,7 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
             slices.append(
                 SearchSlice(
                     id=f"discovery-{index}",
-                    description="Title family + industry discovery slice",
+                    description="Title family + FMCG-adjacent discovery slice",
                     companies=[],
                     titles=brief.titles,
                     title_keywords=brief.title_keywords,
@@ -95,7 +93,7 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
             slices.append(
                 SearchSlice(
                     id=f"market-{index}",
-                    description="Exact title + sector discovery slice",
+                    description="Exact title + FMCG-adjacent sector discovery slice",
                     companies=[],
                     titles=brief.titles[:8],
                     title_keywords=[],

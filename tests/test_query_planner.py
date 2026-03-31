@@ -83,3 +83,31 @@ def test_query_planner_chunks_discovery_keywords() -> None:
     assert len(market_slices) >= 2
     assert all(slice_config.query_keywords for slice_config in discovery_slices)
     assert all(slice_config.query_keywords for slice_config in market_slices)
+
+
+def test_query_planner_discovery_slices_stay_fmcg_adjacent() -> None:
+    brief = build_search_brief(
+        {
+            "id": "planner-adjacent-test",
+            "role_title": "Senior Product Manager",
+            "titles": ["Senior Product Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+            "industry_keywords": ["FMCG", "consumer goods"],
+            "required_keywords": ["brand", "category", "portfolio"],
+            "commercial_keywords": ["commercial"],
+            "leadership_keywords": ["leadership"],
+            "scope_keywords": ["global", "international"],
+        }
+    )
+
+    slices = build_search_slices(brief)
+    discovery_like = [
+        slice_config for slice_config in slices if slice_config.search_mode in {"discovery", "market"}
+    ]
+
+    assert discovery_like
+    assert all("leadership" not in slice_config.query_keywords for slice_config in discovery_like)
+    assert all("global" not in slice_config.query_keywords for slice_config in discovery_like)
+    assert any("FMCG" in slice_config.query_keywords for slice_config in discovery_like)
+    assert any("brand" in slice_config.query_keywords for slice_config in discovery_like)

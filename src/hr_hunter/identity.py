@@ -8,6 +8,7 @@ from hr_hunter.models import CandidateProfile
 
 
 NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+QUERY_TOKEN_RE = re.compile(r'-?"[^"]+"|-?[^\s()]+')
 
 
 def normalize_identity_text(value: str | None) -> str:
@@ -30,6 +31,36 @@ def canonicalize_profile_url(url: str | None) -> str:
 
     fallback = raw.lower().split("?", 1)[0].split("#", 1)[0].rstrip("/")
     return re.sub(r"/+", "/", fallback)
+
+
+def canonical_query_fingerprint(query: str | None) -> str:
+    raw = str(query or "").strip().lower()
+    if not raw:
+        return ""
+
+    normalized_tokens = []
+    for raw_token in QUERY_TOKEN_RE.findall(raw):
+        token = raw_token.strip()
+        if not token:
+            continue
+
+        is_negative = token.startswith("-")
+        if is_negative:
+            token = token[1:]
+
+        if token.startswith('"') and token.endswith('"'):
+            inner = normalize_identity_text(token[1:-1])
+            normalized = f'"{inner}"' if inner else ""
+        else:
+            normalized = normalize_identity_text(token).replace(" ", "-")
+
+        if not normalized:
+            continue
+        normalized_tokens.append(f"-{normalized}" if is_negative else normalized)
+
+    if not normalized_tokens:
+        return ""
+    return "|".join(sorted(set(normalized_tokens)))
 
 
 def candidate_identity_keys(candidate: CandidateProfile) -> Set[str]:
