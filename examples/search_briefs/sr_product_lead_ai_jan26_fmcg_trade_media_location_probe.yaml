@@ -1,11 +1,11 @@
-id: sr-product-lead-ai-jan26-fmcg-public-expansion
+id: sr-product-lead-ai-jan26-fmcg-trade-media-location-probe
 role_title: Global Product Manager / FMCG Brand-Product Lead
 brief_document_path: /Users/ahmad/Downloads/Sr Product Lead_AI_Jan26.docx
 brief_summary: >
-  Expansion pass for Ireland-based FMCG brand, category, portfolio, and product
-  marketing talent at the named target companies. Use broader public-web profile
-  sources, but keep the final verified bar strict: current target company, current
-  relevant function, and Ireland location evidence.
+  Public-web sourcing pass for Ireland-based FMCG brand, category, portfolio,
+  and product marketing talent using Irish trade media, awards, and conference
+  surfaces. Keep the verified bar strict: current target company, current
+  relevant function, and precise Ireland location confirmation.
 titles:
   - Global Product Manager
   - Product Portfolio Manager
@@ -106,6 +106,8 @@ preferred_keywords:
   - growth
   - matrix
   - innovation
+  - awards
+  - speaker
 portfolio_keywords:
   - portfolio
   - category
@@ -194,7 +196,7 @@ provider_settings:
     include_country_only_queries: true
     include_relaxed_queries: true
     company_slice_location_group_limit: 0
-    max_queries: 120
+    max_queries: 180
     max_company_aliases_per_query: 2
     location_probe_queries: 2
     company_location_probe_queries: 1
@@ -208,6 +210,13 @@ provider_settings:
       - commercialization
       - innovation
       - Ireland
+      - awards
+      - judges
+      - panel
+      - speaker
+      - conference
+      - grocery
+      - retail
     exclude_query_terms:
       - software
       - engineering
@@ -222,17 +231,18 @@ provider_settings:
       - fintech
       - cloud
     include_site_terms:
+      - site:checkout.ie
       - site:shelflife.ie
       - site:drinksindustryireland.ie
-      - site:checkout.ie
       - site:retailnews.ie
       - site:bordbia.ie
-      - site:mii.ie
       - site:marketing.ie
-      - site:foodmatterslive.com
-      - site:foodtogosummit.eu
+      - site:adworld.ie
       - site:businessplus.ie
       - site:businessandfinance.com
+      - site:mii.ie
+      - site:foodmatterslive.com
+      - site:foodtogosummit.eu
       - site:unilever.com
       - site:knorr.com/ie
       - site:jnj.com
@@ -240,13 +250,13 @@ provider_settings:
       - site:colgatepalmolive.com
       - site:beiersdorf.com
     location_include_site_terms:
+      - site:checkout.ie
       - site:shelflife.ie
       - site:drinksindustryireland.ie
-      - site:checkout.ie
       - site:retailnews.ie
       - site:bordbia.ie
-      - site:mii.ie
       - site:marketing.ie
+      - site:mii.ie
       - site:foodmatterslive.com
       - site:foodtogosummit.eu
       - site:unilever.com
@@ -302,6 +312,7 @@ provider_settings:
       - /press/
       - /articles/
       - /awards/
+      - /events/
       - /speaker/
       - /speakers/
       - /directory/
@@ -313,11 +324,11 @@ provider_settings:
       - /posts
       - /compare
       - /careers
-      - /blog
+      - /podcast
     query_family_budgets:
-      appointment_news_pages: 28
-      speaker_bio_pages: 18
-      award_industry_pages: 18
-      industry_association_pages: 16
-      trade_directory_pages: 16
-      profile_like_public_pages: 12
+      appointment_news_pages: 50
+      speaker_bio_pages: 45
+      award_industry_pages: 45
+      industry_association_pages: 35
+      trade_directory_pages: 35
+      profile_like_public_pages: 30

@@ -112,6 +112,8 @@ def test_scrapingbee_builds_public_query_families() -> None:
         "appointment_news_pages",
         "speaker_bio_pages",
         "award_industry_pages",
+        "industry_association_pages",
+        "trade_directory_pages",
         "org_chart_profile_pages",
         "profile_like_public_pages",
     }
