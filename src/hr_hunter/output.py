@@ -4,14 +4,64 @@ import csv
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Iterable, Iterator, Set, Tuple
 
+from hr_hunter.identity import candidate_identity_keys
 from hr_hunter.models import (
     CandidateProfile,
     EvidenceRecord,
     ProviderRunResult,
     SearchRunReport,
 )
+
+
+def iter_report_paths(paths: Iterable[Path]) -> Iterator[Path]:
+    for path in paths:
+        resolved = path.expanduser().resolve()
+        if resolved.is_file() and resolved.suffix.lower() == ".json":
+            yield resolved
+            continue
+        if resolved.is_dir():
+            for child in sorted(resolved.glob("*.json")):
+                if child.is_file():
+                    yield child.resolve()
+
+
+def collect_seen_candidate_keys(paths: Iterable[Path]) -> Set[str]:
+    seen: Set[str] = set()
+    for path in iter_report_paths(paths):
+        try:
+            report = load_report(path)
+        except Exception:
+            continue
+        for candidate in report.candidates:
+            seen.update(candidate_identity_keys(candidate))
+    return seen
+
+
+def collect_seen_provider_queries(paths: Iterable[Path]) -> Dict[str, Set[str]]:
+    seen: Dict[str, Set[str]] = {}
+    for path in iter_report_paths(paths):
+        try:
+            report = load_report(path)
+        except Exception:
+            continue
+        for result in report.provider_results:
+            provider_seen = seen.setdefault(result.provider_name, set())
+            diagnostics_queries = result.diagnostics.get("queries", [])
+            if not isinstance(diagnostics_queries, list):
+                continue
+            for item in diagnostics_queries:
+                if not isinstance(item, dict):
+                    continue
+                search_query = str(item.get("search", "")).strip()
+                if search_query:
+                    provider_seen.add(search_query)
+                    continue
+                query_payload = item.get("query")
+                if query_payload:
+                    provider_seen.add(json.dumps(query_payload, sort_keys=True))
+    return seen
 
 
 def write_report(report: SearchRunReport, output_dir: Path) -> Tuple[Path, Path]:
@@ -31,6 +81,15 @@ def write_report(report: SearchRunReport, output_dir: Path) -> Tuple[Path, Path]
                 "current_company",
                 "location_name",
                 "distance_miles",
+                "current_target_company_match",
+                "target_company_history_match",
+                "current_title_match",
+                "industry_aligned",
+                "location_aligned",
+                "current_company_confirmed",
+                "current_title_confirmed",
+                "current_location_confirmed",
+                "current_employment_confirmed",
                 "verification_status",
                 "score",
                 "evidence_confidence",
@@ -53,6 +112,15 @@ def write_report(report: SearchRunReport, output_dir: Path) -> Tuple[Path, Path]
                     "current_company": candidate.current_company,
                     "location_name": candidate.location_name,
                     "distance_miles": candidate.distance_miles,
+                    "current_target_company_match": candidate.current_target_company_match,
+                    "target_company_history_match": candidate.target_company_history_match,
+                    "current_title_match": candidate.current_title_match,
+                    "industry_aligned": candidate.industry_aligned,
+                    "location_aligned": candidate.location_aligned,
+                    "current_company_confirmed": candidate.current_company_confirmed,
+                    "current_title_confirmed": candidate.current_title_confirmed,
+                    "current_location_confirmed": candidate.current_location_confirmed,
+                    "current_employment_confirmed": candidate.current_employment_confirmed,
                     "verification_status": candidate.verification_status,
                     "score": candidate.score,
                     "evidence_confidence": candidate.evidence_confidence,
@@ -113,6 +181,15 @@ def build_candidate(payload: dict) -> CandidateProfile:
         matched_titles=list(payload.get("matched_titles", [])),
         matched_companies=list(payload.get("matched_companies", [])),
         distance_miles=payload.get("distance_miles"),
+        current_target_company_match=bool(payload.get("current_target_company_match", False)),
+        target_company_history_match=bool(payload.get("target_company_history_match", False)),
+        current_title_match=bool(payload.get("current_title_match", False)),
+        industry_aligned=bool(payload.get("industry_aligned", False)),
+        location_aligned=bool(payload.get("location_aligned", False)),
+        current_company_confirmed=bool(payload.get("current_company_confirmed", False)),
+        current_title_confirmed=bool(payload.get("current_title_confirmed", False)),
+        current_location_confirmed=bool(payload.get("current_location_confirmed", False)),
+        current_employment_confirmed=bool(payload.get("current_employment_confirmed", False)),
         verification_status=payload.get("verification_status", "review"),
         verification_notes=list(payload.get("verification_notes", [])),
         evidence_records=[
@@ -127,6 +204,8 @@ def build_candidate(payload: dict) -> CandidateProfile:
                 company_match=record.get("company_match", ""),
                 title_matches=list(record.get("title_matches", [])),
                 location_match=bool(record.get("location_match", False)),
+                profile_signal=bool(record.get("profile_signal", False)),
+                current_employment_signal=bool(record.get("current_employment_signal", False)),
                 recency_year=record.get("recency_year"),
                 confidence=float(record.get("confidence", 0.0)),
                 raw=record.get("raw", {}),

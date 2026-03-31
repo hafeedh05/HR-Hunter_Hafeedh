@@ -1,0 +1,98 @@
+id: sr-product-lead-ai-jan26-public-profiles-targeted-fmcg
+role_title: Global Product Manager, Adult Incontinence
+brief_summary: >
+  Low-volume targeted public-profile pass across reachable open web sources
+  for the original FMCG target companies. This keeps query volume controlled
+  while prioritizing higher-fit profiles on The Org and Wellfound.
+titles:
+  - Global Product Manager
+  - Senior Product Manager
+  - Product Marketing Director
+  - Head of Product Marketing
+title_keywords:
+  - Global Product Director
+  - Product Portfolio Manager
+  - Senior Product Marketing Manager
+  - Category Manager
+company_targets:
+  - Procter & Gamble
+  - Unilever
+  - Johnson & Johnson
+  - Colgate-Palmolive
+  - Beiersdorf
+company_aliases:
+  Procter & Gamble:
+    - P&G
+    - Procter and Gamble
+  Johnson & Johnson:
+    - J&J
+    - Johnson and Johnson
+  Colgate-Palmolive:
+    - Colgate Palmolive
+geography:
+  location_name: Drogheda, Ireland
+  country: Ireland
+  center_latitude: 53.7179
+  center_longitude: -6.3561
+  radius_miles: 90
+  location_hints:
+    - Drogheda
+    - Dundalk
+    - County Louth
+    - County Meath
+    - Dublin
+required_keywords: []
+preferred_keywords: []
+portfolio_keywords: []
+commercial_keywords: []
+leadership_keywords: []
+scope_keywords: []
+industry_keywords: []
+exclude_title_keywords:
+  - software engineer
+  - engineering manager
+  - recruiter
+  - talent acquisition
+  - finance
+  - human resources
+seniority_levels:
+  - senior
+  - manager
+  - director
+  - head
+minimum_years_experience: 10
+result_target_min: 8
+result_target_max: 16
+max_profiles: 20
+provider_settings:
+  pdl:
+    dataset: all
+    company_chunk_size: 5
+    results_per_slice: 10
+  scrapingbee_google:
+    pages_per_query: 1
+    country_code: ie
+    language: en
+    light_request: true
+    max_retries: 2
+    retry_backoff_seconds: 2.0
+    include_country_only_queries: false
+    include_relaxed_queries: false
+    max_company_aliases_per_query: 2
+    include_site_terms:
+      - site:wellfound.com/u/
+      - site:theorg.com
+    exclude_site_terms:
+      - -site:wellfound.com/jobs
+      - -site:wellfound.com/company
+      - -site:wellfound.com/recruit
+      - -site:theorg.com/compare
+      - -site:theorg.com/teams
+    allowed_url_substrings:
+      - wellfound.com/u/
+      - /org-chart/
+    blocked_url_substrings:
+      - /jobs
+      - /company
+      - /teams
+      - /compare

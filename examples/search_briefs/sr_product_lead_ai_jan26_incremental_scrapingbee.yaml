@@ -1,0 +1,112 @@
+id: sr-product-lead-ai-jan26-incremental-scrapingbee
+role_title: Global Product Manager, Adult Incontinence
+brief_summary: >
+  Low-volume incremental ScrapingBee pass focused on adjacent consumer health
+  and personal care employers that were not part of the earlier Ireland search
+  waves. Use this only with exclusion history enabled so it surfaces net-new
+  candidates without rerunning the full query set.
+titles:
+  - Global Product Manager
+  - Senior Product Manager
+  - Product Marketing Director
+  - Head of Product Marketing
+title_keywords:
+  - category manager
+  - brand manager
+  - commercialization manager
+company_targets:
+  - Reckitt
+  - Edgewell Personal Care
+  - Church & Dwight
+  - Bayer Consumer Health
+company_aliases:
+  Edgewell Personal Care:
+    - Edgewell
+  Church & Dwight:
+    - Church and Dwight
+  Bayer Consumer Health:
+    - Bayer
+geography:
+  location_name: Drogheda, Ireland
+  country: Ireland
+  center_latitude: 53.7179
+  center_longitude: -6.3561
+  radius_miles: 90
+  location_hints:
+    - Drogheda
+    - Dundalk
+    - County Louth
+    - County Meath
+    - Dublin
+    - County Dublin
+    - Leinster
+    - Ireland
+required_keywords:
+  - product portfolio
+  - product strategy
+  - product marketing
+  - commercial
+preferred_keywords:
+  - FMCG
+  - consumer health
+  - personal care
+  - hygiene
+  - category
+portfolio_keywords:
+  - portfolio
+  - category
+  - assortment
+  - innovation
+commercial_keywords:
+  - commercial
+  - go-to-market
+  - pricing
+  - growth
+leadership_keywords:
+  - leadership
+  - cross-functional
+  - stakeholder
+  - matrix
+scope_keywords:
+  - global
+  - regional
+  - EMEA
+  - international
+industry_keywords:
+  - personal care
+  - hygiene
+  - consumer health
+  - OTC
+  - self-care
+exclude_title_keywords:
+  - software engineer
+  - recruiter
+  - talent acquisition
+  - finance
+  - human resources
+seniority_levels:
+  - senior
+  - manager
+  - director
+  - head
+minimum_years_experience: 10
+result_target_min: 12
+result_target_max: 24
+max_profiles: 30
+provider_settings:
+  pdl:
+    dataset: all
+    rate_limit_per_minute: 5
+    batch_size: 15
+    company_chunk_size: 4
+    results_per_slice: 8
+  scrapingbee_google:
+    pages_per_query: 1
+    country_code: ie
+    language: en
+    light_request: true
+    max_retries: 2
+    retry_backoff_seconds: 2.0
+    include_country_only_queries: false
+    include_relaxed_queries: false
+    max_company_aliases_per_query: 2

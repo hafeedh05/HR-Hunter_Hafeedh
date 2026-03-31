@@ -46,3 +46,194 @@ def test_score_candidate_marks_high_fit_as_verified() -> None:
     assert scored.verification_status == "verified"
     assert scored.score >= 70
     assert "Procter & Gamble" in scored.matched_companies
+
+
+def test_score_candidate_caps_former_target_company_to_review() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-former-company-test",
+            "role_title": "Global Product Manager",
+            "titles": ["Global Product Manager"],
+            "title_keywords": ["product manager"],
+            "company_targets": ["Procter & Gamble"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+            "industry_keywords": ["consumer goods", "CPG"],
+            "minimum_years_experience": 8,
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Jane Former FMCG",
+        current_title="Global Product Manager",
+        current_company="Acme SaaS",
+        location_name="Drogheda, Ireland",
+        location_geo="53.7179,-6.3561",
+        linkedin_url="https://www.linkedin.com/in/jane-former-fmcg",
+        summary="Consumer goods portfolio leader with former P&G experience.",
+        experience=[
+            {
+                "company": {"name": "Procter & Gamble"},
+                "start_date": "2012-01-01",
+                "end_date": "2020-01-01",
+            }
+        ],
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_target_company_match is False
+    assert scored.target_company_history_match is True
+    assert scored.verification_status != "verified"
+
+
+def test_score_candidate_matches_target_company_subdivision_name() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-company-alias-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+            "industry_keywords": ["consumer goods", "FMCG"],
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Jane Division FMCG",
+        current_title="Senior Brand Manager",
+        current_company="Unilever Ireland Limited",
+        location_name="Drogheda, Ireland",
+        location_geo="53.7179,-6.3561",
+        summary="FMCG brand leadership across consumer goods categories.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_target_company_match is True
+    assert "Unilever" in scored.matched_companies
+
+
+def test_score_candidate_demotes_generic_tech_product_manager() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-tech-demotion-test",
+            "role_title": "Brand / Product Lead",
+            "titles": ["Brand Manager", "Category Manager", "Product Marketing Director"],
+            "title_keywords": ["product marketing", "brand manager", "category manager"],
+            "company_targets": ["Procter & Gamble"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+            "industry_keywords": ["consumer goods", "FMCG"],
+            "exclude_title_keywords": ["software", "saas", "platform", "technical product manager"],
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Tech PM",
+        current_title="Senior Product Manager",
+        current_company="Cloud Platform Co",
+        location_name="Drogheda, Ireland",
+        location_geo="53.7179,-6.3561",
+        summary="SaaS platform roadmap owner for software products and engineering teams.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_target_company_match is False
+    assert scored.verification_status != "verified"
+    assert scored.score < 50.0
+
+
+def test_score_candidate_accepts_adjacent_fmcg_title_family() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-adjacent-title-test",
+            "role_title": "Brand / Category Lead",
+            "titles": ["Brand Manager", "Category Manager", "Product Marketing Director"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 120,
+            },
+            "industry_keywords": ["consumer goods", "FMCG"],
+            "required_keywords": ["brand", "category", "commercial"],
+            "minimum_years_experience": 8,
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Adjacent FMCG Lead",
+        current_title="Shopper Marketing Manager",
+        current_company="Unilever Ireland",
+        location_name="Dublin, Ireland",
+        location_geo="53.3498,-6.2603",
+        summary="FMCG category and brand growth across Ireland retail accounts.",
+        experience=[
+            {
+                "company": {"name": "Unilever"},
+                "title": "Category Development Manager",
+                "start_date": "2014-01-01",
+            }
+        ],
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_target_company_match is True
+    assert scored.current_title_match is True
+    assert scored.score >= 70.0
+
+
+def test_score_candidate_demotes_low_seniority_specialist_role() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-low-seniority-test",
+            "role_title": "Brand / Category Lead",
+            "titles": ["Brand Manager", "Category Manager"],
+            "company_targets": ["Procter & Gamble"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 120,
+            },
+            "industry_keywords": ["consumer goods", "FMCG"],
+            "minimum_years_experience": 8,
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Junior FMCG Marketer",
+        current_title="Marketing Specialist",
+        current_company="Procter & Gamble",
+        location_name="Dublin, Ireland",
+        location_geo="53.3498,-6.2603",
+        summary="Consumer goods marketing specialist supporting campaigns in Ireland.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_target_company_match is True
+    assert scored.score < 70.0
+    assert scored.verification_status != "verified"

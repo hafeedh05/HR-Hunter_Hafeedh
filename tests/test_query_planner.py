@@ -28,3 +28,58 @@ def test_query_planner_creates_strict_and_broad_slices() -> None:
     assert slices[1].search_mode == "broad"
     assert slices[0].companies == ["A", "B", "C", "D", "E"]
     assert slices[2].companies == ["F"]
+
+
+def test_query_planner_adds_precision_keywords_to_broad_slices() -> None:
+    brief = build_search_brief(
+        {
+            "id": "planner-keywords-test",
+            "role_title": "Role",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+            "industry_keywords": ["FMCG", "consumer goods"],
+            "required_keywords": ["product portfolio"],
+            "portfolio_keywords": ["category"],
+            "commercial_keywords": ["commercial"],
+            "provider_settings": {"pdl": {"include_discovery_slices": False}},
+        }
+    )
+
+    slices = build_search_slices(brief)
+    broad_slice = next(slice_config for slice_config in slices if slice_config.search_mode == "broad")
+
+    assert "FMCG" in broad_slice.query_keywords
+    assert "product portfolio" in broad_slice.query_keywords
+    assert "commercial" in broad_slice.query_keywords
+
+
+def test_query_planner_chunks_discovery_keywords() -> None:
+    brief = build_search_brief(
+        {
+            "id": "planner-discovery-test",
+            "role_title": "Role",
+            "titles": ["Brand Manager"],
+            "company_targets": ["A"],
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+            "required_keywords": ["portfolio", "commercial", "consumer goods", "brand", "category"],
+            "preferred_keywords": ["innovation", "retail", "FMCG"],
+            "provider_settings": {
+                "pdl": {
+                    "company_chunk_size": 5,
+                    "results_per_slice": 20,
+                    "discovery_keyword_chunk_size": 3,
+                    "market_keyword_chunk_size": 2,
+                }
+            },
+        }
+    )
+
+    slices = build_search_slices(brief)
+    discovery_slices = [slice_config for slice_config in slices if slice_config.search_mode == "discovery"]
+    market_slices = [slice_config for slice_config in slices if slice_config.search_mode == "market"]
+
+    assert len(discovery_slices) >= 2
+    assert len(market_slices) >= 2
+    assert all(slice_config.query_keywords for slice_config in discovery_slices)
+    assert all(slice_config.query_keywords for slice_config in market_slices)

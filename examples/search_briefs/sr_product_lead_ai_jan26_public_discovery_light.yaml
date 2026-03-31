@@ -1,0 +1,140 @@
+id: sr-product-lead-ai-jan26-public-discovery-light
+role_title: Global Product Manager, Adult Incontinence
+brief_summary: >
+  Low-volume public-profile discovery pass for reachable open web sources
+  outside LinkedIn. This broadens title-family and market discovery on
+  Wellfound and The Org while keeping request count controlled and excluding
+  already seen profiles and query histories.
+titles:
+  - Global Product Manager
+  - Senior Product Manager
+  - Product Marketing Director
+  - Head of Product Marketing
+  - Global Product Director
+  - Product Portfolio Manager
+  - Senior Product Marketing Manager
+  - Category Manager
+title_keywords:
+  - product manager
+  - product marketing
+  - product portfolio
+  - global product
+  - category manager
+  - category lead
+  - commercialization manager
+  - innovation manager
+  - proposition manager
+  - portfolio lead
+company_targets: []
+company_aliases: {}
+geography:
+  location_name: Drogheda, Ireland
+  country: Ireland
+  center_latitude: 53.7179
+  center_longitude: -6.3561
+  radius_miles: 90
+  location_hints:
+    - Drogheda
+    - Dundalk
+    - County Louth
+    - County Meath
+    - Dublin
+    - County Dublin
+    - Belfast
+    - Northern Ireland
+    - Leinster
+    - Ireland
+required_keywords:
+  - product portfolio
+  - product strategy
+  - product marketing
+  - commercial
+  - category
+  - innovation
+preferred_keywords:
+  - FMCG
+  - consumer health
+  - personal care
+  - hygiene
+  - growth
+portfolio_keywords:
+  - portfolio
+  - category
+  - proposition
+  - assortment
+  - launch
+  - innovation
+commercial_keywords:
+  - commercial
+  - profitability
+  - margin
+  - go-to-market
+  - pricing
+  - growth
+leadership_keywords:
+  - leadership
+  - cross-functional
+  - stakeholder
+  - influence
+  - collaboration
+scope_keywords:
+  - global
+  - regional
+  - EMEA
+  - international
+industry_keywords:
+  - personal care
+  - hygiene
+  - self-care
+  - consumer health
+  - OTC
+exclude_title_keywords:
+  - software engineer
+  - engineering manager
+  - recruiter
+  - talent acquisition
+  - finance
+  - human resources
+  - retail operations
+seniority_levels:
+  - senior
+  - manager
+  - director
+  - head
+  - lead
+minimum_years_experience: 10
+result_target_min: 8
+result_target_max: 20
+max_profiles: 20
+provider_settings:
+  pdl:
+    dataset: all
+    company_chunk_size: 8
+    results_per_slice: 10
+  scrapingbee_google:
+    pages_per_query: 1
+    country_code: ie
+    language: en
+    light_request: true
+    max_retries: 2
+    retry_backoff_seconds: 2.0
+    include_country_only_queries: false
+    include_relaxed_queries: true
+    max_company_aliases_per_query: 1
+    include_site_terms:
+      - site:wellfound.com/u/
+      - site:theorg.com
+    exclude_site_terms:
+      - -site:wellfound.com/jobs
+      - -site:wellfound.com/company
+      - -site:wellfound.com/recruit
+      - -site:theorg.com/compare
+      - -site:theorg.com/teams
+    allowed_url_substrings:
+      - wellfound.com/u/
+      - /org-chart/
+    blocked_url_substrings:
+      - /jobs
+      - /company
+      - /teams
+      - /compare

@@ -9,3 +9,6 @@ __pycache__/
 *.egg-info/
 output/search/*.json
 output/search/*.csv
+output/**/*.json
+output/**/*.csv
+.tmp-public-*.json

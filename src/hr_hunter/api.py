@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.config import load_yaml_file
 from hr_hunter.engine import SearchEngine
+from hr_hunter.output import collect_seen_candidate_keys, collect_seen_provider_queries
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -38,6 +39,8 @@ def create_app() -> "FastAPI":
         providers = payload.get("providers", ["pdl", "scrapingbee_google"])
         limit = int(payload.get("limit", 100))
         dry_run = bool(payload.get("dry_run", False))
+        exclude_report_paths = payload.get("exclude_report_paths", [])
+        exclude_history_dirs = payload.get("exclude_history_dirs", [])
 
         if brief_path:
             brief_config = load_yaml_file(Path(brief_path))
@@ -45,7 +48,21 @@ def create_app() -> "FastAPI":
             raise HTTPException(status_code=400, detail="Provide `brief` or `brief_path`.")
 
         brief = build_search_brief(brief_config)
-        report = await engine.run(brief, list(providers), limit=limit, dry_run=dry_run)
+        exclusion_sources = [Path(value) for value in [*exclude_report_paths, *exclude_history_dirs]]
+        exclude_candidate_keys = collect_seen_candidate_keys(
+            exclusion_sources
+        )
+        exclude_provider_queries = collect_seen_provider_queries(
+            exclusion_sources
+        )
+        report = await engine.run(
+            brief,
+            list(providers),
+            limit=limit,
+            dry_run=dry_run,
+            exclude_candidate_keys=exclude_candidate_keys,
+            exclude_provider_queries=exclude_provider_queries,
+        )
         return {
             "summary": report.summary,
             "candidates": [asdict(candidate) for candidate in report.candidates],

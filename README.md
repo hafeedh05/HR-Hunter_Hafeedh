@@ -175,11 +175,12 @@ The included sample brief is based on:
 
 ## GCP MCP
 
-This repo includes a local MCP server for Google Cloud that uses your local `gcloud` auth to inspect Compute Engine VMs, SSH into them, copy files, and install the current workspace onto an existing VM.
+This repo includes a local MCP server for Google Cloud that uses your local `gcloud` auth to inspect Compute Engine VMs, SSH into them, copy files, and install local workspaces onto existing VMs.
 
 Files:
 
 - `src/hr_hunter/gcp_mcp.py`
+- `scripts/install_codex_global_mcp.sh`
 - `scripts/install_on_gcp_vm.sh`
 - `docs/gcp-mcp.md`
 
@@ -189,11 +190,27 @@ Quick start:
 gcloud auth login
 gcloud auth application-default login
 gcloud config set project <PROJECT_ID>
-uv sync --extra mcp
-python src/hr_hunter/gcp_mcp.py
+python3 -m venv .mcp-venv
+.mcp-venv/bin/python -m pip install --upgrade pip setuptools wheel
+.mcp-venv/bin/python -m pip install -e ".[mcp]"
+.mcp-venv/bin/python -m hr_hunter.gcp_mcp
 ```
 
-For client installation with the official Python MCP SDK:
+For a global Codex install that works across repos:
+
+```bash
+./scripts/install_codex_global_mcp.sh
+```
+
+Then add this to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.hrHunterGcp]
+command = "/Users/ahmad/.codex/mcp/hr-hunter-gcp/.venv/bin/python"
+args = ["-m", "hr_hunter.gcp_mcp"]
+```
+
+For client installation with the official Python MCP SDK when `uv` is available:
 
 ```bash
 uv run mcp install src/hr_hunter/gcp_mcp.py --with-editable .

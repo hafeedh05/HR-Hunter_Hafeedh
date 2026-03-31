@@ -1,0 +1,78 @@
+id: sr-product-lead-ai-jan26-scrapingbee-incremental-adjacent-b
+role_title: Global Product Manager, Adult Incontinence
+brief_summary: >
+  Second ultra-light incremental ScrapingBee pass for adjacent consumer health
+  and hygiene companies. Built to stay low-volume, exclude previously seen
+  people, and broaden beyond the first adjacent-company sweep.
+titles:
+  - Global Product Director
+  - Product Portfolio Manager
+title_keywords:
+  - Senior Product Marketing Manager
+  - Head of Product Marketing
+  - Category Manager
+company_targets:
+  - Haleon
+  - Coloplast
+  - Paul Hartmann
+  - STADA
+  - Drylock Technologies
+  - Attindas
+company_aliases:
+  Paul Hartmann:
+    - Hartmann
+  STADA:
+    - STADA Arzneimittel
+  Drylock Technologies:
+    - Drylock
+geography:
+  location_name: Drogheda, Ireland
+  country: Ireland
+  center_latitude: 53.7179
+  center_longitude: -6.3561
+  radius_miles: 90
+  location_hints:
+    - Drogheda
+    - Dundalk
+    - County Louth
+    - County Meath
+    - Dublin
+required_keywords: []
+preferred_keywords: []
+portfolio_keywords: []
+commercial_keywords: []
+leadership_keywords: []
+scope_keywords: []
+industry_keywords: []
+exclude_title_keywords:
+  - software engineer
+  - engineering manager
+  - recruiter
+  - talent acquisition
+  - finance
+  - human resources
+  - retail operations
+seniority_levels:
+  - senior
+  - manager
+  - director
+  - head
+minimum_years_experience: 10
+result_target_min: 10
+result_target_max: 20
+max_profiles: 25
+provider_settings:
+  pdl:
+    dataset: all
+    company_chunk_size: 6
+    results_per_slice: 10
+  scrapingbee_google:
+    pages_per_query: 1
+    country_code: ie
+    language: en
+    light_request: true
+    max_retries: 2
+    retry_backoff_seconds: 2.0
+    include_country_only_queries: false
+    include_relaxed_queries: false
+    max_company_aliases_per_query: 2

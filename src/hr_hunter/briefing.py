@@ -68,14 +68,40 @@ def infer_title_keywords(titles: List[str]) -> List[str]:
     keywords = list(titles)
     for title in titles:
         lowered = title.lower()
+        if "brand" in lowered:
+            keywords.append("brand manager")
+            keywords.append("global brand manager")
+            keywords.append("shopper marketing manager")
+            keywords.append("customer marketing manager")
+            keywords.append("trade marketing manager")
+        if "marketing" in lowered:
+            keywords.append("marketing manager")
+            keywords.append("product marketing lead")
+            keywords.append("shopper marketing manager")
+            keywords.append("trade marketing manager")
+            keywords.append("marketing innovation lead")
         if "product marketing" in lowered:
             keywords.append("product marketing")
+            keywords.append("proposition manager")
         if "product" in lowered:
             keywords.append("product")
+            keywords.append("product development manager")
         if "portfolio" in lowered:
             keywords.append("portfolio")
+            keywords.append("portfolio manager")
+            keywords.append("portfolio lead")
+            keywords.append("proposition manager")
+            keywords.append("commercialization manager")
         if "category" in lowered:
             keywords.append("category")
+            keywords.append("category lead")
+            keywords.append("category and insights manager")
+            keywords.append("commercial category manager")
+            keywords.append("category development manager")
+            keywords.append("shopper marketing manager")
+        if "innovation" in lowered:
+            keywords.append("innovation manager")
+            keywords.append("innovation lead")
         if "global" in lowered:
             keywords.append("global product")
     return unique_preserving_order(keywords)
@@ -85,7 +111,9 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
     brief_path = config.get("brief_document_path")
     document_text = ""
     if brief_path:
-        document_text = extract_docx_text(Path(brief_path))
+        path = Path(brief_path).expanduser()
+        if path.exists():
+            document_text = extract_docx_text(path)
 
     titles = unique_preserving_order(config.get("titles", []))
     company_targets = unique_preserving_order(config.get("company_targets", []))
@@ -121,11 +149,17 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
         geography=geography,
         required_keywords=unique_preserving_order(config.get("required_keywords", [])),
         preferred_keywords=unique_preserving_order(config.get("preferred_keywords", [])),
+        portfolio_keywords=unique_preserving_order(config.get("portfolio_keywords", [])),
+        commercial_keywords=unique_preserving_order(config.get("commercial_keywords", [])),
+        leadership_keywords=unique_preserving_order(config.get("leadership_keywords", [])),
+        scope_keywords=unique_preserving_order(config.get("scope_keywords", [])),
         seniority_levels=unique_preserving_order(config.get("seniority_levels", [])),
         minimum_years_experience=config.get("minimum_years_experience"),
         result_target_min=int(config.get("result_target_min", 100)),
         result_target_max=int(config.get("result_target_max", 200)),
         max_profiles=int(config.get("max_profiles", 200)),
+        industry_keywords=unique_preserving_order(config.get("industry_keywords", [])),
+        exclude_title_keywords=unique_preserving_order(config.get("exclude_title_keywords", [])),
         provider_settings=config.get("provider_settings", {}),
         document_text=document_text,
     )

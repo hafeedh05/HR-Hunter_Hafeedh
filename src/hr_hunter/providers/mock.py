@@ -13,6 +13,7 @@ class MockProvider(SearchProvider):
         slices: list[SearchSlice],
         limit: int,
         dry_run: bool,
+        exclude_queries: set[str] | None = None,
     ) -> ProviderRunResult:
         diagnostics = {
             "slice_count": len(slices),

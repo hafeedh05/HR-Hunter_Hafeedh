@@ -1,0 +1,143 @@
+id: sr-product-lead-ai-jan26-discovery-incremental
+role_title: Global Product Manager, Adult Incontinence
+brief_summary: >
+  Low-cost discovery pass for net-new candidates only. This removes exact
+  company slices so ScrapingBee can spend the request budget on broader public
+  profile discovery around Ireland, product leadership, product marketing,
+  portfolio, category, innovation, and commercialization signals.
+titles:
+  - Global Product Manager
+  - Senior Product Manager
+  - Product Marketing Director
+  - Head of Product Marketing
+  - Global Product Director
+  - Product Portfolio Manager
+  - Senior Product Marketing Manager
+  - Category Manager
+  - Global Category Manager
+  - Portfolio Manager
+  - Portfolio Lead
+  - Commercialization Manager
+  - Innovation Manager
+  - Product Innovation Manager
+  - Proposition Manager
+  - Brand Manager
+  - Senior Brand Manager
+title_keywords:
+  - product manager
+  - product marketing
+  - product portfolio
+  - global product
+  - category manager
+  - category lead
+  - brand manager
+  - innovation manager
+  - commercialization manager
+  - proposition manager
+  - portfolio lead
+  - go-to-market
+company_targets: []
+company_aliases: {}
+geography:
+  location_name: Drogheda, Ireland
+  country: Ireland
+  center_latitude: 53.7179
+  center_longitude: -6.3561
+  radius_miles: 90
+  location_hints:
+    - Drogheda
+    - Dundalk
+    - County Louth
+    - County Meath
+    - Dublin
+    - County Dublin
+    - Belfast
+    - Northern Ireland
+    - Leinster
+    - Ireland
+required_keywords:
+  - product portfolio
+  - product strategy
+  - product marketing
+  - commercial
+  - category
+  - innovation
+preferred_keywords:
+  - adult incontinence
+  - FMCG
+  - consumer health
+  - personal care
+  - hygiene
+  - growth
+portfolio_keywords:
+  - portfolio
+  - category
+  - proposition
+  - assortment
+  - launch
+  - innovation
+commercial_keywords:
+  - commercial
+  - profitability
+  - margin
+  - go-to-market
+  - pricing
+  - growth
+leadership_keywords:
+  - leadership
+  - cross-functional
+  - stakeholder
+  - influence
+  - collaboration
+  - matrix
+scope_keywords:
+  - global
+  - regional
+  - EMEA
+  - international
+  - multi-market
+industry_keywords:
+  - adult incontinence
+  - incontinence
+  - continence
+  - personal care
+  - hygiene
+  - self-care
+  - consumer health
+  - OTC
+  - absorbent hygiene
+exclude_title_keywords:
+  - software engineer
+  - engineering manager
+  - recruiter
+  - talent acquisition
+  - finance
+  - human resources
+  - retail operations
+seniority_levels:
+  - senior
+  - manager
+  - director
+  - head
+  - lead
+minimum_years_experience: 10
+result_target_min: 10
+result_target_max: 20
+max_profiles: 30
+provider_settings:
+  pdl:
+    dataset: all
+    rate_limit_per_minute: 5
+    batch_size: 15
+    company_chunk_size: 10
+    results_per_slice: 8
+  scrapingbee_google:
+    pages_per_query: 1
+    country_code: ie
+    language: en
+    light_request: true
+    max_retries: 2
+    retry_backoff_seconds: 2.0
+    include_country_only_queries: true
+    include_relaxed_queries: true
+    max_company_aliases_per_query: 1

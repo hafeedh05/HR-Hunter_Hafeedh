@@ -3,8 +3,9 @@ from __future__ import annotations
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Set
 
+from hr_hunter.identity import candidate_identity_keys, candidate_primary_key
 from hr_hunter.models import CandidateProfile, ProviderRunResult, SearchBrief, SearchRunReport
 from hr_hunter.providers.mock import MockProvider
 from hr_hunter.providers.pdl import PDLProvider
@@ -21,25 +22,29 @@ PROVIDER_REGISTRY = {
 
 
 def candidate_key(candidate: CandidateProfile) -> str:
-    if candidate.linkedin_url:
-        return candidate.linkedin_url.lower()
-
-    parts = [
-        candidate.full_name.lower(),
-        candidate.current_company.lower(),
-        candidate.current_title.lower(),
-    ]
-    return "|".join(parts)
+    return candidate_primary_key(candidate)
 
 
 def dedupe_candidates(candidates: List[CandidateProfile]) -> List[CandidateProfile]:
-    deduped: Dict[str, CandidateProfile] = {}
+    deduped: List[CandidateProfile] = []
     for candidate in candidates:
-        key = candidate_key(candidate)
-        existing = deduped.get(key)
-        if existing is None or candidate.score > existing.score:
-            deduped[key] = candidate
-    return list(deduped.values())
+        candidate_keys = candidate_identity_keys(candidate)
+        matched_index = next(
+            (
+                index
+                for index, existing in enumerate(deduped)
+                if candidate_keys.intersection(candidate_identity_keys(existing))
+            ),
+            None,
+        )
+        if matched_index is None:
+            deduped.append(candidate)
+            continue
+
+        existing = deduped[matched_index]
+        if candidate.score > existing.score:
+            deduped[matched_index] = candidate
+    return deduped
 
 
 class SearchEngine:
@@ -49,10 +54,15 @@ class SearchEngine:
         provider_names: List[str],
         limit: int,
         dry_run: bool,
+        exclude_candidate_keys: Set[str] | None = None,
+        exclude_provider_queries: Dict[str, Set[str]] | None = None,
     ) -> SearchRunReport:
         slices = build_search_slices(brief)
         provider_results: List[ProviderRunResult] = []
         candidate_pool: List[CandidateProfile] = []
+        exclude_candidate_keys = exclude_candidate_keys or set()
+        exclude_provider_queries = exclude_provider_queries or {}
+        excluded_seen_count = 0
 
         for provider_name in provider_names:
             provider_class = PROVIDER_REGISTRY.get(provider_name)
@@ -68,11 +78,25 @@ class SearchEngine:
                 continue
 
             provider = provider_class(brief.provider_settings.get(provider_name, {}))
-            result = await provider.run(brief, slices, limit, dry_run)
+            result = await provider.run(
+                brief,
+                slices,
+                limit,
+                dry_run,
+                exclude_queries=exclude_provider_queries.get(provider_name, set()),
+            )
             provider_results.append(result)
             candidate_pool.extend(result.candidates)
 
             rescored_pool = [score_candidate(candidate, brief) for candidate in dedupe_candidates(candidate_pool)]
+            if exclude_candidate_keys:
+                filtered_pool = [
+                    candidate
+                    for candidate in rescored_pool
+                    if candidate_identity_keys(candidate).isdisjoint(exclude_candidate_keys)
+                ]
+                excluded_seen_count += len(rescored_pool) - len(filtered_pool)
+                rescored_pool = filtered_pool
             candidate_pool = sort_candidates(rescored_pool)
 
             if not dry_run:
@@ -85,7 +109,13 @@ class SearchEngine:
                     break
 
         final_candidates = candidate_pool[:limit]
-        summary = self._build_summary(brief, provider_results, final_candidates, dry_run)
+        summary = self._build_summary(
+            brief,
+            provider_results,
+            final_candidates,
+            dry_run,
+            excluded_seen_count=excluded_seen_count,
+        )
         return SearchRunReport(
             run_id=f"{brief.id}-{uuid.uuid4().hex[:8]}",
             brief_id=brief.id,
@@ -102,6 +132,7 @@ class SearchEngine:
         provider_results: List[ProviderRunResult],
         candidates: List[CandidateProfile],
         dry_run: bool,
+        excluded_seen_count: int = 0,
     ) -> Dict[str, object]:
         verified = len([candidate for candidate in candidates if candidate.verification_status == "verified"])
         review = len([candidate for candidate in candidates if candidate.verification_status == "review"])
@@ -119,4 +150,5 @@ class SearchEngine:
             "review_count": review,
             "reject_count": rejected,
             "target_range": [brief.result_target_min, brief.result_target_max],
+            "excluded_seen_count": excluded_seen_count,
         }

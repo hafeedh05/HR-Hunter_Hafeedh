@@ -27,11 +27,17 @@ class SearchBrief:
     geography: GeoSpec
     required_keywords: List[str]
     preferred_keywords: List[str]
+    portfolio_keywords: List[str]
+    commercial_keywords: List[str]
+    leadership_keywords: List[str]
+    scope_keywords: List[str]
     seniority_levels: List[str]
     minimum_years_experience: Optional[int]
     result_target_min: int
     result_target_max: int
     max_profiles: int
+    industry_keywords: List[str] = field(default_factory=list)
+    exclude_title_keywords: List[str] = field(default_factory=list)
     provider_settings: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     document_text: str = ""
 
@@ -43,6 +49,7 @@ class SearchSlice:
     companies: List[str]
     titles: List[str]
     title_keywords: List[str]
+    query_keywords: List[str]
     search_mode: str
     limit: int
 
@@ -59,6 +66,8 @@ class EvidenceRecord:
     company_match: str = ""
     title_matches: List[str] = field(default_factory=list)
     location_match: bool = False
+    profile_signal: bool = False
+    current_employment_signal: bool = False
     recency_year: Optional[int] = None
     confidence: float = 0.0
     raw: Dict[str, Any] = field(default_factory=dict)
@@ -81,6 +90,15 @@ class CandidateProfile:
     matched_titles: List[str] = field(default_factory=list)
     matched_companies: List[str] = field(default_factory=list)
     distance_miles: Optional[float] = None
+    current_target_company_match: bool = False
+    target_company_history_match: bool = False
+    current_title_match: bool = False
+    industry_aligned: bool = False
+    location_aligned: bool = False
+    current_company_confirmed: bool = False
+    current_title_confirmed: bool = False
+    current_location_confirmed: bool = False
+    current_employment_confirmed: bool = False
     verification_status: str = "review"
     verification_notes: List[str] = field(default_factory=list)
     evidence_records: List[EvidenceRecord] = field(default_factory=list)

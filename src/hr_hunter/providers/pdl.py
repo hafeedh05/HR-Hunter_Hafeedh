@@ -81,20 +81,25 @@ class PDLProvider(SearchProvider):
         if brief.geography.country:
             filters.append({"term": {"location_country": self._literal(brief.geography.country)}})
 
-        must_clauses = [
-            {
-                "bool": {
-                    "should": self._company_clauses(brief, slice_config),
-                    "minimum_should_match": 1,
+        must_clauses = []
+        company_clauses = self._company_clauses(brief, slice_config)
+        if company_clauses:
+            must_clauses.append(
+                {
+                    "bool": {
+                        "should": company_clauses,
+                        "minimum_should_match": 1,
+                    }
                 }
-            },
+            )
+        must_clauses.append(
             {
                 "bool": {
                     "should": self._title_clauses(slice_config),
                     "minimum_should_match": 1,
                 }
-            },
-        ]
+            }
+        )
 
         should_clauses: List[Dict[str, Any]] = []
         for level in brief.seniority_levels:
@@ -106,6 +111,12 @@ class PDLProvider(SearchProvider):
             if lowered:
                 should_clauses.append({"match_phrase": {"summary": lowered}})
                 should_clauses.append({"match_phrase": {"headline": lowered}})
+        for keyword in slice_config.query_keywords:
+            lowered = self._literal(keyword)
+            if lowered:
+                should_clauses.append({"match_phrase": {"summary": lowered}})
+                should_clauses.append({"match_phrase": {"headline": lowered}})
+                should_clauses.append({"match_phrase": {"industry": lowered}})
 
         return {
             "query": {
@@ -176,8 +187,9 @@ class PDLProvider(SearchProvider):
         brief: SearchBrief,
         slice_config: SearchSlice,
         limit: int,
+        query: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        query = self.build_query(brief, slice_config)
+        query = query or self.build_query(brief, slice_config)
         candidates: List[CandidateProfile] = []
         request_count = 0
         errors: List[str] = []
@@ -227,13 +239,29 @@ class PDLProvider(SearchProvider):
         slices: List[SearchSlice],
         limit: int,
         dry_run: bool,
+        exclude_queries: set[str] | None = None,
     ) -> ProviderRunResult:
-        diagnostics = {"queries": [], "rate_limit_per_minute": self.rate_limit_per_minute}
+        excluded_queries = {value for value in (exclude_queries or set()) if value}
+        diagnostics = {
+            "queries": [],
+            "rate_limit_per_minute": self.rate_limit_per_minute,
+            "skipped_query_count": 0,
+        }
         if dry_run:
-            diagnostics["queries"] = [
-                {"slice_id": slice_config.id, "query": self.build_query(brief, slice_config)}
-                for slice_config in slices
-            ]
+            dry_run_queries = []
+            for slice_config in slices:
+                query = self.build_query(brief, slice_config)
+                dry_run_queries.append(
+                    {
+                        "slice_id": slice_config.id,
+                        "query": query,
+                        "skipped": json.dumps(query, sort_keys=True) in excluded_queries,
+                    }
+                )
+            diagnostics["queries"] = dry_run_queries
+            diagnostics["skipped_query_count"] = len(
+                [item for item in dry_run_queries if item.get("skipped")]
+            )
             return ProviderRunResult(
                 provider_name=self.name,
                 executed=False,
@@ -259,12 +287,25 @@ class PDLProvider(SearchProvider):
                 remaining = max(limit - len(candidates), 0)
                 if remaining == 0:
                     break
+                query = self.build_query(brief, slice_config)
+                query_key = json.dumps(query, sort_keys=True)
+                if query_key in excluded_queries:
+                    diagnostics["skipped_query_count"] += 1
+                    diagnostics["queries"].append(
+                        {
+                            "slice_id": slice_config.id,
+                            "query": query,
+                            "skipped": True,
+                        }
+                    )
+                    continue
 
                 slice_result = await self._execute_slice(
                     client,
                     brief,
                     slice_config,
                     min(slice_config.limit, remaining),
+                    query=query,
                 )
                 diagnostics["queries"].append(
                     {

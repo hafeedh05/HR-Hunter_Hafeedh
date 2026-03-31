@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
 import subprocess
 import tempfile
+import re
 from pathlib import Path
 from typing import Any
 
@@ -16,24 +18,29 @@ except ImportError as exc:  # pragma: no cover - optional dependency
     ) from exc
 
 
-WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
-REMOTE_INSTALL_SCRIPT = WORKSPACE_ROOT / "scripts" / "install_on_gcp_vm.sh"
+SERVER_ROOT = Path(__file__).resolve().parents[2]
+REMOTE_INSTALL_SCRIPT = SERVER_ROOT / "scripts" / "install_on_gcp_vm.sh"
 
 mcp = FastMCP(
     "HR Hunter GCP",
     json_response=True,
     instructions=(
-        "Manage local gcloud authentication, inspect Compute Engine VMs, and deploy the "
-        "current HR Hunter workspace onto an existing GCP VM."
+        "Manage local gcloud authentication, inspect Compute Engine VMs, and deploy local "
+        "workspaces onto existing GCP VMs."
     ),
 )
 
 
 def _gcloud_binary() -> str:
     binary = shutil.which("gcloud")
-    if not binary:
-        raise RuntimeError("gcloud is not installed or not on PATH.")
-    return binary
+    if binary:
+        return binary
+
+    for candidate in ("/opt/homebrew/bin/gcloud", "/usr/local/bin/gcloud", "/usr/bin/gcloud"):
+        if Path(candidate).exists():
+            return candidate
+
+    raise RuntimeError("gcloud is not installed or not on PATH.")
 
 
 def _run(
@@ -43,6 +50,7 @@ def _run(
     timeout: int = 300,
     text: bool = True,
     input_data: str | bytes | None = None,
+    env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     completed = subprocess.run(
         args,
@@ -52,6 +60,7 @@ def _run(
         text=text,
         input=input_data,
         timeout=timeout,
+        env=env,
     )
     payload: dict[str, Any] = {
         "ok": completed.returncode == 0,
@@ -65,6 +74,40 @@ def _run(
         payload["stdout"] = completed.stdout.decode("utf-8", errors="replace")
         payload["stderr"] = completed.stderr.decode("utf-8", errors="replace")
     return payload
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "workspace"
+
+
+def _resolve_workspace_root(workspace_path: str | None = None) -> Path:
+    raw_workspace_path = workspace_path or os.environ.get("HR_HUNTER_MCP_WORKSPACE_ROOT")
+    if raw_workspace_path:
+        candidate = Path(raw_workspace_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = (Path.cwd() / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+    else:
+        candidate = SERVER_ROOT
+
+    if not candidate.exists():
+        raise FileNotFoundError(f"Workspace path does not exist: {candidate}")
+    if not candidate.is_dir():
+        raise NotADirectoryError(f"Workspace path is not a directory: {candidate}")
+    return candidate
+
+
+def _resolve_local_path(local_path: str, *, workspace_path: str | None = None) -> Path:
+    resolved_local = Path(local_path).expanduser()
+    if not resolved_local.is_absolute():
+        resolved_local = (_resolve_workspace_root(workspace_path) / resolved_local).resolve()
+    else:
+        resolved_local = resolved_local.resolve()
+    if not resolved_local.exists():
+        raise FileNotFoundError(f"Local path does not exist: {resolved_local}")
+    return resolved_local
 
 
 def _parse_json_output(result: dict[str, Any]) -> Any:
@@ -90,12 +133,12 @@ def _apply_project_and_zone(
     return args
 
 
-def _workspace_file_list() -> bytes:
+def _workspace_file_list(workspace_root: Path) -> bytes:
     result = subprocess.run(
         [
             "git",
             "-C",
-            str(WORKSPACE_ROOT),
+            str(workspace_root),
             "ls-files",
             "--cached",
             "--others",
@@ -112,23 +155,26 @@ def _workspace_file_list() -> bytes:
     return result.stdout
 
 
-def _build_workspace_bundle() -> Path:
-    file_list = _workspace_file_list()
+def _build_workspace_bundle(workspace_root: Path) -> Path:
+    file_list = _workspace_file_list(workspace_root)
     temp_dir = Path(tempfile.mkdtemp(prefix="hr-hunter-gcp-"))
     bundle_path = temp_dir / "hr-hunter-workspace.tgz"
+    env = os.environ.copy()
+    env["COPYFILE_DISABLE"] = "1"
     result = _run(
         [
             "tar",
             "-czf",
             str(bundle_path),
             "-C",
-            str(WORKSPACE_ROOT),
+            str(workspace_root),
             "--null",
             "-T",
             "-",
         ],
         text=False,
         input_data=file_list,
+        env=env,
     )
     if not result["ok"]:
         raise RuntimeError(result.get("stderr", "tar failed"))
@@ -153,7 +199,7 @@ def gcp_auth_help() -> str:
 @mcp.resource("gcp://install-help")
 def gcp_install_help() -> str:
     return (
-        "The `gcp_install_hr_hunter` tool packages the current workspace, copies it to the "
+        "The `gcp_install_workspace` tool packages a chosen local workspace, copies it to the "
         "target VM with `gcloud compute scp`, and runs `scripts/install_on_gcp_vm.sh` over "
         "SSH. The remote installer creates a fresh `.venv`, installs the package in editable "
         "mode, and writes a `run-hr-hunter.sh` wrapper that can read secrets from an env file "
@@ -258,14 +304,14 @@ def gcp_copy_to_instance(
     project_id: str | None = None,
     recurse: bool = False,
     use_iap: bool = False,
+    workspace_path: str | None = None,
 ) -> dict[str, Any]:
     """Copy a local file or directory to a Compute Engine VM with gcloud scp."""
     gcloud = _gcloud_binary()
-    resolved_local = Path(local_path).expanduser()
-    if not resolved_local.is_absolute():
-        resolved_local = (WORKSPACE_ROOT / resolved_local).resolve()
-    if not resolved_local.exists():
-        raise FileNotFoundError(f"Local path does not exist: {resolved_local}")
+    resolved_local = _resolve_local_path(local_path, workspace_path=workspace_path)
+    resolved_workspace_root = (
+        str(_resolve_workspace_root(workspace_path)) if workspace_path else None
+    )
 
     args = [gcloud, "compute", "scp"]
     if recurse:
@@ -273,25 +319,30 @@ def gcp_copy_to_instance(
     args.append(str(resolved_local))
     args.append(f"{instance}:{remote_path}")
     args = _apply_project_and_zone(args, project_id=project_id, zone=zone, use_iap=use_iap)
-    return _run(args, timeout=1800)
+    result = _run(args, timeout=1800)
+    return {
+        "ok": result["ok"],
+        "resolved_local_path": str(resolved_local),
+        "workspace_root": resolved_workspace_root,
+        "result": result,
+    }
 
 
-@mcp.tool()
-def gcp_install_hr_hunter(
+def _install_workspace(
+    *,
     instance: str,
     zone: str,
-    project_id: str | None = None,
-    remote_dir: str = "~/hr-hunter",
-    python_bin: str = "python3",
-    scrapingbee_env_file: str = "/etc/reap/reap.env",
-    use_iap: bool = False,
+    project_id: str | None,
+    workspace_path: str | None,
+    remote_dir: str,
+    python_bin: str,
+    secret_env_file: str,
+    use_iap: bool,
 ) -> dict[str, Any]:
-    """Package the current workspace, copy it to a VM, and install HR Hunter there."""
-    if not REMOTE_INSTALL_SCRIPT.exists():
-        raise FileNotFoundError(f"Remote installer is missing: {REMOTE_INSTALL_SCRIPT}")
-
-    bundle_path = _build_workspace_bundle()
-    remote_bundle_path = "/tmp/hr-hunter-workspace.tgz"
+    workspace_root = _resolve_workspace_root(workspace_path)
+    bundle_path = _build_workspace_bundle(workspace_root)
+    workspace_slug = _slugify(workspace_root.name)
+    remote_bundle_path = f"/tmp/{workspace_slug}-workspace.tgz"
     remote_script_path = "/tmp/install_on_gcp_vm.sh"
 
     copy_bundle = gcp_copy_to_instance(
@@ -307,6 +358,7 @@ def gcp_install_hr_hunter(
         return {
             "ok": False,
             "stage": "copy_bundle",
+            "workspace_root": str(workspace_root),
             "copy_bundle": copy_bundle,
         }
 
@@ -323,9 +375,16 @@ def gcp_install_hr_hunter(
         return {
             "ok": False,
             "stage": "copy_script",
+            "workspace_root": str(workspace_root),
             "copy_bundle": copy_bundle,
             "copy_script": copy_script,
         }
+
+    remote_dir_arg = remote_dir
+    if remote_dir_arg == "~":
+        remote_dir_arg = "$HOME"
+    elif remote_dir_arg.startswith("~/"):
+        remote_dir_arg = f"$HOME/{remote_dir_arg[2:]}"
 
     install_command = " ".join(
         [
@@ -334,9 +393,9 @@ def gcp_install_hr_hunter(
             "&&",
             shlex.quote(remote_script_path),
             shlex.quote(remote_bundle_path),
-            shlex.quote(remote_dir),
+            remote_dir_arg if remote_dir_arg.startswith("$HOME") else shlex.quote(remote_dir_arg),
             shlex.quote(python_bin),
-            shlex.quote(scrapingbee_env_file),
+            shlex.quote(secret_env_file),
         ]
     )
     install_result = gcp_ssh_command(
@@ -348,6 +407,7 @@ def gcp_install_hr_hunter(
     )
     return {
         "ok": install_result["ok"],
+        "workspace_root": str(workspace_root),
         "bundle_path": str(bundle_path),
         "remote_bundle_path": remote_bundle_path,
         "remote_dir": remote_dir,
@@ -355,6 +415,58 @@ def gcp_install_hr_hunter(
         "copy_script": copy_script,
         "install_result": install_result,
     }
+
+
+@mcp.tool()
+def gcp_install_workspace(
+    instance: str,
+    zone: str,
+    project_id: str | None = None,
+    workspace_path: str | None = None,
+    remote_dir: str | None = None,
+    python_bin: str = "python3",
+    secret_env_file: str = "/etc/reap/reap.env",
+    use_iap: bool = False,
+) -> dict[str, Any]:
+    """Package a local workspace, copy it to a VM, and install it there."""
+    workspace_root = _resolve_workspace_root(workspace_path)
+    chosen_remote_dir = remote_dir or f"~/deployments/{_slugify(workspace_root.name)}"
+    return _install_workspace(
+        instance=instance,
+        zone=zone,
+        project_id=project_id,
+        workspace_path=str(workspace_root),
+        remote_dir=chosen_remote_dir,
+        python_bin=python_bin,
+        secret_env_file=secret_env_file,
+        use_iap=use_iap,
+    )
+
+
+@mcp.tool()
+def gcp_install_hr_hunter(
+    instance: str,
+    zone: str,
+    project_id: str | None = None,
+    workspace_path: str | None = None,
+    remote_dir: str = "~/hr-hunter-vm",
+    python_bin: str = "python3",
+    scrapingbee_env_file: str = "/etc/reap/reap.env",
+    use_iap: bool = False,
+) -> dict[str, Any]:
+    """Package a workspace, copy it to a VM, and install it there."""
+    if not REMOTE_INSTALL_SCRIPT.exists():
+        raise FileNotFoundError(f"Remote installer is missing: {REMOTE_INSTALL_SCRIPT}")
+    return _install_workspace(
+        instance=instance,
+        zone=zone,
+        project_id=project_id,
+        workspace_path=workspace_path,
+        remote_dir=remote_dir,
+        python_bin=python_bin,
+        secret_env_file=scrapingbee_env_file,
+        use_iap=use_iap,
+    )
 
 
 def main() -> None:

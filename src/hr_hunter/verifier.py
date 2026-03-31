@@ -10,10 +10,40 @@ import httpx
 from hr_hunter.briefing import normalize_text, unique_preserving_order
 from hr_hunter.models import CandidateProfile, EvidenceRecord, SearchBrief, SearchRunReport
 from hr_hunter.providers.scrapingbee import ScrapingBeeGoogleClient
-from hr_hunter.scoring import sort_candidates
+from hr_hunter.scoring import sort_candidates, status_from_score
 
 
 YEAR_PATTERN = re.compile(r"\b(19|20)\d{2}\b")
+CURRENT_EMPLOYMENT_BLOCKERS = (
+    "alumni",
+    "ex ",
+    "former",
+    "formerly",
+    "left",
+    "previous role",
+    "previously",
+    "used to",
+    "ex-",
+    "retired",
+    "past ",
+)
+PROFILE_PATH_HINTS = (
+    "/in/",
+    "/bio",
+    "/speaker/",
+    "/speakers/",
+    "/profile",
+    "/people/",
+    "/person/",
+    "/staff/",
+    "/team/",
+    "/our-team/",
+    "/our-people/",
+    "/leadership/",
+    "/management/",
+    "/about/team",
+    "/org-chart/",
+)
 
 
 def parse_year(value: str) -> int | None:
@@ -53,6 +83,19 @@ class PublicEvidenceVerifier:
         self.pages_per_query = int(settings.get("pages_per_query", 1))
         self.queries_per_candidate = int(settings.get("queries_per_candidate", 2))
         self.results_per_query = int(settings.get("results_per_query", 10))
+
+    @staticmethod
+    def _is_profile_like_source(source_url: str, source_domain: str) -> bool:
+        lowered_url = source_url.lower()
+        lowered_domain = source_domain.lower()
+        if any(hint in lowered_url for hint in PROFILE_PATH_HINTS):
+            return True
+        return lowered_domain in {"theorg.com"}
+
+    @staticmethod
+    def _looks_like_past_role(text: str) -> bool:
+        lowered = normalize_text(text)
+        return any(marker in lowered for marker in CURRENT_EMPLOYMENT_BLOCKERS)
 
     def is_configured(self) -> bool:
         return self.client.is_configured()
@@ -141,6 +184,13 @@ class PublicEvidenceVerifier:
                 location_match = True
                 break
 
+        profile_signal = self._is_profile_like_source(source_url, source_domain)
+        current_employment_signal = bool(
+            matched_company
+            and matched_titles
+            and profile_signal
+            and not self._looks_like_past_role(combined)
+        )
         recency_year = parse_year(combined)
         confidence = 0.0
         if normalized_name and normalized_name in normalized:
@@ -153,6 +203,8 @@ class PublicEvidenceVerifier:
             confidence += 0.1
         if source_domain and "linkedin.com" not in source_domain:
             confidence += 0.1
+        if current_employment_signal:
+            confidence += 0.1
 
         return EvidenceRecord(
             query=query,
@@ -164,6 +216,8 @@ class PublicEvidenceVerifier:
             company_match=matched_company,
             title_matches=unique_preserving_order(matched_titles),
             location_match=location_match,
+            profile_signal=profile_signal,
+            current_employment_signal=current_employment_signal,
             recency_year=recency_year,
             confidence=round(min(confidence, 1.0), 2),
             raw=result,
@@ -179,19 +233,29 @@ class PublicEvidenceVerifier:
 
         evidence: Dict[str, EvidenceRecord] = {}
         request_count = 0
+
+        if candidate.raw:
+            seed_record = self.build_record(candidate, brief, "source_profile", candidate.raw)
+            if seed_record.name_match or seed_record.company_match or seed_record.title_matches:
+                seed_key = seed_record.source_url or f"{seed_record.source_domain}:{seed_record.title}"
+                evidence[seed_key] = seed_record
+
         queries = self.build_queries(candidate, brief)
         async with httpx.AsyncClient(timeout=30.0) as client:
             for query in queries:
                 for page in range(1, self.pages_per_query + 1):
-                    response = await self.client.search(
-                        client,
-                        query,
-                        page=page,
-                        country_code=self.country_code,
-                        language=self.language,
-                        light_request=self.light_request,
-                    )
-                    request_count += 1
+                    try:
+                        response = await self.client.search(
+                            client,
+                            query,
+                            page=page,
+                            country_code=self.country_code,
+                            language=self.language,
+                            light_request=self.light_request,
+                        )
+                        request_count += 1
+                    except httpx.HTTPError:
+                        continue
                     if response.status_code >= 400:
                         continue
                     payload = response.json()
@@ -216,6 +280,7 @@ class PublicEvidenceVerifier:
     def apply_evidence(
         self,
         candidate: CandidateProfile,
+        brief: SearchBrief,
         evidence_records: List[EvidenceRecord],
     ) -> CandidateProfile:
         candidate.evidence_records = evidence_records
@@ -223,7 +288,12 @@ class PublicEvidenceVerifier:
         if not evidence_records:
             candidate.evidence_confidence = 0.0
             candidate.evidence_verdict = "missing"
+            candidate.current_company_confirmed = False
+            candidate.current_title_confirmed = False
+            candidate.current_location_confirmed = candidate.location_aligned
+            candidate.current_employment_confirmed = False
             candidate.verification_notes.append("no public corroboration found")
+            candidate.verification_status = "review" if candidate.score >= 50.0 else "reject"
             return candidate
 
         strong_records = [record for record in evidence_records if record.confidence >= 0.65]
@@ -235,7 +305,19 @@ class PublicEvidenceVerifier:
             for record in evidence_records
             if record.name_match and record.company_match and (record.title_matches or record.location_match)
         ]
-        latest_year = max((record.recency_year or 0) for record in evidence_records)
+        current_role_records = [
+            record
+            for record in evidence_records
+            if record.name_match
+            and record.company_match
+            and record.title_matches
+            and (
+                record.current_employment_signal
+                or (record.profile_signal and record.confidence >= 0.75)
+            )
+        ]
+        current_role_years = [record.recency_year for record in current_role_records if record.recency_year]
+        latest_year = max(current_role_years, default=0)
         stale_data_risk = bool(latest_year and latest_year < datetime.now(timezone.utc).year - 2)
 
         top_confidences = [record.confidence for record in evidence_records[:3]]
@@ -250,16 +332,40 @@ class PublicEvidenceVerifier:
 
         candidate.evidence_confidence = evidence_confidence
         candidate.stale_data_risk = stale_data_risk
+        candidate.current_company_confirmed = any(
+            record.name_match
+            and record.company_match
+            and (record.current_employment_signal or record.profile_signal)
+            and record.confidence >= 0.55
+            for record in evidence_records
+        )
+        candidate.current_title_confirmed = any(
+            record.name_match
+            and record.title_matches
+            and (record.current_employment_signal or record.profile_signal)
+            and record.confidence >= 0.55
+            for record in evidence_records
+        )
+        candidate.current_location_confirmed = candidate.location_aligned or any(
+            record.location_match
+            and (
+                record.current_employment_signal
+                or (record.profile_signal and record.company_match and record.title_matches)
+            )
+            and record.confidence >= 0.45
+            for record in evidence_records
+        )
+        candidate.current_employment_confirmed = bool(current_role_records) and not stale_data_risk
 
-        if len(corroborated_records) >= 2:
+        if len(current_role_records) >= 2:
             candidate.evidence_verdict = "corroborated"
             candidate.verification_notes.append(
-                f"{len(corroborated_records)} public sources corroborate company/title"
+                f"{len(current_role_records)} public sources corroborate the current role"
             )
-        elif strong_records:
+        elif current_role_records or strong_records:
             candidate.evidence_verdict = "supported"
             candidate.verification_notes.append(
-                f"{len(strong_records)} public sources materially support the match"
+                f"{max(len(current_role_records), len(strong_records))} public sources materially support the match"
             )
         else:
             candidate.evidence_verdict = "weak"
@@ -276,13 +382,45 @@ class PublicEvidenceVerifier:
 
         if candidate.evidence_verdict == "corroborated":
             candidate.score = round(min(100.0, candidate.score + 8.0), 2)
-            if candidate.verification_status in {"review", "reject"} and candidate.score >= 55.0:
-                candidate.verification_status = "verified"
         elif candidate.evidence_verdict == "supported":
             candidate.score = round(min(100.0, candidate.score + 4.0), 2)
-            if candidate.verification_status == "reject" and candidate.score >= 40.0:
-                candidate.verification_status = "review"
 
+        if candidate.current_company_confirmed:
+            candidate.verification_notes.append("current company publicly corroborated")
+        if candidate.current_title_confirmed:
+            candidate.verification_notes.append("current title publicly corroborated")
+        if candidate.current_location_confirmed:
+            candidate.verification_notes.append("Ireland location signal corroborated")
+        if not candidate.current_employment_confirmed:
+            candidate.verification_notes.append("current role not yet publicly confirmed")
+            candidate.score = round(max(0.0, candidate.score - 10.0), 2)
+
+        candidate.verification_status = status_from_score(candidate.score)
+        if candidate.verification_status == "verified":
+            missing = []
+            if brief.company_targets and not (
+                candidate.current_target_company_match and candidate.current_company_confirmed
+            ):
+                missing.append("current target company")
+            if (brief.titles or brief.title_keywords) and not (
+                candidate.current_title_match and candidate.current_title_confirmed
+            ):
+                missing.append("current title")
+            if (brief.geography.location_name or brief.geography.country) and not candidate.current_location_confirmed:
+                missing.append("current Ireland location")
+            if brief.industry_keywords and not candidate.industry_aligned:
+                missing.append("industry fit")
+            if not candidate.current_employment_confirmed:
+                missing.append("current role proof")
+            if missing:
+                candidate.verification_status = "review"
+                candidate.verification_notes.append(
+                    f"status capped pending {'/'.join(missing)}"
+                )
+        elif candidate.verification_status == "review" and not candidate.current_employment_confirmed and candidate.score < 60.0:
+            candidate.verification_status = "reject"
+
+        candidate.verification_notes = unique_preserving_order(candidate.verification_notes)
         return candidate
 
     async def verify_candidates(
@@ -299,7 +437,7 @@ class PublicEvidenceVerifier:
             evidence_records, used_requests = await self.collect_evidence(candidate, brief)
             request_count += used_requests
             before_status = candidate.verification_status
-            self.apply_evidence(candidate, evidence_records)
+            self.apply_evidence(candidate, brief, evidence_records)
             if candidate.verification_status == "verified" and before_status != "verified":
                 verified_count += 1
             if candidate.verification_status == "review" and before_status == "reject":

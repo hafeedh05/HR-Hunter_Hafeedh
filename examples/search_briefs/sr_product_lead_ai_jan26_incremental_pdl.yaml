@@ -1,0 +1,175 @@
+id: sr-product-lead-ai-jan26-incremental-pdl
+role_title: Global Product Manager, Adult Incontinence
+brief_summary: >
+  Low-volume incremental expansion pass designed to surface only net-new
+  candidates from People Data Labs after excluding everyone already seen in
+  prior HR Hunter reports. This favors controlled spend over maximum recall.
+titles:
+  - Global Product Manager
+  - Senior Product Manager
+  - Product Marketing Director
+  - Head of Product Marketing
+  - Global Product Director
+  - Product Portfolio Manager
+  - Senior Product Marketing Manager
+  - Category Manager
+  - Global Category Manager
+  - Portfolio Manager
+  - Portfolio Lead
+  - Commercialization Manager
+  - Innovation Manager
+  - Product Innovation Manager
+  - Proposition Manager
+  - Brand Manager
+  - Senior Brand Manager
+title_keywords:
+  - product manager
+  - product marketing
+  - product portfolio
+  - global product
+  - category manager
+  - category lead
+  - brand manager
+  - innovation manager
+  - commercialization manager
+  - proposition manager
+  - portfolio lead
+  - go-to-market
+company_targets:
+  - Procter & Gamble
+  - Unilever
+  - Johnson & Johnson
+  - Colgate-Palmolive
+  - Beiersdorf
+  - Essity
+  - Kimberly-Clark
+  - Ontex
+  - Attindas
+  - Drylock Technologies
+  - Paul Hartmann
+  - Coloplast
+  - Haleon
+  - Kenvue
+  - Perrigo
+  - STADA
+  - WaterWipes
+company_aliases:
+  Procter & Gamble:
+    - P&G
+    - Procter and Gamble
+  Johnson & Johnson:
+    - J&J
+    - Johnson and Johnson
+  Colgate-Palmolive:
+    - Colgate Palmolive
+  Kimberly-Clark:
+    - Kimberly Clark
+  Drylock Technologies:
+    - Drylock
+  Paul Hartmann:
+    - Hartmann
+  STADA:
+    - STADA Arzneimittel
+geography:
+  location_name: Drogheda, Ireland
+  country: Ireland
+  center_latitude: 53.7179
+  center_longitude: -6.3561
+  radius_miles: 90
+  location_hints:
+    - Drogheda
+    - Dundalk
+    - County Louth
+    - County Meath
+    - Dublin
+    - County Dublin
+    - Belfast
+    - Northern Ireland
+    - Leinster
+    - Ireland
+required_keywords:
+  - product portfolio
+  - product strategy
+  - product marketing
+  - commercial
+  - category
+  - innovation
+preferred_keywords:
+  - adult incontinence
+  - FMCG
+  - consumer health
+  - personal care
+  - hygiene
+  - growth
+portfolio_keywords:
+  - portfolio
+  - category
+  - proposition
+  - assortment
+  - launch
+  - innovation
+commercial_keywords:
+  - commercial
+  - profitability
+  - margin
+  - go-to-market
+  - pricing
+  - growth
+leadership_keywords:
+  - leadership
+  - cross-functional
+  - stakeholder
+  - influence
+  - collaboration
+  - matrix
+scope_keywords:
+  - global
+  - regional
+  - EMEA
+  - international
+  - multi-market
+industry_keywords:
+  - adult incontinence
+  - incontinence
+  - continence
+  - personal care
+  - hygiene
+  - self-care
+  - consumer health
+  - OTC
+  - absorbent hygiene
+exclude_title_keywords:
+  - software engineer
+  - engineering manager
+  - recruiter
+  - talent acquisition
+  - finance
+  - human resources
+  - retail operations
+seniority_levels:
+  - senior
+  - manager
+  - director
+  - head
+  - lead
+minimum_years_experience: 10
+result_target_min: 20
+result_target_max: 35
+max_profiles: 40
+provider_settings:
+  pdl:
+    dataset: all
+    rate_limit_per_minute: 5
+    batch_size: 15
+    company_chunk_size: 10
+    results_per_slice: 8
+  scrapingbee_google:
+    pages_per_query: 1
+    country_code: ie
+    language: en
+    light_request: true
+    max_retries: 2
+    retry_backoff_seconds: 2.0
+    include_country_only_queries: false
+    include_relaxed_queries: false
+    max_company_aliases_per_query: 2

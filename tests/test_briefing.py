@@ -58,3 +58,36 @@ def test_build_search_brief_merges_aliases_and_doc_text(tmp_path: Path) -> None:
     assert brief.document_text == "Matrix leadership across consumer products"
     assert "P&G" in brief.company_aliases["Procter & Gamble"]
     assert "Procter and Gamble" in brief.company_aliases["Procter & Gamble"]
+
+
+def test_build_search_brief_ignores_missing_doc_path() -> None:
+    brief = build_search_brief(
+        {
+            "id": "test-brief-missing-doc",
+            "role_title": "Global Product Manager",
+            "brief_document_path": "/does/not/exist.docx",
+            "brief_summary": "Fallback summary",
+            "titles": ["Global Product Manager"],
+            "company_targets": ["Procter & Gamble"],
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+        }
+    )
+
+    assert brief.document_text == ""
+    assert brief.brief_summary == "Fallback summary"
+
+
+def test_build_search_brief_infers_adjacent_fmcg_titles() -> None:
+    brief = build_search_brief(
+        {
+            "id": "test-brief-adjacent-titles",
+            "role_title": "Brand / Category Lead",
+            "titles": ["Brand Manager", "Category Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+        }
+    )
+
+    assert "shopper marketing manager" in [value.lower() for value in brief.title_keywords]
+    assert "customer marketing manager" in [value.lower() for value in brief.title_keywords]
+    assert "category and insights manager" in [value.lower() for value in brief.title_keywords]

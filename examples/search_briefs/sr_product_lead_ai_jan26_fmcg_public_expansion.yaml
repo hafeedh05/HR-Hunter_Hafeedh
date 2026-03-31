@@ -1,0 +1,254 @@
+id: sr-product-lead-ai-jan26-fmcg-public-expansion
+role_title: Global Product Manager / FMCG Brand-Product Lead
+brief_document_path: /Users/ahmad/Downloads/Sr Product Lead_AI_Jan26.docx
+brief_summary: >
+  Expansion pass for Ireland-based FMCG brand, category, portfolio, and product
+  marketing talent at the named target companies. Use broader public-web profile
+  sources, but keep the final verified bar strict: current target company, current
+  relevant function, and Ireland location evidence.
+titles:
+  - Global Product Manager
+  - Product Portfolio Manager
+  - Category Manager
+  - Senior Category Manager
+  - Brand Manager
+  - Senior Brand Manager
+  - Product Marketing Director
+  - Head of Product Marketing
+  - Innovation Manager
+  - Commercialization Manager
+title_keywords:
+  - Global Product Director
+  - Product Marketing Lead
+  - Product Portfolio Lead
+  - Global Brand Manager
+  - Product Innovation Manager
+  - Proposition Manager
+  - Category Lead
+  - Portfolio Director
+  - Trade Marketing Manager
+  - Customer Marketing Manager
+  - Category and Insights Manager
+company_targets:
+  - Procter & Gamble
+  - Unilever
+  - Johnson & Johnson
+  - Colgate-Palmolive
+  - Beiersdorf
+  - DCC plc
+  - McBride plc
+  - Trona Products Ltd
+  - Kinvara Skincare
+  - Voya
+  - The Handmade Soap Company
+  - Pestle & Mortar
+  - Bellamianta
+  - Human+Kind
+company_aliases:
+  Procter & Gamble:
+    - Procter & Gamble
+    - Procter and Gamble
+    - P&G
+  Johnson & Johnson:
+    - Johnson & Johnson
+    - Johnson and Johnson
+    - J&J
+  Colgate-Palmolive:
+    - Colgate-Palmolive
+    - Colgate Palmolive
+  DCC plc:
+    - DCC plc
+    - DCC
+  McBride plc:
+    - McBride plc
+    - McBride
+  Trona Products Ltd:
+    - Trona Products Ltd
+    - Trona Products
+  The Handmade Soap Company:
+    - The Handmade Soap Company
+    - Handmade Soap Company
+  Pestle & Mortar:
+    - Pestle & Mortar
+    - Pestle and Mortar
+  Human+Kind:
+    - Human+Kind
+    - Human and Kind
+geography:
+  location_name: Drogheda, Ireland
+  country: Ireland
+  center_latitude: 53.7179
+  center_longitude: -6.3561
+  radius_miles: 120
+  location_hints:
+    - Drogheda
+    - Dublin
+    - Dundalk
+    - Galway
+    - Cork
+    - County Meath
+    - County Louth
+    - County Dublin
+    - Leinster
+    - Ireland
+required_keywords:
+  - product portfolio
+  - product strategy
+  - commercial
+  - multiple markets
+  - consumer business
+  - brand
+  - category
+preferred_keywords:
+  - adult incontinence
+  - incontinence
+  - product proposition
+  - growth
+  - matrix
+  - innovation
+portfolio_keywords:
+  - portfolio
+  - category
+  - product portfolio
+  - portfolio management
+  - proposition
+commercial_keywords:
+  - commercial
+  - go to market
+  - market growth
+  - profitability
+  - retail
+  - commercialization
+leadership_keywords:
+  - senior
+  - director
+  - head
+  - lead
+scope_keywords:
+  - global
+  - regional
+  - international
+  - emea
+  - north america
+industry_keywords:
+  - fmcg
+  - cpg
+  - consumer goods
+  - consumer business
+  - personal care
+  - skincare
+  - hygiene
+  - healthcare
+  - adult incontinence
+exclude_title_keywords:
+  - software
+  - engineering
+  - project manager
+  - program manager
+  - technical product manager
+  - product owner
+  - saas
+  - platform
+  - ai
+  - developer
+  - fintech
+  - cloud
+  - scrum
+  - agile coach
+  - sales
+  - specialist
+  - customer development
+  - controller
+  - ecommerce
+  - digital
+  - content
+  - research
+  - r&d
+seniority_levels:
+  - senior
+  - manager
+  - director
+  - head
+minimum_years_experience: 8
+result_target_min: 40
+result_target_max: 80
+max_profiles: 80
+provider_settings:
+  pdl:
+    dataset: all
+    company_chunk_size: 5
+    results_per_slice: 12
+    include_strict_slice: true
+    include_broad_slice: true
+    include_discovery_slices: true
+    discovery_keyword_chunk_size: 5
+    market_keyword_chunk_size: 4
+  scrapingbee_google:
+    pages_per_query: 1
+    country_code: ie
+    language: en
+    light_request: true
+    request_timeout_seconds: 12
+    max_retries: 2
+    retry_backoff_seconds: 2.0
+    include_country_only_queries: true
+    include_relaxed_queries: true
+    company_slice_location_group_limit: 0
+    max_queries: 120
+    max_company_aliases_per_query: 2
+    include_query_terms:
+      - FMCG
+      - CPG
+      - consumer goods
+      - product portfolio
+      - brand
+      - category
+      - commercialization
+      - innovation
+      - Ireland
+    exclude_query_terms:
+      - software
+      - engineering
+      - project manager
+      - program manager
+      - technical product manager
+      - product owner
+      - saas
+      - platform
+      - ai
+      - developer
+      - fintech
+      - cloud
+    include_site_terms: []
+    exclude_site_terms:
+      - -site:linkedin.com/jobs
+      - -site:ie.linkedin.com/jobs
+      - -site:linkedin.com/company
+      - -site:ie.linkedin.com/company
+      - -site:linkedin.com/posts
+      - -site:ie.linkedin.com/posts
+      - -site:theorg.com/compare
+      - -site:theorg.com/teams
+      - -site:wellfound.com/jobs
+      - -site:wellfound.com/company
+      - -site:rocketreach.co/search
+      - -site:zoominfo.com
+    allowed_url_substrings:
+      - linkedin.com/in/
+      - wellfound.com/u/
+      - /org-chart/
+      - /people/
+      - /person/
+      - /team/
+      - /our-team/
+      - /leadership/
+      - /management/
+      - /staff/
+    blocked_url_substrings:
+      - /jobs
+      - /company
+      - /posts
+      - /compare
+      - /careers
+      - /news
+      - /blog

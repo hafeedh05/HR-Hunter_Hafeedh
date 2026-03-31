@@ -46,7 +46,11 @@ mkdir -p "$TARGET_DIR"
 tar -xzf "$BUNDLE_PATH" -C "$TARGET_DIR"
 
 cd "$TARGET_DIR"
-"$PYTHON_BIN" -m venv .venv
+if ! "$PYTHON_BIN" -m venv .venv; then
+  echo "python -m venv failed, falling back to virtualenv bootstrap" >&2
+  "$PYTHON_BIN" -m pip install --user --break-system-packages virtualenv
+  "$PYTHON_BIN" -m virtualenv .venv
+fi
 . .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e .

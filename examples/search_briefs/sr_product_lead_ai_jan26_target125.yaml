@@ -1,0 +1,101 @@
+id: sr-product-lead-ai-jan26-target125
+role_title: Global Product Manager, Adult Incontinence
+brief_summary: >
+  Senior global product and product marketing leadership search for an adult
+  incontinence portfolio mandate. The brief emphasizes product portfolio growth,
+  cross-functional leadership, commercial performance, matrix execution, and
+  consumer packaged goods experience across Europe or North America, with a
+  shortlist focus on Ireland within commuting distance of Drogheda.
+titles:
+  - Global Product Manager
+  - Senior Product Manager
+  - Product Marketing Director
+  - Head of Product Marketing
+  - Global Product Director
+  - Product Portfolio Manager
+  - Senior Product Marketing Manager
+  - Category Manager
+title_keywords:
+  - product manager
+  - product marketing
+  - product portfolio
+  - global product
+  - category manager
+  - head of product
+company_targets:
+  - Procter & Gamble
+  - Unilever
+  - Johnson & Johnson
+  - Colgate-Palmolive
+  - Beiersdorf
+  - DCC plc
+  - McBride plc
+  - Trona Products Ltd
+  - Kinvara Skincare
+  - Voya
+  - The Handmade Soap Company
+  - Pestle & Mortar
+  - Bellamianta
+  - Human+Kind
+company_aliases:
+  Procter & Gamble:
+    - P&G
+    - Procter and Gamble
+  Johnson & Johnson:
+    - J&J
+    - Johnson and Johnson
+  Colgate-Palmolive:
+    - Colgate Palmolive
+  DCC plc:
+    - DCC
+  McBride plc:
+    - McBride
+  Trona Products Ltd:
+    - Trona Products
+geography:
+  location_name: Drogheda, Ireland
+  country: Ireland
+  center_latitude: 53.7179
+  center_longitude: -6.3561
+  radius_miles: 60
+  location_hints:
+    - Drogheda
+    - County Louth
+    - County Meath
+    - Dublin
+    - Leinster
+    - Ireland
+required_keywords:
+  - product portfolio
+  - product strategy
+  - product marketing
+  - commercial
+  - CPG
+preferred_keywords:
+  - adult incontinence
+  - FMCG
+  - category
+  - matrix
+  - innovation
+seniority_levels:
+  - senior
+  - manager
+  - director
+  - head
+minimum_years_experience: 10
+result_target_min: 115
+result_target_max: 135
+max_profiles: 135
+provider_settings:
+  pdl:
+    dataset: all
+    batch_size: 50
+    company_chunk_size: 5
+    results_per_slice: 40
+  scrapingbee_google:
+    pages_per_query: 4
+    country_code: ie
+    language: en
+    light_request: true
+    max_retries: 3
+    retry_backoff_seconds: 2.0

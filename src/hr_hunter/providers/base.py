@@ -20,5 +20,6 @@ class SearchProvider:
         slices: List[SearchSlice],
         limit: int,
         dry_run: bool,
+        exclude_queries: set[str] | None = None,
     ) -> ProviderRunResult:
         raise NotImplementedError

@@ -10,7 +10,12 @@ from hr_hunter.api import create_app
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.config import load_env_file, load_yaml_file, resolve_output_dir
 from hr_hunter.engine import SearchEngine
-from hr_hunter.output import load_report, write_report
+from hr_hunter.output import (
+    collect_seen_candidate_keys,
+    collect_seen_provider_queries,
+    load_report,
+    write_report,
+)
 from hr_hunter.verifier import PublicEvidenceVerifier, refresh_report_summary
 
 
@@ -46,6 +51,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         help="Override the output directory for JSON and CSV artifacts.",
     )
+    search_parser.add_argument(
+        "--exclude-report",
+        action="append",
+        default=[],
+        help="JSON report path to use as an exclusion source. Repeatable.",
+    )
+    search_parser.add_argument(
+        "--exclude-history-dir",
+        action="append",
+        default=[],
+        help="Directory of prior JSON reports to exclude from future runs. Repeatable.",
+    )
 
     verify_parser = subparsers.add_parser("verify", help="Verify an existing report with public-web evidence.")
     verify_parser.add_argument("--brief", required=True, help="Path to YAML brief.")
@@ -74,12 +91,18 @@ async def run_search(args: argparse.Namespace) -> int:
     brief_config = load_yaml_file(Path(args.brief))
     brief = build_search_brief(brief_config)
 
+    exclusion_sources = [Path(value) for value in [*args.exclude_report, *args.exclude_history_dir] if value]
+    exclude_candidate_keys = collect_seen_candidate_keys(exclusion_sources)
+    exclude_provider_queries = collect_seen_provider_queries(exclusion_sources)
+
     engine = SearchEngine()
     report = await engine.run(
         brief,
         provider_names=parse_provider_names(args.providers),
         limit=args.limit,
         dry_run=bool(args.dry_run),
+        exclude_candidate_keys=exclude_candidate_keys,
+        exclude_provider_queries=exclude_provider_queries,
     )
 
     verification_stats = None

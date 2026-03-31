@@ -4,29 +4,51 @@ from hr_hunter.briefing import build_search_brief
 from hr_hunter.config import resolve_secret
 from hr_hunter.models import CandidateProfile, EvidenceRecord, SearchRunReport
 from hr_hunter.output import load_report, write_report
+from hr_hunter.scoring import score_candidate
 from hr_hunter.verifier import PublicEvidenceVerifier, refresh_report_summary
 
 
 def test_resolve_secret_reads_custom_env_file(tmp_path: Path, monkeypatch) -> None:
     secret_file = tmp_path / "runtime.env"
     secret_file.write_text(
-        "SCRAPINGBEE_API_KEY=sb_test_123\nSMTP_PASSWORD=<weird-value>\n",
+        "HR_HUNTER_TEST_SECRET=sb_test_123\nSMTP_PASSWORD=<weird-value>\n",
         encoding="utf-8",
     )
-    monkeypatch.delenv("SCRAPINGBEE_API_KEY", raising=False)
+    monkeypatch.delenv("HR_HUNTER_TEST_SECRET", raising=False)
     monkeypatch.setenv("HR_HUNTER_SECRET_ENV_FILES", str(secret_file))
 
-    assert resolve_secret("SCRAPINGBEE_API_KEY") == "sb_test_123"
+    assert resolve_secret("HR_HUNTER_TEST_SECRET") == "sb_test_123"
 
 
 def test_apply_evidence_promotes_review_candidate_to_verified() -> None:
     verifier = PublicEvidenceVerifier()
-    candidate = CandidateProfile(
-        full_name="Jane Search",
-        current_title="Senior Product Manager",
-        current_company="Procter & Gamble",
-        verification_status="review",
-        score=60.0,
+    brief = build_search_brief(
+        {
+            "id": "verify-test",
+            "role_title": "Senior Product Manager",
+            "titles": ["Senior Product Manager"],
+            "company_targets": ["Procter & Gamble"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+            "industry_keywords": ["consumer goods"],
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Jane Search",
+            current_title="Senior Product Manager",
+            current_company="Procter & Gamble",
+            location_name="Drogheda, Ireland",
+            location_geo="53.7179,-6.3561",
+            verification_status="review",
+            score=60.0,
+        ),
+        brief,
     )
     evidence = [
         EvidenceRecord(
@@ -35,6 +57,8 @@ def test_apply_evidence_promotes_review_candidate_to_verified() -> None:
             name_match=True,
             company_match="Procter & Gamble",
             title_matches=["Senior Product Manager"],
+            profile_signal=True,
+            current_employment_signal=True,
             confidence=0.82,
         ),
         EvidenceRecord(
@@ -44,15 +68,115 @@ def test_apply_evidence_promotes_review_candidate_to_verified() -> None:
             company_match="Procter & Gamble",
             title_matches=["Senior Product Manager"],
             location_match=True,
+            profile_signal=True,
+            current_employment_signal=True,
             confidence=0.76,
         ),
     ]
 
-    updated = verifier.apply_evidence(candidate, evidence)
+    updated = verifier.apply_evidence(candidate, brief, evidence)
 
     assert updated.evidence_verdict == "corroborated"
     assert updated.verification_status == "verified"
     assert updated.score >= 68.0
+    assert updated.current_employment_confirmed is True
+
+
+def test_apply_evidence_caps_verified_without_current_role_proof() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-cap-test",
+            "role_title": "Senior Product Manager",
+            "titles": ["Senior Product Manager"],
+            "company_targets": ["Procter & Gamble"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Jane Search",
+            current_title="Senior Product Manager",
+            current_company="Procter & Gamble",
+            location_name="Drogheda, Ireland",
+            location_geo="53.7179,-6.3561",
+            linkedin_url="https://www.linkedin.com/in/jane-search",
+            summary="Senior product manager in consumer goods.",
+        ),
+        brief,
+    )
+    evidence = [
+        EvidenceRecord(
+            source_url="https://example.com/article",
+            source_domain="example.com",
+            name_match=True,
+            company_match="Procter & Gamble",
+            title_matches=["Senior Product Manager"],
+            location_match=True,
+            profile_signal=False,
+            current_employment_signal=False,
+            confidence=0.74,
+        )
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.current_employment_confirmed is False
+    assert updated.verification_status != "verified"
+
+
+def test_apply_evidence_accepts_strong_profile_page_as_current_role_proof() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-strong-profile-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Drogheda",
+                "country": "Ireland",
+                "center_latitude": 53.7179,
+                "center_longitude": -6.3561,
+                "radius_miles": 60,
+            },
+            "industry_keywords": ["FMCG"],
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Jane Search",
+            current_title="Senior Brand Manager",
+            current_company="Unilever",
+            location_name="Dublin, Ireland",
+            summary="Senior FMCG brand leader.",
+        ),
+        brief,
+    )
+    evidence = [
+        EvidenceRecord(
+            source_url="https://example.com/people/jane-search",
+            source_domain="example.com",
+            name_match=True,
+            company_match="Unilever",
+            title_matches=["Brand Manager"],
+            location_match=True,
+            profile_signal=True,
+            current_employment_signal=False,
+            confidence=0.81,
+        )
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.current_employment_confirmed is True
+    assert updated.verification_status == "verified"
 
 
 def test_report_roundtrip_preserves_evidence_fields(tmp_path: Path) -> None:
@@ -69,6 +193,8 @@ def test_report_roundtrip_preserves_evidence_fields(tmp_path: Path) -> None:
                 source_url="https://example.com/profile",
                 source_domain="example.com",
                 title="Jane Search - Senior Product Manager",
+                profile_signal=True,
+                current_employment_signal=True,
                 confidence=0.84,
             )
         ],
@@ -90,3 +216,4 @@ def test_report_roundtrip_preserves_evidence_fields(tmp_path: Path) -> None:
     assert loaded.candidates[0].evidence_verdict == "corroborated"
     assert loaded.candidates[0].evidence_confidence == 0.84
     assert loaded.candidates[0].evidence_records[0].source_domain == "example.com"
+    assert loaded.candidates[0].evidence_records[0].current_employment_signal is True

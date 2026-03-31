@@ -1,14 +1,37 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 import httpx
 
-from hr_hunter.briefing import normalize_text
+from hr_hunter.briefing import normalize_text, unique_preserving_order
 from hr_hunter.config import resolve_secret
 from hr_hunter.models import CandidateProfile, ProviderRunResult, SearchBrief, SearchSlice
 from hr_hunter.providers.base import SearchProvider
+
+
+NON_PERSON_NAME_TOKENS = {
+    "about",
+    "blog",
+    "brand",
+    "careers",
+    "company",
+    "contact",
+    "leadership",
+    "management",
+    "our",
+    "people",
+    "press",
+    "profile",
+    "speaker",
+    "speakers",
+    "staff",
+    "team",
+}
 
 
 class ScrapingBeeGoogleClient:
@@ -53,28 +76,253 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         self.country_code = settings.get("country_code", "ie")
         self.language = settings.get("language", "en")
         self.light_request = bool(settings.get("light_request", True))
+        self.request_timeout_seconds = float(settings.get("request_timeout_seconds", 30.0))
+        self.max_retries = int(settings.get("max_retries", 2))
+        self.retry_backoff_seconds = float(settings.get("retry_backoff_seconds", 2.0))
+        self.include_country_only_queries = bool(settings.get("include_country_only_queries", True))
+        self.include_relaxed_queries = bool(settings.get("include_relaxed_queries", True))
+        self.max_company_aliases_per_query = int(settings.get("max_company_aliases_per_query", 3))
+        self.company_slice_location_group_limit = int(settings.get("company_slice_location_group_limit", 0))
+        self.max_queries = int(settings.get("max_queries", 0))
+        self.include_query_terms = list(settings.get("include_query_terms", []))
+        self.exclude_query_terms = list(settings.get("exclude_query_terms", []))
+        self.include_site_terms = list(
+            settings.get(
+                "include_site_terms",
+                [],
+            )
+        )
+        self.exclude_site_terms = list(
+            settings.get(
+                "exclude_site_terms",
+                [
+                    "-site:linkedin.com/jobs",
+                    "-site:ie.linkedin.com/jobs",
+                    "-site:linkedin.com/company",
+                    "-site:ie.linkedin.com/company",
+                    "-site:linkedin.com/posts",
+                    "-site:ie.linkedin.com/posts",
+                ],
+            )
+        )
+        self.allowed_url_substrings = [
+            value.lower()
+            for value in settings.get("allowed_url_substrings", ["linkedin.com/in/"])
+            if str(value).strip()
+        ]
+        self.blocked_url_substrings = [
+            value.lower()
+            for value in settings.get(
+                "blocked_url_substrings",
+                ["/jobs", "/company", "/posts", "/careers", "/news", "/press", "/blog", "/articles"],
+            )
+            if str(value).strip()
+        ]
 
     def is_configured(self) -> bool:
         return self.client.is_configured()
 
-    def build_search_queries(self, brief: SearchBrief, slice_config: SearchSlice) -> List[str]:
-        title_values = slice_config.titles if slice_config.search_mode == "strict" else slice_config.title_keywords
-        title_terms = " OR ".join(f'"{title}"' for title in title_values[:8] if title)
-        location_terms = " OR ".join(
-            f'"{hint}"' for hint in ([brief.geography.location_name] + brief.geography.location_hints[:3])
+    @staticmethod
+    def _unique(values: List[str]) -> List[str]:
+        seen = set()
+        ordered: List[str] = []
+        for value in values:
+            stripped = value.strip()
+            if not stripped:
+                continue
+            lowered = stripped.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            ordered.append(stripped)
+        return ordered
+
+    @staticmethod
+    def _chunked(values: List[str], size: int) -> List[List[str]]:
+        if size <= 0:
+            return [values]
+        return [values[index : index + size] for index in range(0, len(values), size)]
+
+    def _title_groups(self, brief: SearchBrief, slice_config: SearchSlice) -> List[List[str]]:
+        if slice_config.search_mode == "strict":
+            title_values = self._unique(slice_config.titles)
+            return self._chunked(title_values, 4)
+
+        title_values = self._unique([*slice_config.title_keywords, *slice_config.titles])
+        chunk_size = 4 if slice_config.search_mode in {"discovery", "market"} else 5
+        return self._chunked(title_values, chunk_size)
+
+    def _location_groups(self, brief: SearchBrief) -> List[List[str]]:
+        local_terms = self._unique(
+            [
+                brief.geography.location_name,
+                *brief.geography.location_hints[:5],
+            ]
         )
+        regional_terms = self._unique(
+            [
+                brief.geography.country,
+                *brief.geography.location_hints[5:],
+            ]
+        )
+        groups = [group for group in [local_terms, regional_terms] if group]
+        return groups or [[brief.geography.location_name, brief.geography.country]]
+
+    def _site_filters(self) -> str:
+        include_terms = [term.strip() for term in self.include_site_terms if str(term).strip()]
+        exclude_terms = [term.strip() for term in self.exclude_site_terms if str(term).strip()]
+        include_clause = ""
+        if include_terms:
+            include_clause = f"({' OR '.join(include_terms)})"
+        parts = [part for part in [include_clause, *exclude_terms] if part]
+        return " ".join(parts)
+
+    def _query_filters(self) -> str:
+        include_terms = self._unique([str(term).strip() for term in self.include_query_terms if str(term).strip()])
+        exclude_terms = self._unique([str(term).strip() for term in self.exclude_query_terms if str(term).strip()])
+
+        parts: List[str] = []
+        if include_terms:
+            joined = " OR ".join(f'"{term}"' for term in include_terms)
+            parts.append(f"({joined})")
+        for term in exclude_terms:
+            if " " in term:
+                parts.append(f'-"{term}"')
+            else:
+                parts.append(f"-{term}")
+        return " ".join(parts)
+
+    def _is_profile_url(self, url: str) -> bool:
+        lowered = url.lower().strip()
+        if not lowered:
+            return False
+        if self.allowed_url_substrings and not any(token in lowered for token in self.allowed_url_substrings):
+            return False
+        if any(token in lowered for token in self.blocked_url_substrings):
+            return False
+        return True
+
+    @staticmethod
+    def _looks_like_person_name(value: str) -> bool:
+        tokens = [token for token in re.split(r"[^A-Za-z'’.-]+", value.strip()) if token]
+        if len(tokens) < 2 or len(tokens) > 5:
+            return False
+        lowered = {token.lower().strip(".") for token in tokens}
+        if lowered.intersection(NON_PERSON_NAME_TOKENS):
+            return False
+        return len([token for token in tokens if any(char.isalpha() for char in token)]) >= 2
+
+    @staticmethod
+    def _clean_title_fragment(value: str) -> str:
+        cleaned = value.strip().strip("|-,.;:")
+        return re.sub(r"\s+", " ", cleaned)
+
+    def _extract_location_name(self, brief: SearchBrief, combined_text: str) -> str:
+        normalized = normalize_text(combined_text)
+        for hint in unique_preserving_order(
+            [brief.geography.location_name, *brief.geography.location_hints, brief.geography.country]
+        ):
+            normalized_hint = normalize_text(hint)
+            if not normalized_hint or normalized_hint not in normalized:
+                continue
+            if brief.geography.country and normalize_text(brief.geography.country) not in normalized_hint:
+                return f"{hint}, {brief.geography.country}"
+            return hint
+        return ""
+
+    def _infer_title_from_description(
+        self,
+        description: str,
+        brief: SearchBrief,
+        current_company: str,
+    ) -> str:
+        if not description:
+            return ""
+        company_candidates = [current_company] if current_company else []
+        if current_company in brief.company_aliases:
+            company_candidates.extend(brief.company_aliases[current_company])
+        for company in unique_preserving_order(company_candidates):
+            escaped_company = re.escape(company)
+            for pattern in (
+                rf"(?P<title>[^|,.;:()]+?)\s+(?:at|@)\s+{escaped_company}\b",
+                rf"{escaped_company}\s+[|,-]\s+(?P<title>[^|,.;:()]+)",
+            ):
+                match = re.search(pattern, description, flags=re.IGNORECASE)
+                if not match:
+                    continue
+                title = self._clean_title_fragment(match.group("title"))
+                if title and not self._looks_like_person_name(title):
+                    return title
+        return ""
+
+    def build_search_queries(self, brief: SearchBrief, slice_config: SearchSlice) -> List[str]:
+        title_groups = self._title_groups(brief, slice_config)
+        location_groups = self._location_groups(brief)
+        if (
+            slice_config.search_mode in {"strict", "broad"}
+            and self.company_slice_location_group_limit > 0
+        ):
+            location_groups = location_groups[: self.company_slice_location_group_limit]
+        company_targets = slice_config.companies or [""]
         queries = []
-        for company in slice_config.companies:
-            company_aliases = brief.company_aliases.get(company, [company])
-            company_terms = " OR ".join(f'"{alias}"' for alias in company_aliases[:3] if alias)
-            queries.append(
-                f"({title_terms}) ({company_terms}) ({location_terms}) "
-                "(site:linkedin.com/in/ OR site:ie.linkedin.com/in/) "
-                "-site:linkedin.com/jobs -site:ie.linkedin.com/jobs "
-                "-site:linkedin.com/company -site:ie.linkedin.com/company "
-                "-site:linkedin.com/posts -site:ie.linkedin.com/posts"
-            )
-        return queries
+        site_filters = self._site_filters()
+        query_filters = self._query_filters()
+        country_terms = f'"{brief.geography.country}"' if brief.geography.country else ""
+        query_terms = " OR ".join(
+            f'"{keyword}"' for keyword in self._unique(slice_config.query_keywords)[:8] if keyword
+        )
+
+        for title_group in title_groups:
+            title_terms = " OR ".join(f'"{title}"' for title in title_group if title)
+            if not title_terms:
+                continue
+
+            for location_group in location_groups:
+                location_terms = " OR ".join(f'"{hint}"' for hint in location_group if hint)
+                if not location_terms:
+                    continue
+
+                if slice_config.search_mode in {"discovery", "market"}:
+                    if not query_terms:
+                        continue
+                    queries.append(
+                        f"({title_terms}) ({query_terms}) ({location_terms}) {query_filters} {site_filters}"
+                    )
+                    if self.include_country_only_queries and country_terms:
+                        queries.append(
+                            f"({title_terms}) ({query_terms}) ({country_terms}) {query_filters} {site_filters}"
+                        )
+                    if self.include_relaxed_queries:
+                        relaxed_location = country_terms or f"({location_terms})"
+                        queries.append(
+                            f"({title_terms}) ({query_terms}) {relaxed_location} {query_filters} {site_filters}"
+                        )
+                    continue
+
+                for company in company_targets:
+                    company_aliases = brief.company_aliases.get(company, [company])
+                    company_terms = " OR ".join(
+                        f'"{alias}"' for alias in company_aliases[: self.max_company_aliases_per_query] if alias
+                    )
+                    if not company_terms:
+                        continue
+                    queries.append(
+                        f"({title_terms}) ({company_terms}) ({location_terms}) {query_filters} {site_filters}"
+                    )
+                    if query_terms:
+                        queries.append(
+                            f"({title_terms}) ({company_terms}) ({query_terms}) ({location_terms}) {query_filters} {site_filters}"
+                        )
+                    if self.include_country_only_queries and country_terms:
+                        queries.append(
+                            f"({title_terms}) ({company_terms}) ({country_terms}) {query_filters} {site_filters}"
+                        )
+                    if self.include_relaxed_queries:
+                        relaxed_location = country_terms or f"({location_terms})"
+                        queries.append(
+                            f"({title_terms}) ({company_terms}) {relaxed_location} {query_filters} {site_filters}"
+                        )
+        return self._unique(queries)
 
     def _find_company_match(self, text: str, brief: SearchBrief) -> str:
         lowered = normalize_text(text)
@@ -84,22 +332,82 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                     return company
         return ""
 
+    @staticmethod
+    def _humanize_org_slug(slug: str) -> str:
+        parts = [part for part in slug.split("-") if part]
+        if not parts:
+            return ""
+        return " ".join(part.upper() if len(part) <= 3 and part.isalpha() else part.capitalize() for part in parts)
+
+    def _extract_org_from_url(self, url: str) -> str:
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+        segments = [segment for segment in parsed.path.split("/") if segment]
+
+        if "theorg.com" in host and len(segments) >= 2 and segments[0] == "org":
+            return self._humanize_org_slug(segments[1])
+
+        return ""
+
+    def _parse_title_fields(self, raw_title: str, url: str) -> tuple[str, str, str]:
+        title = raw_title.strip()
+        name = title.split(" - ")[0].split(" | ")[0].strip()
+        current_title = title
+        current_company = ""
+
+        pipe_segments = [segment.strip() for segment in title.split("|") if segment.strip()]
+        if len(pipe_segments) >= 3:
+            name = pipe_segments[0]
+            current_title = pipe_segments[1]
+            current_company = pipe_segments[2]
+
+        dash_segments = [segment.strip() for segment in title.split(" - ") if segment.strip()]
+        if len(dash_segments) >= 3:
+            name = dash_segments[0]
+            current_title = " - ".join(dash_segments[1:-1]).strip() or dash_segments[1]
+            current_company = dash_segments[-1]
+        elif " - " in title:
+            _, remainder = title.split(" - ", 1)
+            current_title = remainder.strip()
+
+        for delimiter in (" at ", " @ "):
+            if delimiter in current_title:
+                role, company = current_title.rsplit(delimiter, 1)
+                current_title = role.strip()
+                current_company = company.strip().strip(".")
+                break
+
+        if normalize_text(current_company) in {"linkedin", "the org"}:
+            current_company = ""
+
+        if not current_company:
+            current_company = self._extract_org_from_url(url)
+
+        return name, current_title.strip(), current_company
+
     def _candidate_from_result(
         self,
         result: Dict[str, Any],
         brief: SearchBrief,
-    ) -> CandidateProfile:
+    ) -> CandidateProfile | None:
         title = result.get("title", "")
         description = result.get("description") or result.get("snippet") or ""
         url = result.get("url") or result.get("link")
-        location_name = brief.geography.location_name if "ireland" in normalize_text(description) else ""
+        name_guess, current_title, current_company = self._parse_title_fields(title, url or "")
+        location_name = self._extract_location_name(brief, f"{title} {description}")
 
-        name_guess = title.split(" - ")[0].split(" | ")[0].strip()
-        current_company = self._find_company_match(f"{title} {description}", brief)
+        if not current_company:
+            current_company = self._find_company_match(f"{title} {description} {url or ''}", brief)
+        if not current_title or normalize_text(current_title) == normalize_text(title):
+            inferred_title = self._infer_title_from_description(description, brief, current_company)
+            if inferred_title:
+                current_title = inferred_title
+        if not self._looks_like_person_name(name_guess):
+            return None
 
         return CandidateProfile(
             full_name=name_guess,
-            current_title=title,
+            current_title=current_title or title,
             current_company=current_company,
             location_name=location_name,
             linkedin_url=url if url and "linkedin.com" in url else None,
@@ -115,14 +423,23 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         slices: List[SearchSlice],
         limit: int,
         dry_run: bool,
+        exclude_queries: set[str] | None = None,
     ) -> ProviderRunResult:
-        diagnostics = {"queries": []}
+        excluded_queries = {value.strip() for value in (exclude_queries or set()) if value and value.strip()}
+        diagnostics = {"queries": [], "skipped_query_count": 0, "query_budget_exhausted": False}
         if dry_run:
             for slice_config in slices:
                 for search_query in self.build_search_queries(brief, slice_config):
                     diagnostics["queries"].append(
-                        {"slice_id": slice_config.id, "search": search_query}
+                        {
+                            "slice_id": slice_config.id,
+                            "search": search_query,
+                            "skipped": search_query in excluded_queries,
+                        }
                     )
+            diagnostics["skipped_query_count"] = len(
+                [item for item in diagnostics["queries"] if item.get("skipped")]
+            )
             return ProviderRunResult(
                 provider_name=self.name,
                 executed=False,
@@ -142,44 +459,87 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         candidates: List[CandidateProfile] = []
         request_count = 0
         errors: List[str] = []
+        executed_queries = 0
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
             for slice_config in slices:
                 if len(candidates) >= limit:
                     break
 
                 for search_query in self.build_search_queries(brief, slice_config):
-                    diagnostics["queries"].append({"slice_id": slice_config.id, "search": search_query})
-                    for page in range(1, self.pages_per_query + 1):
-                        response = await self.client.search(
-                            client,
-                            search_query,
-                            page=page,
-                            country_code=self.country_code,
-                            language=self.language,
-                            light_request=self.light_request,
+                    if self.max_queries > 0 and executed_queries >= self.max_queries:
+                        diagnostics["query_budget_exhausted"] = True
+                        break
+                    if search_query in excluded_queries:
+                        diagnostics["skipped_query_count"] += 1
+                        diagnostics["queries"].append(
+                            {
+                                "slice_id": slice_config.id,
+                                "search": search_query,
+                                "skipped": True,
+                            }
                         )
-                        request_count += 1
-                        if response.status_code >= 400:
+                        continue
+
+                    diagnostics["queries"].append({"slice_id": slice_config.id, "search": search_query})
+                    executed_queries += 1
+                    for page in range(1, self.pages_per_query + 1):
+                        response = None
+                        for attempt in range(self.max_retries + 1):
+                            try:
+                                response = await self.client.search(
+                                    client,
+                                    search_query,
+                                    page=page,
+                                    country_code=self.country_code,
+                                    language=self.language,
+                                    light_request=self.light_request,
+                                )
+                                request_count += 1
+                            except httpx.HTTPError as exc:
+                                if attempt < self.max_retries:
+                                    await asyncio.sleep(self.retry_backoff_seconds * (attempt + 1))
+                                    continue
+                                errors.append(f"{slice_config.id}: {type(exc).__name__} {exc}")
+                                response = None
+                                break
+
+                            if response.status_code < 400:
+                                break
+
+                            if (
+                                response.status_code in {429, 500, 502, 503, 504}
+                                and attempt < self.max_retries
+                            ):
+                                await asyncio.sleep(self.retry_backoff_seconds * (attempt + 1))
+                                continue
+
                             errors.append(
                                 f"{slice_config.id}: HTTP {response.status_code} {response.text[:240]}"
                             )
+                            response = None
+                            break
+
+                        if response is None:
                             break
 
                         payload = response.json()
                         for result in payload.get("organic_results", []):
                             url = result.get("url") or result.get("link") or ""
-                            if "linkedin.com" not in url:
+                            if not self._is_profile_url(url):
                                 continue
-                            if "/in/" not in url:
+                            candidate = self._candidate_from_result(result, brief)
+                            if candidate is None:
                                 continue
-                            candidates.append(self._candidate_from_result(result, brief))
+                            candidates.append(candidate)
                             if len(candidates) >= limit:
                                 break
                         if len(candidates) >= limit:
                             break
                     if len(candidates) >= limit:
                         break
+                if diagnostics.get("query_budget_exhausted"):
+                    break
 
         return ProviderRunResult(
             provider_name=self.name,

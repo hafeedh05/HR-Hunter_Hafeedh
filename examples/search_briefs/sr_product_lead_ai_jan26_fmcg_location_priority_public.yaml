@@ -1,0 +1,223 @@
+id: sr-product-lead-ai-jan26-fmcg-location-priority-public
+role_title: FMCG Brand / Category / Product Marketing Lead
+brief_document_path: /Users/ahmad/Downloads/Sr Product Lead_AI_Jan26.docx
+brief_summary: >
+  Ireland-priority public-web pass for current FMCG brand, category, shopper,
+  and adjacent portfolio/product marketing leaders at the named target
+  companies. Weight Ireland location and FMCG/current-role evidence above raw
+  title exactness, while still rejecting tech product managers.
+titles:
+  - Brand Manager
+  - Senior Brand Manager
+  - Category Manager
+  - Senior Category Manager
+  - Product Marketing Director
+  - Head of Product Marketing
+title_keywords:
+  - Shopper Marketing Manager
+  - Trade Marketing Manager
+  - Customer Marketing Manager
+  - Category Development Manager
+  - Commercial Category Manager
+  - Proposition Manager
+  - Innovation Manager
+  - Product Development Manager
+  - Portfolio Manager
+company_targets:
+  - Procter & Gamble
+  - Unilever
+  - Johnson & Johnson
+  - Colgate-Palmolive
+  - Beiersdorf
+  - DCC plc
+  - McBride plc
+  - Trona Products Ltd
+  - Kinvara Skincare
+  - Voya
+  - The Handmade Soap Company
+  - Pestle & Mortar
+  - Bellamianta
+  - Human+Kind
+company_aliases:
+  Procter & Gamble:
+    - Procter & Gamble
+    - Procter and Gamble
+    - P&G
+  Johnson & Johnson:
+    - Johnson & Johnson
+    - Johnson and Johnson
+    - J&J
+  Colgate-Palmolive:
+    - Colgate-Palmolive
+    - Colgate Palmolive
+  DCC plc:
+    - DCC plc
+    - DCC
+  McBride plc:
+    - McBride plc
+    - McBride
+  Trona Products Ltd:
+    - Trona Products Ltd
+    - Trona Products
+  The Handmade Soap Company:
+    - The Handmade Soap Company
+    - Handmade Soap Company
+  Pestle & Mortar:
+    - Pestle & Mortar
+    - Pestle and Mortar
+  Human+Kind:
+    - Human+Kind
+    - Human and Kind
+geography:
+  location_name: Drogheda, Ireland
+  country: Ireland
+  center_latitude: 53.7179
+  center_longitude: -6.3561
+  radius_miles: 120
+  location_hints:
+    - Drogheda
+    - Dublin
+    - County Meath
+    - County Louth
+    - County Dublin
+    - Galway
+    - Cork
+    - Ireland
+required_keywords:
+  - ireland
+  - consumer goods
+  - commercial
+  - brand
+  - category
+preferred_keywords:
+  - fmcg
+  - cpg
+  - shopper
+  - retail
+  - portfolio
+  - innovation
+portfolio_keywords:
+  - portfolio
+  - category
+  - proposition
+  - portfolio management
+commercial_keywords:
+  - commercial
+  - shopper
+  - trade marketing
+  - customer marketing
+  - go to market
+  - retail
+leadership_keywords:
+  - senior
+  - manager
+  - director
+  - head
+  - lead
+scope_keywords:
+  - ireland
+  - uk and ireland
+  - global
+  - regional
+industry_keywords:
+  - fmcg
+  - cpg
+  - consumer goods
+  - consumer health
+  - personal care
+  - skincare
+  - hygiene
+exclude_title_keywords:
+  - software
+  - engineering
+  - project manager
+  - program manager
+  - technical product manager
+  - product owner
+  - saas
+  - platform
+  - ai
+  - developer
+  - fintech
+  - cloud
+seniority_levels:
+  - senior
+  - manager
+  - director
+  - head
+minimum_years_experience: 8
+result_target_min: 30
+result_target_max: 70
+max_profiles: 60
+provider_settings:
+  pdl:
+    dataset: all
+    company_chunk_size: 5
+    results_per_slice: 15
+    include_strict_slice: false
+    include_broad_slice: true
+    include_discovery_slices: false
+  scrapingbee_google:
+    pages_per_query: 1
+    country_code: ie
+    language: en
+    light_request: true
+    request_timeout_seconds: 12
+    max_retries: 2
+    retry_backoff_seconds: 2.0
+    include_country_only_queries: true
+    include_relaxed_queries: true
+    company_slice_location_group_limit: 0
+    max_company_aliases_per_query: 2
+    max_queries: 32
+    include_query_terms:
+      - Ireland
+      - FMCG
+      - consumer goods
+      - brand
+      - category
+      - shopper marketing
+      - trade marketing
+      - Dublin
+    exclude_query_terms:
+      - software
+      - engineering
+      - project manager
+      - program manager
+      - technical product manager
+      - product owner
+      - saas
+      - platform
+      - ai
+      - developer
+      - fintech
+      - cloud
+    include_site_terms: []
+    exclude_site_terms:
+      - -site:linkedin.com/jobs
+      - -site:ie.linkedin.com/jobs
+      - -site:linkedin.com/company
+      - -site:ie.linkedin.com/company
+      - -site:linkedin.com/posts
+      - -site:ie.linkedin.com/posts
+    allowed_url_substrings:
+      - linkedin.com/in/
+      - /profile
+      - /people/
+      - /person/
+      - /staff/
+      - /leadership/
+      - /management/
+      - /bio
+      - /speaker/
+      - /speakers/
+      - /org-chart/
+    blocked_url_substrings:
+      - /jobs
+      - /company
+      - /posts
+      - /careers
+      - /news
+      - /press
+      - /blog
+      - /articles
