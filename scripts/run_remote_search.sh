@@ -2,12 +2,13 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 <brief-path> [limit]"
+  echo "Usage: $0 <brief-path> [limit] [verify-top]"
   exit 1
 fi
 
 BRIEF_PATH="$1"
 LIMIT="${2:-200}"
+VERIFY_TOP="${3:-40}"
 ROOT="$HOME/hr-hunter-vm"
 VENV="$ROOT/.venv"
 
@@ -31,4 +32,5 @@ cd "$ROOT"
 PYTHONPATH=src SCRAPINGBEE_API_KEY="$SCRAPINGBEE_API_KEY" python -m hr_hunter.cli search \
   --brief "$BRIEF_PATH" \
   --providers scrapingbee_google \
-  --limit "$LIMIT"
+  --limit "$LIMIT" \
+  --verify-top "$VERIFY_TOP"

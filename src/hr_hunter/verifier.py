@@ -97,6 +97,24 @@ class PublicEvidenceVerifier:
         lowered = normalize_text(text)
         return any(marker in lowered for marker in CURRENT_EMPLOYMENT_BLOCKERS)
 
+    @staticmethod
+    def _record_text(record: EvidenceRecord) -> str:
+        return " ".join([record.title, record.snippet, record.source_url])
+
+    def _supports_current_role(self, record: EvidenceRecord) -> bool:
+        if not (record.name_match and record.company_match and record.title_matches):
+            return False
+        if self._looks_like_past_role(self._record_text(record)):
+            return False
+        return bool(
+            record.current_employment_signal
+            or (record.profile_signal and record.confidence >= 0.75)
+        )
+
+    @staticmethod
+    def _is_stale(record: EvidenceRecord, current_year: int) -> bool:
+        return bool(record.recency_year and record.recency_year < current_year - 2)
+
     def is_configured(self) -> bool:
         return self.client.is_configured()
 
@@ -293,6 +311,8 @@ class PublicEvidenceVerifier:
             candidate.current_location_confirmed = candidate.location_aligned
             candidate.current_employment_confirmed = False
             candidate.verification_notes.append("no public corroboration found")
+            candidate.verification_notes.append("source_quality: missing (no public evidence)")
+            candidate.verification_notes.append("evidence_freshness: missing (no current-role evidence)")
             candidate.verification_status = "review" if candidate.score >= 50.0 else "reject"
             setattr(candidate, "source_quality_score", 0.0)
             setattr(candidate, "evidence_freshness_year", None)
@@ -300,6 +320,7 @@ class PublicEvidenceVerifier:
             setattr(candidate, "cap_reasons", ["missing_public_evidence"])
             return candidate
 
+        current_year = datetime.now(timezone.utc).year
         strong_records = [record for record in evidence_records if record.confidence >= 0.65]
         non_linkedin_domains = {
             record.source_domain for record in evidence_records if record.source_domain and "linkedin.com" not in record.source_domain
@@ -312,13 +333,13 @@ class PublicEvidenceVerifier:
         current_role_records = [
             record
             for record in evidence_records
-            if record.name_match
-            and record.company_match
-            and record.title_matches
-            and (
-                record.current_employment_signal
-                or (record.profile_signal and record.confidence >= 0.75)
-            )
+            if self._supports_current_role(record)
+        ]
+        fresh_current_role_records = [
+            record for record in current_role_records if not self._is_stale(record, current_year)
+        ]
+        stale_current_role_records = [
+            record for record in current_role_records if self._is_stale(record, current_year)
         ]
         historical_only_records = [
             record
@@ -326,12 +347,11 @@ class PublicEvidenceVerifier:
             if record.name_match
             and record.company_match
             and record.title_matches
-            and not record.current_employment_signal
-            and not record.profile_signal
+            and not self._supports_current_role(record)
         ]
         current_role_years = [record.recency_year for record in current_role_records if record.recency_year]
         latest_year = max(current_role_years, default=0)
-        stale_data_risk = bool(latest_year and latest_year < datetime.now(timezone.utc).year - 2)
+        stale_data_risk = bool(stale_current_role_records and not fresh_current_role_records)
 
         top_confidences = [record.confidence for record in evidence_records[:3]]
         evidence_confidence = sum(top_confidences) / max(len(top_confidences), 1)
@@ -344,7 +364,7 @@ class PublicEvidenceVerifier:
         evidence_confidence = round(min(max(evidence_confidence, 0.0), 1.0), 2)
 
         source_quality_score = 0.0
-        if current_role_records:
+        if fresh_current_role_records:
             source_quality_score += 0.5
         elif strong_records:
             source_quality_score += 0.3
@@ -361,44 +381,53 @@ class PublicEvidenceVerifier:
         candidate.current_company_confirmed = any(
             record.name_match
             and record.company_match
-            and (record.current_employment_signal or record.profile_signal)
+            and self._supports_current_role(record)
+            and not self._is_stale(record, current_year)
             and record.confidence >= 0.55
             for record in evidence_records
         )
         candidate.current_title_confirmed = any(
             record.name_match
             and record.title_matches
-            and (record.current_employment_signal or record.profile_signal)
+            and self._supports_current_role(record)
+            and not self._is_stale(record, current_year)
             and record.confidence >= 0.55
             for record in evidence_records
         )
         candidate.current_location_confirmed = candidate.location_aligned or any(
             record.location_match
-            and (
-                record.current_employment_signal
-                or (record.profile_signal and record.company_match and record.title_matches)
-            )
+            and self._supports_current_role(record)
+            and not self._is_stale(record, current_year)
             and record.confidence >= 0.45
             for record in evidence_records
         )
-        candidate.current_employment_confirmed = bool(current_role_records) and not stale_data_risk
+        candidate.current_employment_confirmed = bool(fresh_current_role_records)
         setattr(candidate, "source_quality_score", source_quality_score)
         setattr(candidate, "evidence_freshness_year", latest_year or None)
-        setattr(candidate, "current_role_proof_count", len(current_role_records))
+        setattr(candidate, "current_role_proof_count", len(fresh_current_role_records))
 
-        if len(current_role_records) >= 2:
+        if len(fresh_current_role_records) >= 2:
             candidate.evidence_verdict = "corroborated"
             candidate.verification_notes.append(
-                f"{len(current_role_records)} public sources corroborate the current role"
+                f"{len(fresh_current_role_records)} public sources corroborate the current role"
             )
-        elif current_role_records or strong_records:
+        elif fresh_current_role_records or strong_records:
             candidate.evidence_verdict = "supported"
             candidate.verification_notes.append(
-                f"{max(len(current_role_records), len(strong_records))} public sources materially support the match"
+                f"{max(len(fresh_current_role_records), len(strong_records))} public sources materially support the match"
             )
         else:
             candidate.evidence_verdict = "weak"
             candidate.verification_notes.append("public evidence exists but remains weak")
+
+        if fresh_current_role_records and len(fresh_current_role_records) >= 2:
+            candidate.verification_notes.append("source_quality: strong (multiple fresh current-role sources)")
+        elif fresh_current_role_records:
+            candidate.verification_notes.append("source_quality: moderate (single fresh current-role source)")
+        elif strong_records:
+            candidate.verification_notes.append("source_quality: weak (supportive sources but no fresh current-role proof)")
+        else:
+            candidate.verification_notes.append("source_quality: weak (no reliable current-role source)")
 
         if non_linkedin_domains:
             candidate.verification_notes.append(
@@ -406,8 +435,19 @@ class PublicEvidenceVerifier:
             )
 
         if stale_data_risk:
+            candidate.verification_notes.append(
+                f"evidence_freshness: stale (latest current-role mention {latest_year})"
+            )
             candidate.verification_notes.append("public evidence looks stale")
             candidate.score = round(max(0.0, candidate.score - 6.0), 2)
+        elif latest_year:
+            candidate.verification_notes.append(
+                f"evidence_freshness: fresh (latest current-role mention {latest_year})"
+            )
+        elif fresh_current_role_records:
+            candidate.verification_notes.append("evidence_freshness: current (no stale year markers found)")
+        else:
+            candidate.verification_notes.append("evidence_freshness: unknown (no fresh current-role proof)")
 
         if candidate.evidence_verdict == "corroborated":
             candidate.score = round(min(100.0, candidate.score + 8.0), 2)
@@ -421,15 +461,20 @@ class PublicEvidenceVerifier:
         if candidate.current_location_confirmed:
             candidate.verification_notes.append("Ireland location signal corroborated")
         if not candidate.current_employment_confirmed:
-            candidate.verification_notes.append("current role not yet publicly confirmed")
+            if stale_data_risk:
+                candidate.verification_notes.append("current role proof is stale and cannot verify current employment")
+            elif historical_only_records:
+                candidate.verification_notes.append("current role proof appears historical rather than current")
+            else:
+                candidate.verification_notes.append("current role not yet publicly confirmed")
             candidate.score = round(max(0.0, candidate.score - 10.0), 2)
-        if historical_only_records and not current_role_records:
+        if historical_only_records and not fresh_current_role_records:
             candidate.verification_notes.append("public evidence appears historical rather than current")
 
         cap_reasons = []
         if stale_data_risk:
             cap_reasons.append("stale_public_evidence")
-        if historical_only_records and not current_role_records:
+        if historical_only_records and not fresh_current_role_records:
             cap_reasons.append("historical_only_public_evidence")
         if not candidate.current_employment_confirmed:
             cap_reasons.append("missing_current_role_proof")

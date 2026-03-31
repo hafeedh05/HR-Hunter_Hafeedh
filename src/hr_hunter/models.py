@@ -100,6 +100,16 @@ class CandidateProfile:
     current_location_confirmed: bool = False
     current_employment_confirmed: bool = False
     verification_status: str = "review"
+    qualification_tier: str = "weak"
+    cap_reasons: List[str] = field(default_factory=list)
+    disqualifier_reasons: List[str] = field(default_factory=list)
+    matched_title_family: str = ""
+    location_precision_bucket: str = "unknown"
+    current_role_proof_count: int = 0
+    source_quality_score: float = 0.0
+    evidence_freshness_year: Optional[int] = None
+    current_function_fit: float = 0.0
+    current_fmcg_fit: float = 0.0
     verification_notes: List[str] = field(default_factory=list)
     evidence_records: List[EvidenceRecord] = field(default_factory=list)
     evidence_confidence: float = 0.0

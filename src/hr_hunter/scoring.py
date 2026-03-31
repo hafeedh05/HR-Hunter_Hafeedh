@@ -115,6 +115,53 @@ TITLE_ROLE_SIGNAL_MAP = {
     ],
     "product": ["product", "product development"],
 }
+ADJACENT_TITLE_FAMILY_MAP = {
+    "brand": {"category", "innovation", "product_marketing", "shopper_marketing"},
+    "category": {"brand", "innovation", "product_marketing", "shopper_marketing"},
+    "innovation": {"brand", "category", "portfolio", "product", "product_marketing"},
+    "portfolio": {"innovation", "product", "product_marketing"},
+    "product": {"innovation", "portfolio", "product_marketing"},
+    "product_marketing": {"brand", "category", "portfolio", "product", "shopper_marketing"},
+    "shopper_marketing": {"brand", "category", "product_marketing"},
+}
+IRISH_LOCALITY_TOKENS = [
+    "antrim",
+    "armagh",
+    "athlone",
+    "carlow",
+    "cavan",
+    "clare",
+    "clonmel",
+    "cork",
+    "donegal",
+    "drogheda",
+    "dublin",
+    "dundalk",
+    "ennis",
+    "galway",
+    "kerry",
+    "kildare",
+    "kilkenny",
+    "laois",
+    "leitrim",
+    "limerick",
+    "longford",
+    "louth",
+    "mayo",
+    "meath",
+    "monaghan",
+    "naas",
+    "navan",
+    "offaly",
+    "portlaoise",
+    "roscommon",
+    "sligo",
+    "tipperary",
+    "waterford",
+    "westmeath",
+    "wexford",
+    "wicklow",
+]
 
 
 def status_from_score(score: float) -> str:
@@ -359,10 +406,19 @@ def current_role_signal_phrases(brief: SearchBrief) -> List[str]:
     families = brief_target_title_families(brief)
     for family in families:
         phrases.extend(TITLE_ROLE_SIGNAL_MAP.get(family, []))
+        for adjacent_family in ADJACENT_TITLE_FAMILY_MAP.get(family, set()):
+            phrases.extend(TITLE_ROLE_SIGNAL_MAP.get(adjacent_family, []))
     normalized_targets = [normalize_text(value) for value in [*brief.titles, *brief.title_keywords]]
     if any("product marketing" in value for value in normalized_targets):
         phrases.append("product marketing")
     return unique_preserving_order(phrases)
+
+
+def adjacent_family_overlap(candidate_families: set[str], target_families: set[str]) -> set[str]:
+    matches: set[str] = set()
+    for family in candidate_families:
+        matches.update(ADJACENT_TITLE_FAMILY_MAP.get(family, set()).intersection(target_families))
+    return matches
 
 
 def evaluate_location_precision(
@@ -374,65 +430,93 @@ def evaluate_location_precision(
 
     if candidate.distance_miles is not None:
         if candidate.distance_miles <= brief.geography.radius_miles:
-            notes.append("within target radius")
+            notes.append("location_precision: highest (within target radius)")
             return "within_radius", 35.0, True, notes
         if brief.geography.radius_miles and candidate.distance_miles <= brief.geography.radius_miles * 2:
-            notes.append("within expanded search radius")
+            notes.append("location_precision: moderate (within expanded radius)")
             return "within_expanded_radius", 20.0, True, notes
-        notes.append("outside Ireland search area")
+        notes.append("location_precision: hard_penalty (outside widened Ireland search area)")
         return "outside_ireland", -30.0, False, notes
 
-    precise_location_hits = keyword_hits(
-        [candidate.location_name, candidate.summary],
-        [brief.geography.location_name, *brief.geography.location_hints],
-    )
-    country_only_hits = keyword_hits(
-        [candidate.location_name, candidate.summary],
-        [brief.geography.country],
-    )
+    location_haystack = normalize_text(" ".join([candidate.location_name, candidate.summary]))
+    precise_location_hits = [
+        hint
+        for hint in unique_preserving_order([brief.geography.location_name, *brief.geography.location_hints])
+        if normalize_text(hint) and normalize_text(hint) in location_haystack
+    ]
     if precise_location_hits:
-        notes.append("specific Ireland location matched")
+        notes.append(f"location_precision: small_boost (named Irish locality: {precise_location_hits[0]})")
         return "named_ireland_location", 10.0, True, notes
-    if country_only_hits:
-        notes.append("Ireland country signal matched")
-        return "country_only_ireland", 2.0, True, notes
+
+    named_irish_locality = next((token for token in IRISH_LOCALITY_TOKENS if token in location_haystack), "")
+    if named_irish_locality:
+        notes.append(f"location_precision: small_boost (named Irish locality: {named_irish_locality})")
+        return "named_irish_locality", 6.0, False, notes
+
+    if brief.geography.country and normalize_text(brief.geography.country) in location_haystack:
+        notes.append("location_precision: near_neutral (country-only Ireland)")
+        return "country_only_ireland", 2.0, False, notes
     if candidate.location_name:
-        notes.append("location mentioned but not evidenced in Ireland")
-        return "unknown_location", -12.0, False, notes
-    notes.append("current location not evidenced")
+        notes.append("location_precision: hard_penalty (outside Ireland signal)")
+        return "outside_ireland", -24.0, False, notes
+    notes.append("location_precision: penalty (unknown location)")
     return "unknown_location", -12.0, False, notes
 
 
 def evaluate_current_function_fit(
     candidate: CandidateProfile,
     brief: SearchBrief,
+    candidate_title_families: set[str],
+    target_title_families: set[str],
     family_overlap: set[str],
     title_proximity: Dict[str, object],
 ) -> Tuple[float, float, bool, List[str], List[str]]:
     normalized_title = normalize_text(candidate.current_title)
     target_signals = current_role_signal_phrases(brief)
     has_target_role_signal = any(signal in normalized_title for signal in target_signals if signal)
+    adjacent_overlap = adjacent_family_overlap(candidate_title_families, target_title_families)
     disqualifiers = [keyword for keyword in OFF_FUNCTION_KEYWORDS if keyword in normalized_title]
     notes: List[str] = []
 
     if disqualifiers and not has_target_role_signal:
-        notes.append("current function blocked by off-function title")
+        notes.append(
+            f"current_function_fit: blocked (off-function current role: {', '.join(disqualifiers)})"
+        )
         return 0.0, -28.0, True, notes, disqualifiers
 
     if family_overlap.difference(GENERIC_PRODUCT_FAMILY):
-        notes.append("current function strongly aligned")
+        notes.append("current_function_fit: strong (target title family aligned)")
         return 1.0, 16.0, False, notes, disqualifiers
+    if adjacent_overlap:
+        penalty = -4.0 if disqualifiers else 8.0
+        detail = ", ".join(sorted(adjacent_overlap))
+        if disqualifiers:
+            notes.append(
+                f"current_function_fit: mixed (adjacent family with off-function modifier; adjacent={detail})"
+            )
+            return 0.6, penalty, False, notes, disqualifiers
+        notes.append(f"current_function_fit: strong_adjacent (adjacent family: {detail})")
+        return 0.8, penalty, False, notes, disqualifiers
     if title_proximity["score"] >= 0.6:
-        notes.append("current function adjacent-title aligned")
+        if disqualifiers:
+            notes.append("current_function_fit: mixed (adjacent title but off-function modifier present)")
+            return 0.6, -4.0, False, notes, disqualifiers
+        notes.append("current_function_fit: adjacent (current title overlaps target role)")
         return 0.8, 10.0, False, notes, disqualifiers
     if family_overlap:
-        notes.append("current function generically aligned")
+        if disqualifiers:
+            notes.append("current_function_fit: mixed (generic product family with off-function modifier)")
+            return 0.5, -4.0, False, notes, disqualifiers
+        notes.append("current_function_fit: generic (generic product family aligned)")
         return 0.55, 4.0, False, notes, disqualifiers
     if has_target_role_signal:
-        notes.append("current function weakly aligned by target-role noun")
+        if disqualifiers:
+            notes.append("current_function_fit: mixed (target-role noun retained with off-function modifier)")
+            return 0.5, -4.0, False, notes, disqualifiers
+        notes.append("current_function_fit: weak (target-role noun retained)")
         return 0.45, 2.0, False, notes, disqualifiers
     if candidate.current_title:
-        notes.append("current function not aligned")
+        notes.append("current_function_fit: weak (current title not aligned)")
     return 0.15, -12.0, False, notes, disqualifiers
 
 
@@ -440,6 +524,7 @@ def evaluate_current_fmcg_fit(
     candidate: CandidateProfile,
     brief: SearchBrief,
     experience_parts: List[str],
+    off_function_blocked: bool,
 ) -> Tuple[float, float, List[str]]:
     notes: List[str] = []
     fmcg_keywords = unique_preserving_order([*FMCG_SIGNAL_KEYWORDS, *brief.industry_keywords])
@@ -450,16 +535,19 @@ def evaluate_current_fmcg_fit(
     history_hits = keyword_hits(experience_parts, fmcg_keywords)
 
     if candidate.current_target_company_match or current_hits >= 2:
-        notes.append("current role carries strong fmcg signal")
+        notes.append("current_fmcg_fit: strong (current company or role carries strong FMCG signal)")
         return 1.0, 14.0, notes
     if current_hits:
-        notes.append("current role carries some fmcg signal")
+        notes.append("current_fmcg_fit: moderate (current role carries some FMCG signal)")
         return 0.7, 8.0, notes
     if history_hits:
-        notes.append("historical fmcg experience only")
+        if off_function_blocked:
+            notes.append("current_fmcg_fit: weak (historical FMCG only and current role is off-function)")
+            return 0.2, 1.0, notes
+        notes.append("current_fmcg_fit: weak (historical FMCG experience only)")
         return 0.35, 3.0, notes
     if brief.industry_keywords:
-        notes.append("fmcg background not evidenced")
+        notes.append("current_fmcg_fit: missing (FMCG background not evidenced)")
     return 0.0, -12.0 if brief.industry_keywords else 0.0, notes
 
 
@@ -474,10 +562,18 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
     candidate_title_families = title_families(candidate.current_title)
     target_title_families = brief_target_title_families(brief)
     family_overlap = candidate_title_families.intersection(target_title_families)
+    adjacent_overlap = adjacent_family_overlap(candidate_title_families, target_title_families)
     title_proximity = title_similarity_score(candidate.current_title, brief.titles, brief.title_keywords)
     experience_parts = experience_text_parts(candidate)
     current_function_fit, current_function_points, off_function_blocked, function_notes, disqualifiers = (
-        evaluate_current_function_fit(candidate, brief, family_overlap, title_proximity)
+        evaluate_current_function_fit(
+            candidate,
+            brief,
+            candidate_title_families,
+            target_title_families,
+            family_overlap,
+            title_proximity,
+        )
     )
 
     candidate.matched_titles = list(title_match["matches"])
@@ -488,6 +584,8 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
         float(title_match["score"]) >= 28.0
         or (family_overlap and float(title_match["score"]) >= 18.0)
         or title_proximity["score"] >= 0.6
+        or bool(adjacent_overlap)
+        or current_function_fit >= 0.75
     )
 
     score = 0.0
@@ -508,6 +606,9 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
         else:
             score += 4.0
             notes.append("generic product title family aligned")
+    elif adjacent_overlap:
+        score += 6.0
+        notes.append(f"adjacent title family aligned: {', '.join(sorted(adjacent_overlap))}")
     elif candidate.current_title:
         score -= 20.0
         notes.append("title family misaligned")
@@ -536,7 +637,13 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
 
     if candidate.linkedin_url:
         score += 5.0
-        notes.append("public profile url present")
+        notes.append("source_quality: moderate (public profile URL present)")
+    elif candidate.source_url:
+        notes.append("source_quality: moderate (source URL present)")
+    elif candidate.raw:
+        notes.append("source_quality: moderate (structured source record present)")
+    else:
+        notes.append("source_quality: weak (no profile URL on source record)")
 
     if candidate.current_title and candidate.current_company:
         score += 5.0
@@ -569,7 +676,12 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
         score -= 14.0
         notes.append("industry signal missing")
 
-    current_fmcg_fit, current_fmcg_points, fmcg_notes = evaluate_current_fmcg_fit(candidate, brief, experience_parts)
+    current_fmcg_fit, current_fmcg_points, fmcg_notes = evaluate_current_fmcg_fit(
+        candidate,
+        brief,
+        experience_parts,
+        off_function_blocked,
+    )
     score += current_fmcg_points
     notes.extend(fmcg_notes)
     fmcg_hits = keyword_hits(
@@ -754,6 +866,8 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
             missing.append("precise Ireland location")
         if current_fmcg_fit < 0.7:
             missing.append("current fmcg fit")
+        if not candidate.current_company or not candidate.current_title:
+            missing.append("current role proof")
         if missing:
             candidate.verification_status = "review"
             notes.append(f"status capped pending {'/'.join(missing)}")
@@ -764,7 +878,7 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
     setattr(candidate, "current_fmcg_fit", round(current_fmcg_fit, 2))
     setattr(candidate, "disqualifier_reasons", disqualifiers)
 
-    candidate.verification_notes = notes
+    candidate.verification_notes = unique_preserving_order(notes)
     return candidate
 
 

@@ -7,6 +7,7 @@ from typing import Dict, List, Set
 
 from hr_hunter.identity import candidate_identity_keys, candidate_primary_key
 from hr_hunter.models import CandidateProfile, ProviderRunResult, SearchBrief, SearchRunReport
+from hr_hunter.output import build_reporting_summary
 from hr_hunter.providers.mock import MockProvider
 from hr_hunter.providers.pdl import PDLProvider
 from hr_hunter.providers.scrapingbee import ScrapingBeeGoogleProvider
@@ -134,10 +135,7 @@ class SearchEngine:
         dry_run: bool,
         excluded_seen_count: int = 0,
     ) -> Dict[str, object]:
-        verified = len([candidate for candidate in candidates if candidate.verification_status == "verified"])
-        review = len([candidate for candidate in candidates if candidate.verification_status == "review"])
-        rejected = len([candidate for candidate in candidates if candidate.verification_status == "reject"])
-        return {
+        base_summary = {
             "role_title": brief.role_title,
             "dry_run": dry_run,
             "provider_order": [result.provider_name for result in provider_results],
@@ -145,10 +143,7 @@ class SearchEngine:
                 result.provider_name: result.errors for result in provider_results if result.errors
             },
             "slice_count": len(build_search_slices(brief)),
-            "candidate_count": len(candidates),
-            "verified_count": verified,
-            "review_count": review,
-            "reject_count": rejected,
             "target_range": [brief.result_target_min, brief.result_target_max],
             "excluded_seen_count": excluded_seen_count,
         }
+        return build_reporting_summary(candidates, base_summary)
