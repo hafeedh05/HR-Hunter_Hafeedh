@@ -185,3 +185,44 @@ def test_scrapingbee_dry_run_enforces_family_and_run_budgets() -> None:
     assert query_budget["executed_per_family"]["team_leadership_pages"] == 1
     assert query_budget["skipped_per_family"]["team_leadership_pages"] >= 1
     assert "team_leadership_pages" in query_budget["family_budget_exhausted"]
+
+
+def test_scrapingbee_builds_history_query_plans() -> None:
+    provider = ScrapingBeeGoogleProvider({})
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-history-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "title_keywords": ["Trade Marketing Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+        }
+    )
+    history_slice = build_search_slices(
+        build_search_brief(
+            {
+                "id": "scrapingbee-history-test",
+                "role_title": "Brand Manager",
+                "titles": ["Brand Manager"],
+                "title_keywords": ["Trade Marketing Manager"],
+                "company_targets": ["Unilever"],
+                "geography": {"location_name": "Drogheda", "country": "Ireland"},
+                "provider_settings": {
+                    "pdl": {
+                        "include_strict_slice": False,
+                        "include_broad_slice": False,
+                        "include_discovery_slices": False,
+                        "include_history_slices": True,
+                        "history_query_terms": ["formerly", "previously"],
+                    }
+                },
+            }
+        )
+    )[0]
+
+    plans = provider._build_query_plans(brief, history_slice)
+
+    assert plans
+    assert any('"formerly"' in plan["search"] for plan in plans)
+    assert any('"Unilever"' in plan["search"] for plan in plans)

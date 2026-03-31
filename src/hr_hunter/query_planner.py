@@ -19,6 +19,7 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
     slice_limit = int(pdl_settings.get("results_per_slice", 40))
     include_strict_slice = bool(pdl_settings.get("include_strict_slice", True))
     include_broad_slice = bool(pdl_settings.get("include_broad_slice", True))
+    include_history_slices = bool(pdl_settings.get("include_history_slices", False))
     include_discovery_slices = bool(pdl_settings.get("include_discovery_slices", True))
     precision_keywords = unique_preserving_order(
         brief.industry_keywords
@@ -29,6 +30,12 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
     )[:8]
     discovery_keyword_chunk_size = int(pdl_settings.get("discovery_keyword_chunk_size", 6))
     market_keyword_chunk_size = int(pdl_settings.get("market_keyword_chunk_size", 5))
+    history_query_terms = unique_preserving_order(
+        pdl_settings.get(
+            "history_query_terms",
+            ["formerly", "previously", "before joining", "prior to joining", "ex"],
+        )
+    )[:5]
 
     company_chunks = chunked(brief.company_targets, chunk_size)
     slices: List[SearchSlice] = []
@@ -57,6 +64,19 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
                     title_keywords=brief.title_keywords,
                     query_keywords=precision_keywords,
                     search_mode="broad",
+                    limit=slice_limit,
+                )
+            )
+        if include_history_slices:
+            slices.append(
+                SearchSlice(
+                    id=f"history-{index}",
+                    description="Former target company + adjacent current role slice",
+                    companies=companies,
+                    titles=brief.titles,
+                    title_keywords=brief.title_keywords,
+                    query_keywords=history_query_terms,
+                    search_mode="history",
                     limit=slice_limit,
                 )
             )

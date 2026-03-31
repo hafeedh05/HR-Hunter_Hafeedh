@@ -1,0 +1,81 @@
+id: sr-product-lead-ai-jan26-ireland-fmcg-matrix
+role_title: Global Product Manager / FMCG Brand-Product Lead
+primary_brief: ../search_briefs/sr_product_lead_ai_jan26_fmcg_public_expansion.yaml
+providers:
+  - scrapingbee_google
+limit: 160
+strategies:
+  - id: current-target-strict
+    label: Current target company + current relevant role
+    brief: ../search_briefs/sr_product_lead_ai_jan26_fmcg_public_expansion.yaml
+    limit: 70
+    verify_top: 30
+    filters:
+      accepted_statuses:
+        - verified
+        - review
+      require_current_target_company: true
+      require_current_location_confirmed: true
+      require_current_employment_confirmed: true
+      min_current_function_fit: 0.75
+      min_current_fmcg_fit: 0.75
+      min_score: 55
+  - id: current-target-adjacent
+    label: Current target company + adjacent KNN title family
+    brief: ../search_briefs/sr_product_lead_ai_jan26_fmcg_public_expansion.yaml
+    limit: 70
+    verify_top: 30
+    filters:
+      accepted_statuses:
+        - verified
+        - review
+      require_current_target_company: true
+      require_current_location_confirmed: true
+      require_current_employment_confirmed: true
+      min_current_function_fit: 0.65
+      min_current_fmcg_fit: 0.75
+      min_score: 50
+  - id: history-target-knn
+    label: Previous target company + current adjacent FMCG role
+    brief: ../search_briefs/sr_product_lead_ai_jan26_fmcg_history_knn_public.yaml
+    limit: 60
+    verify_top: 24
+    filters:
+      accepted_statuses:
+        - verified
+        - review
+      require_any_target_company_signal: true
+      require_target_company_history: true
+      require_current_location_confirmed: true
+      require_current_employment_confirmed: true
+      min_current_function_fit: 0.65
+      min_current_fmcg_fit: 0.75
+      min_score: 50
+  - id: ireland-location-fmcg
+    label: Ireland-anchored FMCG expansion around adjacent current roles
+    brief: ../search_briefs/sr_product_lead_ai_jan26_fmcg_location_priority_public.yaml
+    limit: 90
+    verify_top: 36
+    filters:
+      accepted_statuses:
+        - verified
+        - review
+      require_location_aligned: true
+      require_current_employment_confirmed: true
+      min_current_function_fit: 0.6
+      min_current_fmcg_fit: 0.7
+      min_score: 50
+  - id: trade-media-location-probe
+    label: Irish trade media, directories, and speaker bios
+    brief: ../search_briefs/sr_product_lead_ai_jan26_fmcg_trade_media_location_probe.yaml
+    limit: 90
+    verify_top: 40
+    filters:
+      accepted_statuses:
+        - verified
+        - review
+      require_current_location_confirmed: true
+      require_current_employment_confirmed: true
+      min_current_function_fit: 0.6
+      min_current_fmcg_fit: 0.75
+      min_score: 50

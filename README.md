@@ -57,6 +57,12 @@ If you want the local GCP deployment MCP:
 uv sync --extra mcp
 ```
 
+If you want Google Sheets append support:
+
+```bash
+uv sync --extra sheets
+```
+
 ## Environment
 
 Create a local `.env` file from `.env.example`.
@@ -110,6 +116,30 @@ uv run hr-hunter search \
   --verify-top 50
 ```
 
+Multi-strategy public-only run that shares dedupe state across search lanes:
+
+```bash
+uv run hr-hunter matrix-search \
+  --matrix examples/matrices/sr_product_lead_ai_jan26_ireland_fmcg.yaml \
+  --limit 180 \
+  --verify-top 80 \
+  --exclude-history-dir output/search
+```
+
+Run the same matrix and append only net-new candidates into a Google Sheet:
+
+```bash
+uv run hr-hunter matrix-search \
+  --matrix examples/matrices/sr_product_lead_ai_jan26_ireland_fmcg.yaml \
+  --limit 180 \
+  --verify-top 80 \
+  --exclude-history-dir output/search \
+  --spreadsheet-id <GOOGLE_SHEET_ID> \
+  --worksheet Candidates \
+  --sheet-history-dir output/search \
+  --append-csv output/remote-sync/latest-append.csv
+```
+
 Verify an existing report after retrieval:
 
 ```bash
@@ -117,6 +147,16 @@ uv run hr-hunter verify \
   --brief examples/search_briefs/sr_product_lead_ai_jan26.yaml \
   --report output/search/<run_id>.json \
   --limit 50
+```
+
+Append an existing report into a Google Sheet without rerunning search:
+
+```bash
+uv run hr-hunter sheet-sync \
+  --report output/search/<run_id>.json \
+  --spreadsheet-id <GOOGLE_SHEET_ID> \
+  --worksheet Candidates \
+  --history-dir output/search
 ```
 
 The command writes:
@@ -139,6 +179,18 @@ This is intentionally not a single-query toy.
    - `verified`
    - `review`
    - `reject`
+
+Score bands are fixed:
+
+- `70.00-100.00` = `verified`
+- `50.00-69.99` = `review`
+- `0.00-49.99` = `reject`
+
+The matrix workflow adds a second reporting layer alongside those strict labels:
+
+- `strict_verified`
+- `search_qualified`
+- `weak`
 
 ## Why This Shape
 

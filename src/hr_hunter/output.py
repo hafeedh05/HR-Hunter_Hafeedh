@@ -6,7 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Set, Tuple
 
-from hr_hunter.identity import candidate_identity_keys
+from hr_hunter.identity import candidate_identity_keys, candidate_primary_key
 from hr_hunter.models import (
     CandidateProfile,
     EvidenceRecord,
@@ -22,6 +22,46 @@ TITLE_FAMILY_KEYWORDS = (
     ("brand", ("brand",)),
     ("product", ("product",)),
 )
+CSV_FIELDNAMES = [
+    "identity_key",
+    "full_name",
+    "current_title",
+    "current_company",
+    "location_name",
+    "distance_miles",
+    "current_target_company_match",
+    "target_company_history_match",
+    "current_title_match",
+    "industry_aligned",
+    "location_aligned",
+    "current_company_confirmed",
+    "current_title_confirmed",
+    "current_location_confirmed",
+    "precise_location_confirmed",
+    "current_employment_confirmed",
+    "verification_status",
+    "qualification_tier",
+    "score",
+    "evidence_confidence",
+    "evidence_verdict",
+    "stale_data_risk",
+    "cap_reasons",
+    "disqualifier_reasons",
+    "matched_title_family",
+    "location_precision_bucket",
+    "current_role_proof_count",
+    "source_quality_score",
+    "evidence_freshness_year",
+    "current_function_fit",
+    "current_fmcg_fit",
+    "search_strategies",
+    "source",
+    "linkedin_url",
+    "source_url",
+    "matched_titles",
+    "matched_companies",
+    "verification_notes",
+]
 
 
 def _clean_reason_values(values: Iterable[str]) -> List[str]:
@@ -36,6 +76,10 @@ def _clean_reason_values(values: Iterable[str]) -> List[str]:
         seen.add(text)
         ordered.append(text)
     return ordered
+
+
+def _serialize_multi_value(values: Iterable[str]) -> str:
+    return "; ".join(_clean_reason_values(values))
 
 
 def _title_family_text(candidate: CandidateProfile) -> str:
@@ -269,6 +313,72 @@ def build_reporting_summary(
     return summary
 
 
+def filter_new_candidates(candidates: Iterable[CandidateProfile], seen_keys: Set[str]) -> List[CandidateProfile]:
+    net_new: List[CandidateProfile] = []
+    observed = set(seen_keys)
+    for candidate in candidates:
+        candidate_keys = candidate_identity_keys(candidate)
+        if candidate_keys and not candidate_keys.isdisjoint(observed):
+            continue
+        observed.update(candidate_keys)
+        net_new.append(candidate)
+    return net_new
+
+
+def candidate_to_row(candidate: CandidateProfile) -> Dict[str, object]:
+    hydrated = hydrate_candidate_reporting(candidate)
+    return {
+        "identity_key": candidate_primary_key(hydrated),
+        "full_name": hydrated.full_name,
+        "current_title": hydrated.current_title,
+        "current_company": hydrated.current_company,
+        "location_name": hydrated.location_name,
+        "distance_miles": hydrated.distance_miles,
+        "current_target_company_match": hydrated.current_target_company_match,
+        "target_company_history_match": hydrated.target_company_history_match,
+        "current_title_match": hydrated.current_title_match,
+        "industry_aligned": hydrated.industry_aligned,
+        "location_aligned": hydrated.location_aligned,
+        "current_company_confirmed": hydrated.current_company_confirmed,
+        "current_title_confirmed": hydrated.current_title_confirmed,
+        "current_location_confirmed": hydrated.current_location_confirmed,
+        "precise_location_confirmed": hydrated.precise_location_confirmed,
+        "current_employment_confirmed": hydrated.current_employment_confirmed,
+        "verification_status": hydrated.verification_status,
+        "qualification_tier": hydrated.qualification_tier,
+        "score": hydrated.score,
+        "evidence_confidence": hydrated.evidence_confidence,
+        "evidence_verdict": hydrated.evidence_verdict,
+        "stale_data_risk": hydrated.stale_data_risk,
+        "cap_reasons": _serialize_multi_value(hydrated.cap_reasons),
+        "disqualifier_reasons": _serialize_multi_value(hydrated.disqualifier_reasons),
+        "matched_title_family": hydrated.matched_title_family,
+        "location_precision_bucket": hydrated.location_precision_bucket,
+        "current_role_proof_count": hydrated.current_role_proof_count,
+        "source_quality_score": hydrated.source_quality_score,
+        "evidence_freshness_year": hydrated.evidence_freshness_year,
+        "current_function_fit": hydrated.current_function_fit,
+        "current_fmcg_fit": hydrated.current_fmcg_fit,
+        "search_strategies": _serialize_multi_value(hydrated.search_strategies),
+        "source": hydrated.source,
+        "linkedin_url": hydrated.linkedin_url,
+        "source_url": hydrated.source_url,
+        "matched_titles": _serialize_multi_value(hydrated.matched_titles),
+        "matched_companies": _serialize_multi_value(hydrated.matched_companies),
+        "verification_notes": _serialize_multi_value(hydrated.verification_notes),
+    }
+
+
+def write_candidates_csv(candidates: Iterable[CandidateProfile], path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDNAMES)
+        writer.writeheader()
+        for candidate in candidates:
+            writer.writerow(candidate_to_row(candidate))
+    return path
+
+
 def iter_report_paths(paths: Iterable[Path]) -> Iterator[Path]:
     for path in paths:
         resolved = path.expanduser().resolve()
@@ -328,89 +438,10 @@ def write_report(report: SearchRunReport, output_dir: Path) -> Tuple[Path, Path]
         json.dump(asdict(report), handle, indent=2)
 
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "full_name",
-                "current_title",
-                "current_company",
-                "location_name",
-                "distance_miles",
-                "current_target_company_match",
-                "target_company_history_match",
-                "current_title_match",
-                "industry_aligned",
-                "location_aligned",
-                "current_company_confirmed",
-                "current_title_confirmed",
-                "current_location_confirmed",
-                "precise_location_confirmed",
-                "current_employment_confirmed",
-                "verification_status",
-                "qualification_tier",
-                "score",
-                "evidence_confidence",
-                "evidence_verdict",
-                "stale_data_risk",
-                "cap_reasons",
-                "disqualifier_reasons",
-                "matched_title_family",
-                "location_precision_bucket",
-                "current_role_proof_count",
-                "source_quality_score",
-                "evidence_freshness_year",
-                "current_function_fit",
-                "current_fmcg_fit",
-                "source",
-                "linkedin_url",
-                "source_url",
-                "matched_titles",
-                "matched_companies",
-                "verification_notes",
-            ],
-        )
+        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDNAMES)
         writer.writeheader()
         for candidate in report.candidates:
-            writer.writerow(
-                {
-                    "full_name": candidate.full_name,
-                    "current_title": candidate.current_title,
-                    "current_company": candidate.current_company,
-                    "location_name": candidate.location_name,
-                    "distance_miles": candidate.distance_miles,
-                    "current_target_company_match": candidate.current_target_company_match,
-                    "target_company_history_match": candidate.target_company_history_match,
-                    "current_title_match": candidate.current_title_match,
-                    "industry_aligned": candidate.industry_aligned,
-                    "location_aligned": candidate.location_aligned,
-                    "current_company_confirmed": candidate.current_company_confirmed,
-                    "current_title_confirmed": candidate.current_title_confirmed,
-                    "current_location_confirmed": candidate.current_location_confirmed,
-                    "precise_location_confirmed": candidate.precise_location_confirmed,
-                    "current_employment_confirmed": candidate.current_employment_confirmed,
-                    "verification_status": candidate.verification_status,
-                    "qualification_tier": candidate.qualification_tier,
-                    "score": candidate.score,
-                    "evidence_confidence": candidate.evidence_confidence,
-                    "evidence_verdict": candidate.evidence_verdict,
-                    "stale_data_risk": candidate.stale_data_risk,
-                    "cap_reasons": "; ".join(candidate.cap_reasons),
-                    "disqualifier_reasons": "; ".join(candidate.disqualifier_reasons),
-                    "matched_title_family": candidate.matched_title_family,
-                    "location_precision_bucket": candidate.location_precision_bucket,
-                    "current_role_proof_count": candidate.current_role_proof_count,
-                    "source_quality_score": candidate.source_quality_score,
-                    "evidence_freshness_year": candidate.evidence_freshness_year,
-                    "current_function_fit": candidate.current_function_fit,
-                    "current_fmcg_fit": candidate.current_fmcg_fit,
-                    "source": candidate.source,
-                    "linkedin_url": candidate.linkedin_url,
-                    "source_url": candidate.source_url,
-                    "matched_titles": "; ".join(candidate.matched_titles),
-                    "matched_companies": "; ".join(candidate.matched_companies),
-                    "verification_notes": "; ".join(candidate.verification_notes),
-                }
-            )
+            writer.writerow(candidate_to_row(candidate))
 
     return json_path, csv_path
 
@@ -481,6 +512,7 @@ def build_candidate(payload: dict) -> CandidateProfile:
         current_function_fit=float(payload.get("current_function_fit", 0.0)),
         current_fmcg_fit=float(payload.get("current_fmcg_fit", 0.0)),
         verification_notes=list(payload.get("verification_notes", [])),
+        search_strategies=list(payload.get("search_strategies", [])),
         evidence_records=[
             EvidenceRecord(
                 query=record.get("query", ""),

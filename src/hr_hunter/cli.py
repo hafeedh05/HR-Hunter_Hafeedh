@@ -10,12 +10,14 @@ from hr_hunter.api import create_app
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.config import load_env_file, load_yaml_file, resolve_output_dir
 from hr_hunter.engine import SearchEngine
+from hr_hunter.orchestrator import load_search_matrix, run_search_matrix
 from hr_hunter.output import (
     collect_seen_candidate_keys,
     collect_seen_provider_queries,
     load_report,
     write_report,
 )
+from hr_hunter.sheets import append_report_to_sheet
 from hr_hunter.verifier import PublicEvidenceVerifier, refresh_report_summary
 
 
@@ -76,6 +78,96 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument(
         "--output-dir",
         help="Override the output directory for JSON and CSV artifacts.",
+    )
+
+    matrix_parser = subparsers.add_parser("matrix-search", help="Run multiple search briefs as one deduped search matrix.")
+    matrix_parser.add_argument("--matrix", required=True, help="Path to the matrix YAML manifest.")
+    matrix_parser.add_argument(
+        "--limit",
+        type=int,
+        default=120,
+        help="Maximum final merged profiles to keep.",
+    )
+    matrix_parser.add_argument(
+        "--verify-top",
+        type=int,
+        default=0,
+        help="Run public-web verification on the top N merged candidates after the matrix run.",
+    )
+    matrix_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Compile matrix queries without making provider requests.",
+    )
+    matrix_parser.add_argument(
+        "--output-dir",
+        help="Override the output directory for JSON and CSV artifacts.",
+    )
+    matrix_parser.add_argument(
+        "--exclude-report",
+        action="append",
+        default=[],
+        help="JSON report path to use as an exclusion source. Repeatable.",
+    )
+    matrix_parser.add_argument(
+        "--exclude-history-dir",
+        action="append",
+        default=[],
+        help="Directory of prior JSON reports to exclude from future runs. Repeatable.",
+    )
+    matrix_parser.add_argument(
+        "--spreadsheet-id",
+        help="Optional Google Sheets spreadsheet id to append net-new candidates into after the run.",
+    )
+    matrix_parser.add_argument(
+        "--worksheet",
+        default="Candidates",
+        help="Worksheet/tab name to append into when --spreadsheet-id is set.",
+    )
+    matrix_parser.add_argument(
+        "--credentials-file",
+        help="Optional Google service account credentials file for automatic sheet sync.",
+    )
+    matrix_parser.add_argument(
+        "--sheet-history-report",
+        action="append",
+        default=[],
+        help="Additional report paths to treat as already synced history during automatic sheet sync.",
+    )
+    matrix_parser.add_argument(
+        "--sheet-history-dir",
+        action="append",
+        default=[],
+        help="Additional report directories to treat as already synced history during automatic sheet sync.",
+    )
+    matrix_parser.add_argument(
+        "--append-csv",
+        help="Optional path to also write an append-only CSV payload of the net-new rows during automatic sheet sync.",
+    )
+
+    sheet_parser = subparsers.add_parser("sheet-sync", help="Append net-new candidates from a report into a Google Sheet.")
+    sheet_parser.add_argument("--report", required=True, help="Path to the JSON report to sync.")
+    sheet_parser.add_argument("--spreadsheet-id", required=True, help="Target Google Sheets spreadsheet id.")
+    sheet_parser.add_argument("--worksheet", default="Candidates", help="Worksheet/tab name to append into.")
+    sheet_parser.add_argument(
+        "--history-report",
+        action="append",
+        default=[],
+        help="JSON report path to treat as already synced history. Repeatable.",
+    )
+    sheet_parser.add_argument(
+        "--history-dir",
+        action="append",
+        default=[],
+        help="Directory of JSON reports to treat as already synced history. Repeatable.",
+    )
+    sheet_parser.add_argument(
+        "--credentials-file",
+        help="Optional Google service account credentials file. Falls back to GOOGLE_SERVICE_ACCOUNT_JSON.",
+    )
+    sheet_parser.add_argument(
+        "--append-csv",
+        help="Optional path to also write an append-only CSV payload of the net-new rows.",
     )
 
     serve_parser = subparsers.add_parser("serve", help="Serve the optional FastAPI app.")
@@ -154,6 +246,70 @@ async def run_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+async def run_matrix_search(args: argparse.Namespace) -> int:
+    load_env_file(Path(".env"))
+
+    matrix = load_search_matrix(Path(args.matrix))
+    report = await run_search_matrix(
+        matrix,
+        dry_run=bool(args.dry_run),
+        limit=args.limit,
+        verify_top=args.verify_top,
+        extra_exclude_reports=[Path(value) for value in args.exclude_report if value],
+        extra_exclude_history_dirs=[Path(value) for value in args.exclude_history_dir if value],
+    )
+
+    output_dir = resolve_output_dir(args.output_dir)
+    json_path, csv_path = write_report(report, output_dir)
+    sheet_sync = None
+    if args.spreadsheet_id:
+        history_paths = [
+            Path(value)
+            for value in [
+                *args.exclude_report,
+                *args.exclude_history_dir,
+                *args.sheet_history_report,
+                *args.sheet_history_dir,
+            ]
+            if value
+        ]
+        sheet_sync = append_report_to_sheet(
+            report_path=json_path,
+            spreadsheet_id=args.spreadsheet_id,
+            worksheet_name=args.worksheet,
+            history_paths=history_paths,
+            credentials_file=args.credentials_file,
+            append_csv_path=Path(args.append_csv).expanduser().resolve() if args.append_csv else None,
+        )
+
+    result = {
+        "run_id": report.run_id,
+        "dry_run": report.dry_run,
+        "summary": report.summary,
+        "json_report": str(json_path),
+        "csv_report": str(csv_path),
+    }
+    if sheet_sync:
+        result["sheet_sync"] = sheet_sync
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def run_sheet_sync(args: argparse.Namespace) -> int:
+    load_env_file(Path(".env"))
+
+    result = append_report_to_sheet(
+        report_path=Path(args.report).expanduser().resolve(),
+        spreadsheet_id=args.spreadsheet_id,
+        worksheet_name=args.worksheet,
+        history_paths=[Path(value) for value in [*args.history_report, *args.history_dir] if value],
+        credentials_file=args.credentials_file,
+        append_csv_path=Path(args.append_csv).expanduser().resolve() if args.append_csv else None,
+    )
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 def run_server(args: argparse.Namespace) -> int:
     try:
         import uvicorn
@@ -174,6 +330,10 @@ def main() -> int:
         return asyncio.run(run_search(args))
     if args.command == "verify":
         return asyncio.run(run_verify(args))
+    if args.command == "matrix-search":
+        return asyncio.run(run_matrix_search(args))
+    if args.command == "sheet-sync":
+        return run_sheet_sync(args)
     if args.command == "serve":
         return run_server(args)
     raise RuntimeError(f"Unsupported command: {args.command}")

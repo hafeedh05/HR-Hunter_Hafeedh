@@ -20,6 +20,10 @@ dev = [
 mcp = [
   "mcp[cli]>=1.0.0",
 ]
+sheets = [
+  "gspread>=6.1.2",
+  "google-auth>=2.40.0",
+]
 
 [project.scripts]
 hr-hunter = "hr_hunter.cli:main"
