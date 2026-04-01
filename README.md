@@ -2,6 +2,8 @@
 
 PDL-first executive search retrieval with a scraper fallback and a hard QC pass.
 
+Internal team handoff: [TEAM_README.md](TEAM_README.md)
+
 This project is built for one thing: finding candidate lists that are fast, explainable, and good enough for retained search workflows instead of dumping a pile of low-signal leads.
 
 ## What It Does
