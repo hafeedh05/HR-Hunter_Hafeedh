@@ -60,6 +60,59 @@ def test_candidate_parser_keeps_matched_irish_location_hint() -> None:
     assert candidate.current_company == "Unilever"
 
 
+def test_candidate_parser_skips_contact_directory_pages() -> None:
+    provider = ScrapingBeeGoogleProvider({})
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-contact-page-test",
+            "role_title": "Senior Data Analyst",
+            "titles": ["Senior Data Analyst"],
+            "company_targets": ["noon"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+        }
+    )
+
+    candidate = provider._candidate_from_result(
+        {
+            "title": "Sneha Beniwal's email & phone | Noon's Data Analyst contact info",
+            "description": "Sneha Beniwal works as a Data Analyst at Noon. Reveal for Free.",
+            "url": "https://www.datanyze.com/people/Sneha-Beniwal/6888991245",
+        },
+        brief,
+    )
+
+    assert candidate is None
+
+
+def test_candidate_parser_cleans_bidi_marks_and_infers_title_from_description() -> None:
+    provider = ScrapingBeeGoogleProvider({})
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-bidi-cleanup-test",
+            "role_title": "Senior Data Analyst",
+            "titles": ["Senior Data Analyst"],
+            "title_keywords": ["data analyst"],
+            "company_targets": ["dubizzle"],
+            "company_aliases": {"dubizzle": ["Dubizzle Group"]},
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+        }
+    )
+
+    candidate = provider._candidate_from_result(
+        {
+            "title": "Ali Karim\u200f - \u200fdubizzle",
+            "description": "Senior Data Analyst at dubizzle. Dubai, United Arab Emirates.",
+            "url": "https://ae.linkedin.com/in/ali-karim",
+        },
+        brief,
+    )
+
+    assert candidate is not None
+    assert candidate.full_name == "Ali Karim"
+    assert candidate.current_title == "Senior Data Analyst"
+    assert candidate.current_company == "dubizzle"
+
+
 def test_candidate_parser_does_not_infer_current_role_from_historical_snippet() -> None:
     provider = ScrapingBeeGoogleProvider({})
     brief = build_search_brief(

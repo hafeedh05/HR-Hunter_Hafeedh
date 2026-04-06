@@ -81,3 +81,21 @@ def resolve_output_dir(explicit: Optional[str] = None) -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
     return Path("output/search").resolve()
+
+
+def resolve_feedback_db_path(explicit: Optional[str] = None) -> Path:
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    configured = os.getenv("HR_HUNTER_FEEDBACK_DB")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path("output/feedback/hr_hunter_feedback.db").resolve()
+
+
+def resolve_ranker_model_dir(explicit: Optional[str] = None) -> Path:
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    configured = os.getenv("HR_HUNTER_RANKER_MODEL_DIR")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path("output/models/ranker/latest").resolve()

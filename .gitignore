@@ -7,6 +7,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.egg-info/
+output/
 output/search/*.json
 output/search/*.csv
 output/**/*.json

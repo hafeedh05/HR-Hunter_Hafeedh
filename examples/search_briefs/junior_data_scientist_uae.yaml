@@ -1,0 +1,140 @@
+id: junior-data-scientist-uae
+role_title: Junior Data Scientist
+brief_summary: >
+  UAE-focused junior data scientist search for candidates who are early in
+  their data science careers and show practical strength in Python, SQL,
+  statistics, machine learning, and data analysis. Prioritize candidates in
+  Dubai, Abu Dhabi, and nearby UAE hubs, with preference for those working at
+  strong local tech, analytics, and digital-product employers.
+titles:
+  - Junior Data Scientist
+  - Data Scientist
+  - Associate Data Scientist
+  - Data Science Analyst
+  - Machine Learning Analyst
+  - AI Analyst
+title_keywords:
+  - data science
+  - machine learning
+  - analytics
+  - predictive modeling
+  - applied scientist
+company_targets:
+  - G42
+  - Presight
+  - Careem
+  - noon
+  - dubizzle
+  - Property Finder
+  - Bayzat
+  - talabat
+  - Emirates
+  - e&
+  - ADNOC
+  - Mubadala
+company_aliases:
+  Presight:
+    - Presight AI
+  noon:
+    - noon.com
+  dubizzle:
+    - Dubizzle Group
+  Emirates:
+    - Emirates Group
+  e&:
+    - Etisalat
+    - Etisalat by e&
+    - etisalat
+  ADNOC:
+    - Abu Dhabi National Oil Company
+geography:
+  location_name: Dubai, United Arab Emirates
+  country: United Arab Emirates
+  center_latitude: 25.2048
+  center_longitude: 55.2708
+  radius_miles: 95
+  location_hints:
+    - Dubai
+    - Abu Dhabi
+    - Sharjah
+    - Ajman
+    - Al Ain
+    - Ras Al Khaimah
+    - Fujairah
+    - United Arab Emirates
+    - UAE
+required_keywords:
+  - python
+  - sql
+  - machine learning
+  - statistics
+  - data analysis
+preferred_keywords:
+  - pandas
+  - scikit-learn
+  - experimentation
+  - dashboards
+  - forecasting
+portfolio_keywords: []
+commercial_keywords: []
+leadership_keywords: []
+scope_keywords: []
+industry_keywords:
+  - analytics
+  - artificial intelligence
+  - machine learning
+  - data platform
+exclude_title_keywords:
+  - senior
+  - lead
+  - principal
+  - director
+  - manager
+  - head
+  - staff
+  - architect
+  - recruiter
+  - talent acquisition
+  - human resources
+  - internship
+  - intern
+seniority_levels:
+  - junior
+  - associate
+  - analyst
+  - entry
+  - graduate
+minimum_years_experience: 1
+result_target_min: 20
+result_target_max: 40
+max_profiles: 40
+provider_settings:
+  pdl:
+    dataset: all
+    company_chunk_size: 5
+    results_per_slice: 12
+  scrapingbee_google:
+    pages_per_query: 1
+    country_code: ae
+    language: en
+    light_request: true
+    request_timeout_seconds: 12
+    max_retries: 1
+    retry_backoff_seconds: 2.0
+    include_country_only_queries: false
+    include_relaxed_queries: false
+    max_company_aliases_per_query: 2
+    exclude_query_terms:
+      - jobs
+      - hiring
+      - recruiter
+      - talent acquisition
+      - careers
+      - internship
+    exclude_site_terms:
+      - -site:linkedin.com/jobs
+      - -site:ae.linkedin.com/jobs
+      - -site:linkedin.com/company
+      - -site:ae.linkedin.com/company
+      - -site:linkedin.com/posts
+      - -site:ae.linkedin.com/posts

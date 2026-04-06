@@ -206,7 +206,7 @@ class PublicEvidenceVerifier:
 
     def _location_is_imprecise(self, candidate: CandidateProfile, brief: SearchBrief) -> bool:
         bucket = getattr(candidate, "location_precision_bucket", "")
-        if bucket in {"country_only_ireland", "unknown_location", "outside_ireland"}:
+        if bucket in {"country_only", "unknown_location", "outside_target_area"}:
             return True
         if not candidate.location_name:
             return True
@@ -699,7 +699,7 @@ class PublicEvidenceVerifier:
         )
         candidate.precise_location_confirmed = (
             candidate.location_precision_bucket
-            not in {"country_only_ireland", "unknown_location", "outside_ireland", ""}
+            not in {"country_only", "unknown_location", "outside_target_area", ""}
             or any(
                 record.precise_location_match
                 and self._supports_current_role(record)
@@ -741,16 +741,16 @@ class PublicEvidenceVerifier:
                         candidate.location_name = f"{precise_location_text}, {brief.geography.country}"
                     else:
                         candidate.location_name = precise_location_text
-                if candidate.location_precision_bucket in {"country_only_ireland", "unknown_location", "outside_ireland", ""}:
-                    candidate.location_precision_bucket = "named_ireland_location"
+                if candidate.location_precision_bucket in {"country_only", "unknown_location", "outside_target_area", ""}:
+                    candidate.location_precision_bucket = "named_target_location"
                 candidate.location_aligned = True
         elif (
             company_location_records
             and candidate.current_company_confirmed
-            and candidate.location_precision_bucket != "outside_ireland"
+            and candidate.location_precision_bucket != "outside_target_area"
             and (
                 candidate.current_location_confirmed
-                or getattr(candidate, "location_precision_bucket", "") == "country_only_ireland"
+                or getattr(candidate, "location_precision_bucket", "") == "country_only"
             )
         ):
             precise_company_location = next(
@@ -767,13 +767,13 @@ class PublicEvidenceVerifier:
                         candidate.location_name = f"{precise_location_text}, {brief.geography.country}"
                     else:
                         candidate.location_name = precise_location_text
-                if candidate.location_precision_bucket in {"country_only_ireland", "unknown_location", ""}:
-                    candidate.location_precision_bucket = "named_ireland_location"
+                if candidate.location_precision_bucket in {"country_only", "unknown_location", ""}:
+                    candidate.location_precision_bucket = "named_target_location"
                 candidate.location_aligned = True
                 candidate.current_location_confirmed = True
                 candidate.precise_location_confirmed = True
                 candidate.verification_notes.append(
-                    "precise Ireland location inferred from company office/contact evidence"
+                    "precise location inferred from company office/contact evidence"
                 )
 
         if len(fresh_current_role_records) >= 2:
@@ -833,9 +833,9 @@ class PublicEvidenceVerifier:
         if candidate.current_title_confirmed:
             candidate.verification_notes.append("current title publicly corroborated")
         if candidate.current_location_confirmed:
-            candidate.verification_notes.append("Ireland location signal corroborated")
+            candidate.verification_notes.append("location signal corroborated")
         if candidate.precise_location_confirmed:
-            candidate.verification_notes.append("precise Ireland location corroborated")
+            candidate.verification_notes.append("precise location corroborated")
         if not candidate.current_employment_confirmed:
             if stale_data_risk:
                 candidate.verification_notes.append("current role proof is stale and cannot verify current employment")
@@ -867,13 +867,13 @@ class PublicEvidenceVerifier:
             ):
                 missing.append("current title")
             if (brief.geography.location_name or brief.geography.country) and not candidate.current_location_confirmed:
-                missing.append("current Ireland location")
+                missing.append("current location")
             if not candidate.precise_location_confirmed or getattr(candidate, "location_precision_bucket", "") in {
-                "country_only_ireland",
+                "country_only",
                 "unknown_location",
-                "outside_ireland",
+                "outside_target_area",
             }:
-                missing.append("precise Ireland location")
+                missing.append("precise location")
             if brief.industry_keywords and not candidate.industry_aligned:
                 missing.append("industry fit")
             if not candidate.current_employment_confirmed:

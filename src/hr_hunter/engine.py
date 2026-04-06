@@ -12,6 +12,8 @@ from hr_hunter.providers.mock import MockProvider
 from hr_hunter.providers.pdl import PDLProvider
 from hr_hunter.providers.scrapingbee import ScrapingBeeGoogleProvider
 from hr_hunter.query_planner import build_search_slices
+from hr_hunter.ranker import RANKING_MODEL_VERSION, apply_learned_ranker, parse_learned_ranker_settings
+from hr_hunter.reranker import DEFAULT_RERANKER_MODEL, parse_reranker_settings, rerank_candidates
 from hr_hunter.scoring import score_candidate, sort_candidates
 
 
@@ -99,6 +101,9 @@ class SearchEngine:
                 excluded_seen_count += len(rescored_pool) - len(filtered_pool)
                 rescored_pool = filtered_pool
             candidate_pool = sort_candidates(rescored_pool)
+            if not dry_run:
+                candidate_pool = sort_candidates(rerank_candidates(brief, candidate_pool))
+                candidate_pool = sort_candidates(apply_learned_ranker(brief, candidate_pool))
 
             if not dry_run:
                 accepted = [
@@ -135,6 +140,8 @@ class SearchEngine:
         dry_run: bool,
         excluded_seen_count: int = 0,
     ) -> Dict[str, object]:
+        reranker_settings = parse_reranker_settings(brief)
+        learned_ranker_settings = parse_learned_ranker_settings(brief)
         base_summary = {
             "role_title": brief.role_title,
             "dry_run": dry_run,
@@ -145,5 +152,26 @@ class SearchEngine:
             "slice_count": len(build_search_slices(brief)),
             "target_range": [brief.result_target_min, brief.result_target_max],
             "excluded_seen_count": excluded_seen_count,
+            "anchor_weights": brief.anchor_weights,
+            "company_match_mode": brief.company_match_mode,
+            "hiring_company_name": brief.hiring_company_name,
+            "candidate_interest_required": brief.candidate_interest_required,
+            "location_targets": brief.location_targets,
+            "years_mode": brief.years_mode,
+            "years_target": brief.years_target,
+            "years_tolerance": brief.years_tolerance,
+            "jd_breakdown": brief.jd_breakdown,
+            "ranking_model_version": RANKING_MODEL_VERSION,
+            "reranker": {
+                "enabled": reranker_settings.enabled,
+                "model_name": reranker_settings.model_name if reranker_settings.enabled else DEFAULT_RERANKER_MODEL,
+                "top_n": reranker_settings.top_n,
+                "weight": reranker_settings.weight,
+            },
+            "learned_ranker": {
+                "enabled": learned_ranker_settings.enabled,
+                "model_dir": str(learned_ranker_settings.model_dir),
+                "weight": learned_ranker_settings.weight,
+            },
         }
         return build_reporting_summary(candidates, base_summary)

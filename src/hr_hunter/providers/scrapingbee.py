@@ -22,16 +22,71 @@ NON_PERSON_NAME_TOKENS = {
     "careers",
     "company",
     "contact",
+    "email",
+    "free",
+    "info",
     "leadership",
     "management",
     "our",
     "people",
+    "phone",
     "press",
     "profile",
+    "reveal",
     "speaker",
     "speakers",
     "staff",
     "team",
+    "works",
+}
+BIDI_CONTROL_RE = re.compile(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+NOISY_PROFILE_PATTERNS = (
+    "email & phone",
+    "contact info",
+    "contact details",
+    "reveal for free",
+    "email address",
+    "phone number",
+)
+DEFAULT_BLOCKED_HOSTNAMES = {
+    "contactout.com",
+    "datanyze.com",
+    "lusha.com",
+    "rocketreach.co",
+    "signalhire.com",
+}
+ROLE_LIKE_TOKENS = {
+    "analyst",
+    "analytics",
+    "associate",
+    "business",
+    "consultant",
+    "data",
+    "designer",
+    "developer",
+    "director",
+    "engineer",
+    "founder",
+    "head",
+    "lead",
+    "manager",
+    "marketing",
+    "officer",
+    "operations",
+    "owner",
+    "partner",
+    "president",
+    "principal",
+    "product",
+    "program",
+    "project",
+    "sales",
+    "scientist",
+    "senior",
+    "specialist",
+    "strategy",
+    "supervisor",
+    "vice",
 }
 
 DEFAULT_PROFILE_URL_SUBSTRINGS = [
@@ -182,6 +237,11 @@ class ScrapingBeeGoogleProvider(SearchProvider):
             )
             if str(value).strip()
         ]
+        self.blocked_hostnames = {
+            str(value).strip().lower().removeprefix("www.")
+            for value in settings.get("blocked_hostnames", sorted(DEFAULT_BLOCKED_HOSTNAMES))
+            if str(value).strip()
+        }
         raw_query_family_budgets = settings.get(
             "query_family_budgets",
             settings.get("max_queries_per_family", {}),
@@ -316,7 +376,10 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         if not lowered:
             return False
         parsed = urlparse(lowered if "://" in lowered else f"https://{lowered}")
+        host = parsed.netloc.lower().removeprefix("www.")
         path = parsed.path.lower()
+        if host in self.blocked_hostnames:
+            return False
         looks_profile_like = any(token in lowered for token in self.allowed_url_substrings) or any(
             token in path
             for token in (
@@ -348,6 +411,25 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         if any(token in lowered for token in self.blocked_url_substrings):
             return False
         return True
+
+    @staticmethod
+    def _sanitize_public_text(value: str) -> str:
+        cleaned = BIDI_CONTROL_RE.sub("", str(value or ""))
+        cleaned = cleaned.replace("…", "...")
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        cleaned = re.sub(r"\s+([|,;:])", r"\1", cleaned)
+        return cleaned.strip().strip("|-,.;:")
+
+    @classmethod
+    def _looks_like_contact_directory(cls, url: str, title: str, description: str) -> bool:
+        combined = " ".join(
+            cls._sanitize_public_text(value).lower() for value in (url, title, description) if value
+        )
+        if not combined:
+            return False
+        if any(pattern in combined for pattern in NOISY_PROFILE_PATTERNS):
+            return True
+        return bool(re.search(r"\bworks\s+as\b", combined) and re.search(r"\b(reveal|contact)\b", combined))
 
     @staticmethod
     def _looks_like_person_name(value: str) -> bool:
@@ -601,6 +683,186 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         if not current_company and not self._looks_historical_role_text(description):
             current_company = self._find_company_match(f"{title} {description} {url or ''}", brief)
         if not current_title or normalize_text(current_title) == normalize_text(title):
+            inferred_title = self._infer_title_from_description(description, brief, current_company)
+            if inferred_title:
+                current_title = inferred_title
+        if not self._looks_like_person_name(name_guess):
+            return None
+
+        return CandidateProfile(
+            full_name=name_guess,
+            current_title=current_title or title,
+            current_company=current_company,
+            location_name=location_name,
+            linkedin_url=url if url and "linkedin.com" in url else None,
+            source=self.name,
+            source_url=url,
+            summary=description,
+            raw=result,
+        )
+
+    def _is_profile_url(self, url: str) -> bool:
+        lowered = url.lower().strip()
+        if not lowered:
+            return False
+        parsed = urlparse(lowered if "://" in lowered else f"https://{lowered}")
+        host = parsed.netloc.lower().removeprefix("www.")
+        path = parsed.path.lower()
+        if host in self.blocked_hostnames:
+            return False
+        looks_profile_like = any(token in lowered for token in self.allowed_url_substrings) or any(
+            token in path
+            for token in (
+                "/people/",
+                "/person/",
+                "/profile",
+                "/profiles/",
+                "/bio",
+                "/biography",
+                "/speaker",
+                "/speakers/",
+                "/staff/",
+                "/team/",
+                "/leadership/",
+                "/management/",
+                "/news/",
+                "/press/",
+                "/articles/",
+                "/awards/",
+                "/directory/",
+                "/member/",
+                "/members/",
+                "/committee/",
+                "/board/",
+            )
+        )
+        if not looks_profile_like:
+            return False
+        if any(token in lowered for token in self.blocked_url_substrings):
+            return False
+        return True
+
+    @staticmethod
+    def _looks_like_person_name(value: str) -> bool:
+        value = ScrapingBeeGoogleProvider._sanitize_public_text(value)
+        lowered_value = value.lower()
+        if any(pattern in lowered_value for pattern in NOISY_PROFILE_PATTERNS):
+            return False
+        if re.search(r"\bworks\s+as\b", lowered_value):
+            return False
+        tokens = [token for token in re.split(r"[^A-Za-z'.-]+", value.strip()) if token]
+        if len(tokens) < 2 or len(tokens) > 5:
+            return False
+        lowered = {token.lower().strip(".") for token in tokens}
+        if lowered.intersection(NON_PERSON_NAME_TOKENS):
+            return False
+        if lowered.intersection(ROLE_LIKE_TOKENS):
+            return False
+        return len([token for token in tokens if any(char.isalpha() for char in token)]) >= 2
+
+    @staticmethod
+    def _clean_title_fragment(value: str) -> str:
+        cleaned = ScrapingBeeGoogleProvider._sanitize_public_text(value)
+        return re.sub(r"\s+", " ", cleaned)
+
+    def _parse_title_fields(self, raw_title: str, url: str) -> tuple[str, str, str]:
+        title = self._sanitize_public_text(raw_title)
+        name = title.split(" - ")[0].split(" | ")[0].strip()
+        current_title = title
+        current_company = ""
+
+        pipe_segments = [self._clean_title_fragment(segment) for segment in title.split("|") if self._clean_title_fragment(segment)]
+        if len(pipe_segments) >= 3:
+            name = pipe_segments[0]
+            current_title = pipe_segments[1]
+            current_company = pipe_segments[2]
+
+        dash_segments = [self._clean_title_fragment(segment) for segment in title.split(" - ") if self._clean_title_fragment(segment)]
+        if len(dash_segments) >= 3:
+            name = dash_segments[0]
+            current_title = " - ".join(dash_segments[1:-1]).strip() or dash_segments[1]
+            current_company = dash_segments[-1]
+        elif " - " in title:
+            _, remainder = title.split(" - ", 1)
+            current_title = self._clean_title_fragment(remainder)
+
+        trailing_pipe_segments = [
+            self._clean_title_fragment(segment)
+            for segment in current_title.split("|")
+            if self._clean_title_fragment(segment)
+        ]
+        if len(trailing_pipe_segments) >= 2:
+            current_title = trailing_pipe_segments[0]
+            current_company = current_company or trailing_pipe_segments[1]
+
+        for delimiter in (" at ", " @ "):
+            if delimiter in current_title:
+                role, company = current_title.rsplit(delimiter, 1)
+                current_title = self._clean_title_fragment(role)
+                current_company = self._clean_title_fragment(company)
+                break
+
+        if normalize_text(current_company) in {"linkedin", "the org"}:
+            current_company = ""
+
+        if not current_company:
+            current_company = self._extract_org_from_url(url)
+
+        return (
+            self._clean_title_fragment(name),
+            self._clean_title_fragment(current_title),
+            self._clean_title_fragment(current_company),
+        )
+
+    def _should_infer_current_title(
+        self,
+        raw_title: str,
+        current_title: str,
+        current_company: str,
+        brief: SearchBrief,
+    ) -> bool:
+        normalized_current_title = normalize_text(current_title)
+        if not normalized_current_title:
+            return True
+        if normalized_current_title == normalize_text(raw_title):
+            return True
+
+        company_like_values = unique_preserving_order(
+            [
+                current_company,
+                *brief.company_targets,
+                *[alias for aliases in brief.company_aliases.values() for alias in aliases],
+            ]
+        )
+        for value in company_like_values:
+            normalized_company = normalize_text(value)
+            if not normalized_company:
+                continue
+            if normalized_current_title == normalized_company:
+                return True
+            if len(normalized_current_title.split()) <= 3 and (
+                normalized_current_title in normalized_company or normalized_company in normalized_current_title
+            ):
+                return True
+        return False
+
+    def _candidate_from_result(
+        self,
+        result: Dict[str, Any],
+        brief: SearchBrief,
+    ) -> CandidateProfile | None:
+        title = self._sanitize_public_text(result.get("title", ""))
+        description = self._sanitize_public_text(result.get("description") or result.get("snippet") or "")
+        url = result.get("url") or result.get("link")
+        if self._looks_like_contact_directory(url or "", title, description):
+            return None
+
+        name_guess, current_title, current_company = self._parse_title_fields(title, url or "")
+        location_name = self._extract_location_name(brief, f"{title} {description}")
+
+        if not current_company and not self._looks_historical_role_text(description):
+            current_company = self._find_company_match(f"{title} {description} {url or ''}", brief)
+        if self._should_infer_current_title(title, current_title, current_company, brief):
             inferred_title = self._infer_title_from_description(description, brief, current_company)
             if inferred_title:
                 current_title = inferred_title

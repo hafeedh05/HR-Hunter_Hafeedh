@@ -1,8 +1,17 @@
 from pathlib import Path
 
+import csv
+import json
+
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.models import CandidateProfile, EvidenceRecord, SearchRunReport
-from hr_hunter.output import build_reporting_summary, hydrate_candidate_reporting, load_report, write_report
+from hr_hunter.output import (
+    build_reporting_summary,
+    candidate_to_row,
+    hydrate_candidate_reporting,
+    load_report,
+    write_report,
+)
 from hr_hunter.scoring import score_candidate
 
 
@@ -175,5 +184,73 @@ def test_score_candidate_treats_country_only_ireland_as_imprecise_location() -> 
 
     scored = score_candidate(candidate, brief)
 
-    assert scored.location_precision_bucket == "country_only_ireland"
+    assert scored.location_precision_bucket == "country_only"
     assert scored.verification_status != "verified"
+
+
+def test_candidate_row_includes_structured_feature_and_anchor_scores() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-row-shape-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Dublin",
+                "country": "Ireland",
+            },
+            "anchors": {
+                "title": "critical",
+                "company": "critical",
+                "location": "important",
+            },
+            "industry_keywords": ["FMCG"],
+        }
+    )
+    scored = score_candidate(
+        CandidateProfile(
+            full_name="Jane Search",
+            current_title="Senior Brand Manager",
+            current_company="Unilever",
+            location_name="Dublin, Ireland",
+            summary="Senior FMCG brand leader.",
+        ),
+        brief,
+    )
+
+    row = candidate_to_row(scored)
+    feature_scores = json.loads(row["feature_scores"])
+    anchor_scores = json.loads(row["anchor_scores"])
+
+    assert "title_similarity" in feature_scores
+    assert "company_match" in feature_scores
+    assert "location_match" in feature_scores
+    assert "title_similarity" in anchor_scores
+    assert row["ranking_model_version"] == "heuristic-anchor-ranker-v1"
+
+
+def test_write_report_can_limit_csv_rows_without_truncating_json(tmp_path: Path) -> None:
+    report = SearchRunReport(
+        run_id="csv-limit-report",
+        brief_id="brief",
+        dry_run=False,
+        generated_at="2026-04-03T00:00:00+00:00",
+        provider_results=[],
+        candidates=[
+            CandidateProfile(full_name="Candidate One", verification_status="verified", score=91.0),
+            CandidateProfile(full_name="Candidate Two", verification_status="review", score=66.0),
+            CandidateProfile(full_name="Candidate Three", verification_status="reject", score=24.0),
+        ],
+        summary={},
+    )
+
+    json_path, csv_path = write_report(report, tmp_path, csv_candidate_limit=2)
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(payload["candidates"]) == 3
+    assert len(rows) == 2
+    assert rows[0]["full_name"] == "Candidate One"
+    assert rows[1]["full_name"] == "Candidate Two"

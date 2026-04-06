@@ -33,11 +33,23 @@ class SearchBrief:
     scope_keywords: List[str]
     seniority_levels: List[str]
     minimum_years_experience: Optional[int]
+    maximum_years_experience: Optional[int]
     result_target_min: int
     result_target_max: int
     max_profiles: int
     industry_keywords: List[str] = field(default_factory=list)
     exclude_title_keywords: List[str] = field(default_factory=list)
+    exclude_company_keywords: List[str] = field(default_factory=list)
+    location_targets: List[str] = field(default_factory=list)
+    hiring_company_name: str = ""
+    hiring_company_aliases: List[str] = field(default_factory=list)
+    candidate_interest_required: bool = False
+    company_match_mode: str = "both"
+    years_mode: str = "range"
+    years_target: Optional[int] = None
+    years_tolerance: int = 0
+    jd_breakdown: Dict[str, Any] = field(default_factory=dict)
+    anchor_weights: Dict[str, float] = field(default_factory=dict)
     provider_settings: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     document_text: str = ""
 
@@ -113,6 +125,21 @@ class CandidateProfile:
     evidence_freshness_year: Optional[int] = None
     current_function_fit: float = 0.0
     current_fmcg_fit: float = 0.0
+    parser_confidence: float = 0.0
+    evidence_quality_score: float = 0.0
+    company_interest_score: float = 0.0
+    title_similarity_score: float = 0.0
+    company_match_score: float = 0.0
+    location_match_score: float = 0.0
+    skill_overlap_score: float = 0.0
+    industry_fit_score: float = 0.0
+    years_fit_score: float = 0.0
+    years_experience_gap: Optional[float] = None
+    semantic_similarity_score: float = 0.0
+    reranker_score: float = 0.0
+    ranking_model_version: str = ""
+    feature_scores: Dict[str, float] = field(default_factory=dict)
+    anchor_scores: Dict[str, float] = field(default_factory=dict)
     verification_notes: List[str] = field(default_factory=list)
     search_strategies: List[str] = field(default_factory=list)
     evidence_records: List[EvidenceRecord] = field(default_factory=list)

@@ -1,0 +1,171 @@
+id: senior-data-analyst-uae
+role_title: Senior Data Analyst
+brief_summary: >
+  UAE-based search for a Senior Data Analyst who can turn product, commercial,
+  and operational data into clear business decisions. Prioritize candidates
+  with strong SQL and Python fundamentals, hands-on dashboarding, KPI design,
+  experimentation or forecasting exposure, and experience partnering with
+  product, growth, finance, or operations stakeholders. The ideal candidate is
+  already operating at senior individual-contributor level rather than people
+  manager level.
+titles:
+  - Senior Data Analyst
+  - Data Analyst
+  - Senior Analytics Analyst
+  - Business Analyst
+  - Product Analyst
+  - BI Analyst
+  - Business Intelligence Analyst
+title_keywords:
+  - data analyst
+  - analytics
+  - business intelligence
+  - product analytics
+  - commercial analytics
+  - dashboarding
+company_targets:
+  - Careem
+  - noon
+  - dubizzle
+  - Property Finder
+  - talabat
+  - Bayzat
+  - Emirates
+  - Emirates NBD
+  - e&
+  - G42
+  - Presight
+  - ADNOC
+company_aliases:
+  noon:
+    - noon.com
+  dubizzle:
+    - Dubizzle Group
+  Emirates:
+    - Emirates Group
+  e&:
+    - Etisalat
+    - Etisalat by e&
+    - etisalat
+  Presight:
+    - Presight AI
+  ADNOC:
+    - Abu Dhabi National Oil Company
+geography:
+  location_name: Dubai, United Arab Emirates
+  country: United Arab Emirates
+  center_latitude: 25.2048
+  center_longitude: 55.2708
+  radius_miles: 95
+  location_hints:
+    - Dubai
+    - Abu Dhabi
+    - Sharjah
+    - Ajman
+    - Al Ain
+    - Ras Al Khaimah
+    - Fujairah
+    - United Arab Emirates
+    - UAE
+required_keywords:
+  - sql
+  - python
+  - dashboard
+  - stakeholder management
+  - kpi
+preferred_keywords:
+  - tableau
+  - power bi
+  - experimentation
+  - a/b testing
+  - forecasting
+  - cohort analysis
+  - product analytics
+  - business intelligence
+portfolio_keywords: []
+commercial_keywords:
+  - growth
+  - revenue
+  - conversion
+  - retention
+  - performance
+leadership_keywords:
+  - stakeholder
+  - cross-functional
+scope_keywords:
+  - business insights
+  - reporting
+  - dashboarding
+  - metrics
+industry_keywords:
+  - analytics
+  - data platform
+  - digital product
+  - marketplace
+  - ecommerce
+  - fintech
+exclude_title_keywords:
+  - intern
+  - internship
+  - recruiter
+  - talent acquisition
+  - human resources
+  - engineer
+  - engineering manager
+  - data engineer
+  - machine learning engineer
+  - data scientist
+  - lead
+  - head
+  - director
+  - vice president
+  - principal
+seniority_levels:
+  - senior
+  - specialist
+  - analyst
+minimum_years_experience: 4
+maximum_years_experience: 9
+result_target_min: 20
+result_target_max: 30
+max_profiles: 50
+anchors:
+  title: critical
+  skills: critical
+  location: important
+  company: preferred
+  years: important
+  function: important
+  evidence: preferred
+provider_settings:
+  reranker:
+    enabled: true
+    model_name: BAAI/bge-reranker-v2-m3
+    top_n: 30
+    weight: 0.35
+  scrapingbee_google:
+    pages_per_query: 1
+    country_code: ae
+    language: en
+    light_request: true
+    request_timeout_seconds: 12
+    max_retries: 1
+    retry_backoff_seconds: 2.0
+    include_country_only_queries: false
+    include_relaxed_queries: true
+    max_company_aliases_per_query: 2
+    exclude_query_terms:
+      - jobs
+      - hiring
+      - recruiter
+      - talent acquisition
+      - careers
+      - vacancy
+      - internship
+    exclude_site_terms:
+      - -site:linkedin.com/jobs
+      - -site:ae.linkedin.com/jobs
+      - -site:linkedin.com/company
+      - -site:ae.linkedin.com/company
+      - -site:linkedin.com/posts
+      - -site:ae.linkedin.com/posts

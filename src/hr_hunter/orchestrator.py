@@ -178,8 +178,10 @@ def _candidate_passes_strategy_filters(candidate: CandidateProfile, filters: Dic
     min_function_fit = float(filters.get("min_current_function_fit", 0.0) or 0.0)
     if candidate.current_function_fit < min_function_fit:
         return False
-    min_fmcg_fit = float(filters.get("min_current_fmcg_fit", 0.0) or 0.0)
-    if candidate.current_fmcg_fit < min_fmcg_fit:
+    min_industry_fit = float(
+        filters.get("min_industry_fit", filters.get("min_current_fmcg_fit", 0.0)) or 0.0
+    )
+    if candidate.industry_fit_score < min_industry_fit and candidate.current_fmcg_fit < min_industry_fit:
         return False
     return True
 

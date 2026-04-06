@@ -205,7 +205,7 @@ def test_build_queries_adds_location_probe_for_imprecise_location() -> None:
         current_title="Senior Brand Manager",
         current_company="Unilever",
         location_name="Ireland",
-        location_precision_bucket="country_only_ireland",
+        location_precision_bucket="country_only",
     )
 
     queries = verifier.build_queries(candidate, brief)
@@ -242,7 +242,7 @@ def test_build_queries_adds_site_targeted_location_probe_when_configured() -> No
         current_title="Senior Brand Manager",
         current_company="Unilever",
         location_name="Ireland",
-        location_precision_bucket="country_only_ireland",
+        location_precision_bucket="country_only",
     )
 
     queries = verifier.build_queries(candidate, brief)
@@ -278,7 +278,7 @@ def test_build_company_location_queries_use_location_sites() -> None:
         current_title="Senior Brand Manager",
         current_company="Unilever",
         location_name="Ireland",
-        location_precision_bucket="country_only_ireland",
+        location_precision_bucket="country_only",
     )
 
     queries = verifier.build_company_location_queries(candidate, brief)
@@ -571,9 +571,9 @@ def test_apply_evidence_caps_country_only_ireland_from_verified() -> None:
 
     updated = verifier.apply_evidence(candidate, brief, evidence)
 
-    assert updated.location_precision_bucket == "country_only_ireland"
+    assert updated.location_precision_bucket == "country_only"
     assert updated.verification_status != "verified"
-    assert "precise Ireland location" in getattr(updated, "cap_reasons")
+    assert "precise location" in getattr(updated, "cap_reasons")
 
 
 def test_apply_evidence_promotes_precise_location_probe_result() -> None:
@@ -625,7 +625,7 @@ def test_apply_evidence_promotes_precise_location_probe_result() -> None:
 
     assert updated.precise_location_confirmed is True
     assert updated.location_name == "Dublin, Ireland"
-    assert updated.location_precision_bucket == "named_ireland_location"
+    assert updated.location_precision_bucket == "named_target_location"
     assert updated.verification_status == "verified"
 
 
@@ -689,5 +689,5 @@ def test_apply_evidence_refines_country_only_ireland_with_company_office_locatio
 
     assert updated.precise_location_confirmed is True
     assert updated.location_name == "Citywest, Ireland"
-    assert updated.location_precision_bucket == "named_ireland_location"
-    assert "precise Ireland location inferred from company office/contact evidence" in updated.verification_notes
+    assert updated.location_precision_bucket == "named_target_location"
+    assert "precise location inferred from company office/contact evidence" in updated.verification_notes

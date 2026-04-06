@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HR Hunter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body data-theme="bright">
+  <div class="backdrop" id="nav-backdrop" hidden></div>
+  <div class="backdrop developer-backdrop" id="developer-backdrop" hidden></div>
+
+  <aside class="menu-drawer" id="nav-drawer" hidden aria-label="Navigation menu">
+    <div class="drawer-header">
+      <div class="drawer-brand">
+        <img class="drawer-logo" src="/assets/cypher-logo.png" alt="HR Hunter logo">
+        <div>
+          <p class="eyebrow">HR Hunter</p>
+          <h2>Menu</h2>
+        </div>
+      </div>
+      <button type="button" class="icon-button" id="drawer-close" aria-label="Close menu">x</button>
+    </div>
+
+    <nav class="drawer-nav">
+      <button type="button" class="nav-button active" data-tab="search">Recruiter</button>
+      <button type="button" class="nav-button" data-tab="results">Results</button>
+      <button type="button" class="nav-button" data-tab="feedback">Feedback</button>
+      <button type="button" class="nav-button" data-tab="settings">Settings</button>
+    </nav>
+  </aside>
+
+  <aside class="developer-panel" id="developer-panel" hidden aria-label="Developer tools">
+    <div class="drawer-header">
+      <div>
+        <p class="eyebrow">Owner tools</p>
+        <h2>Temporary developer panel</h2>
+        <p class="panel-note">Session-only controls for demos, providers, and debug output.</p>
+      </div>
+      <button type="button" class="icon-button" id="developer-close" aria-label="Close developer panel">x</button>
+    </div>
+
+    <div class="developer-stack">
+      <section class="panel-card compact-card">
+        <div class="section-title-row">
+          <div>
+            <p class="eyebrow">Demo tools</p>
+            <h3>Example recruiter data</h3>
+          </div>
+        </div>
+        <div class="inline-actions">
+          <button type="button" class="ghost-button" id="load-example-button">Load UAE demo JD</button>
+          <button type="button" class="ghost-button" id="reset-brief-button">Reset brief</button>
+        </div>
+      </section>
+
+      <section class="panel-card compact-card">
+        <div class="section-title-row">
+          <div>
+            <p class="eyebrow">Search controls</p>
+            <h3>Providers and models</h3>
+          </div>
+        </div>
+        <div class="provider-box" id="provider-box"></div>
+        <div class="field-row two-up">
+          <label class="toggle-card" for="reranker-enabled">
+            <span>Use HF reranker</span>
+            <input id="reranker-enabled" name="reranker_enabled" type="checkbox" checked>
+          </label>
+          <label class="toggle-card" for="learned-ranker-enabled">
+            <span>Use learned ranker</span>
+            <input id="learned-ranker-enabled" name="learned_ranker_enabled" type="checkbox">
+          </label>
+        </div>
+      </section>
+
+      <section class="panel-card compact-card">
+        <div class="section-title-row">
+          <div>
+            <p class="eyebrow">Debug</p>
+            <h3>Current payload</h3>
+          </div>
+        </div>
+        <pre class="debug-box" id="debug-brief">No brief collected yet.</pre>
+      </section>
+
+      <section class="panel-card compact-card">
+        <div class="section-title-row">
+          <div>
+            <p class="eyebrow">Debug</p>
+            <h3>Search summary</h3>
+          </div>
+        </div>
+        <pre class="debug-box" id="debug-summary">No search response yet.</pre>
+      </section>
+
+      <section class="panel-card compact-card">
+        <div class="section-title-row">
+          <div>
+            <p class="eyebrow">Debug</p>
+            <h3>Provider diagnostics</h3>
+          </div>
+        </div>
+        <pre class="debug-box" id="debug-providers">No provider diagnostics yet.</pre>
+      </section>
+    </div>
+  </aside>
+
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-cluster">
+        <button type="button" class="menu-button" id="menu-toggle" aria-label="Open menu">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+        <img class="brand-logo" id="brand-logo" src="/assets/cypher-logo.png" alt="HR Hunter logo">
+        <div class="brand-copy">
+          <p class="eyebrow">HR Hunter</p>
+          <h1>Recruiter workspace</h1>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button type="button" class="ghost-button" id="header-breakdown-button">Break down JD</button>
+        <button type="button" class="primary-button" id="header-search-button">Run search</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="hero-card">
+        <div>
+          <p class="eyebrow">Active view</p>
+          <h2 id="tab-title">Recruiter</h2>
+          <p id="tab-description" class="workspace-copy">Build the brief first, then review ranked candidates and feedback.</p>
+        </div>
+        <div class="status-card">
+          <strong id="status-line">Loading workspace...</strong>
+          <p id="status-detail">Preparing the UI.</p>
+        </div>
+      </section>
+
+      <section class="tab-panel active" id="tab-search" data-tab-panel="search">
+        <div class="panel-grid">
+          <section class="panel-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Role brief</p>
+                <h3>Titles and experience</h3>
+              </div>
+            </div>
+
+            <label class="field-label" for="role-title">Primary job title</label>
+            <input id="role-title" name="role_title" type="text" placeholder="Senior Data Analyst">
+
+            <div class="field-stack">
+              <span class="field-label">Target titles</span>
+              <div class="token-field" id="titles-field" data-placeholder="Type a title and press Enter"></div>
+            </div>
+
+            <div class="field-row three-up">
+              <div>
+                <label class="field-label" for="years-mode">Experience mode</label>
+                <select id="years-mode" name="years_mode">
+                  <option value="plus_minus">+/- around years</option>
+                  <option value="at_least">At least</option>
+                  <option value="at_most">At most</option>
+                  <option value="range">Range</option>
+                </select>
+              </div>
+              <div>
+                <label class="field-label" for="years-value">Years</label>
+                <input id="years-value" name="years_value" type="number" min="0" placeholder="6">
+              </div>
+              <div>
+                <label class="field-label" for="years-tolerance">+/-</label>
+                <input id="years-tolerance" name="years_tolerance" type="number" min="0" value="2">
+              </div>
+            </div>
+
+            <div class="field-row three-up">
+              <div>
+                <label class="field-label" for="min-years">Min years</label>
+                <input id="min-years" name="minimum_years_experience" type="number" min="0" placeholder="5">
+              </div>
+              <div>
+                <label class="field-label" for="max-years">Max years</label>
+                <input id="max-years" name="maximum_years_experience" type="number" min="0" placeholder="8">
+              </div>
+              <div>
+                <label class="field-label" for="radius-miles">City radius (miles)</label>
+                <input id="radius-miles" name="radius_miles" type="number" min="0" value="25">
+              </div>
+            </div>
+          </section>
+
+          <section class="panel-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Location</p>
+                <h3>Countries, regions, and cities</h3>
+              </div>
+            </div>
+
+            <div class="field-stack">
+              <span class="field-label">Countries</span>
+              <div class="token-field" id="countries-field" data-placeholder="Add a country"></div>
+            </div>
+
+            <div class="field-stack">
+              <span class="field-label">Continents or regions</span>
+              <div class="token-field" id="continents-field" data-placeholder="Add a continent or region"></div>
+            </div>
+
+            <div class="field-stack">
+              <span class="field-label">Cities</span>
+              <div class="token-field" id="cities-field" data-placeholder="Add a city"></div>
+            </div>
+          </section>
+
+          <section class="panel-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Companies</p>
+                <h3>Target employers</h3>
+              </div>
+            </div>
+
+            <div class="field-stack">
+              <span class="field-label">Target companies</span>
+              <div class="token-field" id="companies-field" data-placeholder="Add a company"></div>
+            </div>
+
+            <label class="field-label" for="company-match-mode">Company match mode</label>
+            <select id="company-match-mode" name="company_match_mode">
+              <option value="both">Works there now or before</option>
+              <option value="current_only">Works there now only</option>
+              <option value="past_only">Worked there before only</option>
+            </select>
+
+            <p class="panel-note">The default counts current and past company matches together.</p>
+          </section>
+
+          <section class="panel-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Signals</p>
+                <h3>Skills and exclusions</h3>
+              </div>
+            </div>
+
+            <div class="field-stack">
+              <span class="field-label">Must-have skills</span>
+              <div class="token-field" id="must-have-field" data-placeholder="Add a must-have skill"></div>
+            </div>
+
+            <div class="field-stack">
+              <span class="field-label">Nice-to-have skills</span>
+              <div class="token-field" id="nice-to-have-field" data-placeholder="Add a preferred skill"></div>
+            </div>
+
+            <div class="field-stack">
+              <span class="field-label">Industry or domain</span>
+              <div class="token-field" id="industry-field" data-placeholder="Add an industry keyword"></div>
+            </div>
+
+            <div class="field-stack">
+              <span class="field-label">Exclude titles</span>
+              <div class="token-field" id="exclude-titles-field" data-placeholder="Add a title to exclude"></div>
+            </div>
+
+            <div class="field-stack">
+              <span class="field-label">Exclude companies</span>
+              <div class="token-field" id="exclude-companies-field" data-placeholder="Add a company to exclude"></div>
+            </div>
+          </section>
+
+          <section class="panel-card wide-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Job description</p>
+                <h3>Break the JD down before search</h3>
+              </div>
+            </div>
+            <label class="field-label" for="job-description">Job description</label>
+            <textarea id="job-description" name="job_description" rows="10" placeholder="Paste the JD here and break it down into the key experience points before search runs."></textarea>
+            <div class="breakdown-shell">
+              <div>
+                <p class="field-label">JD breakdown</p>
+                <div id="jd-breakdown" class="breakdown-empty">No JD breakdown yet. Paste a job description and use Break down JD.</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel-card wide-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Anchors</p>
+                <h3>What matters most?</h3>
+              </div>
+              <p class="panel-note">Choose the criteria that should carry the most weight in grading.</p>
+            </div>
+            <div class="anchor-grid" id="anchor-grid"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-results" data-tab-panel="results">
+        <div class="panel-grid">
+          <section class="panel-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Run summary</p>
+                <h3>Score bands</h3>
+              </div>
+            </div>
+            <section class="summary-grid" id="summary-grid">
+              <article class="summary-card empty">
+                <p class="eyebrow">No run yet</p>
+                <strong>0</strong>
+                <h3>Search results will appear here after a run.</h3>
+              </article>
+            </section>
+          </section>
+
+          <section class="panel-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Exports</p>
+                <h3>CSV output</h3>
+              </div>
+            </div>
+            <section class="artifacts-panel" id="artifacts-panel">
+              <p class="panel-note">Run a search to generate the CSV export.</p>
+            </section>
+          </section>
+
+          <section class="panel-card wide-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Candidates</p>
+                <h3>Ranked results</h3>
+              </div>
+              <p class="panel-note">Cards show real scored metrics, anchor contributions, and recruiter feedback controls.</p>
+            </div>
+            <section class="results-list" id="candidate-results">
+              <article class="empty-card">
+                <h4>No candidates yet</h4>
+                <p>Run a search from the Recruiter tab to populate this view.</p>
+              </article>
+            </section>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-feedback" data-tab-panel="feedback">
+        <div class="panel-grid">
+          <section class="panel-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Recruiter identity</p>
+                <h3>Feedback owner</h3>
+              </div>
+            </div>
+            <div class="field-row three-up">
+              <div>
+                <label class="field-label" for="recruiter-id">Recruiter ID</label>
+                <input id="recruiter-id" type="text" placeholder="abdul">
+              </div>
+              <div>
+                <label class="field-label" for="recruiter-name">Recruiter name</label>
+                <input id="recruiter-name" type="text" placeholder="Abdul">
+              </div>
+              <div>
+                <label class="field-label" for="team-id">Team ID</label>
+                <input id="team-id" type="text" placeholder="growth-hiring">
+              </div>
+            </div>
+          </section>
+
+          <section class="panel-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Training</p>
+                <h3>Learned ranker</h3>
+              </div>
+            </div>
+            <div class="field-row three-up">
+              <div>
+                <label class="field-label" for="train-estimators">Ranker estimators</label>
+                <input id="train-estimators" type="number" min="2" value="80">
+              </div>
+              <div>
+                <label class="field-label" for="train-num-leaves">Ranker num leaves</label>
+                <input id="train-num-leaves" type="number" min="2" value="31">
+              </div>
+              <div class="train-action-box">
+                <button type="button" class="secondary-button" id="train-ranker-button">Train learned ranker</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel-card wide-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Run reference</p>
+                <h3>Feedback context</h3>
+              </div>
+            </div>
+            <div id="feedback-summary" class="info-stack">
+              <p class="panel-note">Once a search finishes, this tab will show the active report reference and feedback database.</p>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-settings" data-tab-panel="settings">
+        <div class="panel-grid">
+          <section class="panel-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Appearance</p>
+                <h3>Theme and paths</h3>
+              </div>
+            </div>
+
+            <span class="field-label">Theme</span>
+            <div class="theme-options" id="theme-options"></div>
+
+            <div class="field-stack">
+              <label class="field-label" for="row-limit">Candidate row limit</label>
+              <input id="row-limit" type="number" min="1" value="20">
+            </div>
+
+            <div class="field-stack">
+              <label class="field-label" for="feedback-db">Feedback DB path</label>
+              <input id="feedback-db" name="feedback_db" type="text">
+            </div>
+
+            <div class="field-stack">
+              <label class="field-label" for="model-dir">Model directory</label>
+              <input id="model-dir" name="model_dir" type="text">
+            </div>
+
+            <div class="field-stack">
+              <label class="field-label" for="output-dir">Output directory</label>
+              <input id="output-dir" name="output_dir" type="text">
+            </div>
+
+            <div class="settings-actions">
+              <button type="button" class="ghost-button" id="reset-settings-button">Reset defaults</button>
+              <button type="button" class="primary-button" id="save-settings-button">Save settings</button>
+            </div>
+          </section>
+
+          <section class="panel-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Support</p>
+                <h3>Support or inquiry</h3>
+              </div>
+            </div>
+
+            <label class="field-label" for="support-name">Your name</label>
+            <input id="support-name" type="text" placeholder="Abdul">
+
+            <label class="field-label" for="support-contact">Contact</label>
+            <input id="support-contact" type="text" placeholder="email or phone (optional)">
+
+            <label class="field-label" for="support-topic">Topic</label>
+            <input id="support-topic" type="text" placeholder="What do you need help with?">
+
+            <label class="field-label" for="support-message">Message</label>
+            <textarea id="support-message" rows="6" placeholder="Describe the issue, blocker, or question."></textarea>
+
+            <div class="settings-actions">
+              <button type="button" class="secondary-button" id="support-submit-button">Send support request</button>
+            </div>
+            <p id="support-status" class="panel-note"></p>
+          </section>
+
+          <section class="panel-card">
+            <div class="section-title-row">
+              <div>
+                <p class="eyebrow">Feature ideas</p>
+                <h3>Suggest a feature</h3>
+              </div>
+            </div>
+
+            <label class="field-label" for="feature-title">Feature title</label>
+            <input id="feature-title" type="text" placeholder="Suggested feature">
+
+            <label class="field-label" for="feature-why">Why it matters</label>
+            <input id="feature-why" type="text" placeholder="What pain point does it solve?">
+
+            <label class="field-label" for="feature-message">Details</label>
+            <textarea id="feature-message" rows="6" placeholder="Describe how the feature should work."></textarea>
+
+            <div class="settings-actions">
+              <button type="button" class="secondary-button" id="feature-submit-button">Send feature request</button>
+            </div>
+            <p id="feature-status" class="panel-note"></p>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <button type="button" class="owner-fab" id="owner-fab" hidden>Owner</button>
+
+  <template id="candidate-template">
+    <article class="candidate-card">
+      <div class="candidate-head">
+        <div>
+          <p class="candidate-name"></p>
+          <p class="candidate-meta"></p>
+          <div class="candidate-links"></div>
+        </div>
+        <div class="candidate-score-stack">
+          <span class="status-badge"></span>
+          <strong class="candidate-score"></strong>
+          <p class="candidate-model"></p>
+        </div>
+      </div>
+
+      <div class="metric-grid"></div>
+
+      <div class="candidate-breakdown">
+        <section class="detail-card">
+          <p class="field-label">Anchor contribution</p>
+          <div class="contribution-list"></div>
+        </section>
+        <section class="detail-card">
+          <p class="field-label">Why this score</p>
+          <p class="candidate-notes"></p>
+          <div class="candidate-tags"></div>
+        </section>
+      </div>
+
+      <div class="feedback-grid">
+        <div>
+          <label class="field-label">Feedback action</label>
+          <select class="feedback-action"></select>
+        </div>
+        <div>
+          <label class="field-label">Reason code</label>
+          <input class="feedback-reason" type="text" placeholder="optional structured reason">
+        </div>
+        <div class="feedback-note-box">
+          <label class="field-label">Note</label>
+          <input class="feedback-note" type="text" placeholder="optional recruiter note">
+        </div>
+        <div class="feedback-save-box">
+          <button type="button" class="secondary-button feedback-save">Save feedback</button>
+          <p class="feedback-status"></p>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

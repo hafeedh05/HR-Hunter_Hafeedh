@@ -12,6 +12,50 @@ COMPANY_SUFFIX_PATTERN = re.compile(
     r"\b(inc|llc|ltd|limited|plc|corp|corporation|co|company|group)\b",
     re.IGNORECASE,
 )
+ANCHOR_PRIORITY_WEIGHTS = {
+    "critical": 1.0,
+    "important": 0.75,
+    "preferred": 0.6,
+    "nice_to_have": 0.4,
+}
+ANCHOR_NAME_ALIASES = {
+    "title": "title_similarity",
+    "titles": "title_similarity",
+    "role": "title_similarity",
+    "company": "company_match",
+    "companies": "company_match",
+    "target_company": "company_match",
+    "target_companies": "company_match",
+    "company_interest": "company_interest",
+    "candidate_interest": "company_interest",
+    "interest": "company_interest",
+    "interest_in_our_company": "company_interest",
+    "location": "location_match",
+    "geography": "location_match",
+    "years": "years_fit",
+    "years_experience": "years_fit",
+    "skills": "skill_overlap",
+    "keywords": "skill_overlap",
+    "industry": "industry_fit",
+    "sector": "industry_fit",
+    "parser": "parser_confidence",
+    "evidence": "evidence_quality",
+    "function": "current_function_fit",
+    "semantic": "semantic_similarity",
+}
+DEFAULT_ANCHOR_WEIGHTS = {
+    "title_similarity": 1.0,
+    "company_match": 0.95,
+    "company_interest": 0.0,
+    "location_match": 0.9,
+    "skill_overlap": 0.85,
+    "industry_fit": 0.7,
+    "years_fit": 0.6,
+    "current_function_fit": 0.8,
+    "parser_confidence": 0.35,
+    "evidence_quality": 0.35,
+    "semantic_similarity": 0.0,
+}
 
 
 def normalize_text(value: str) -> str:
@@ -107,13 +151,138 @@ def infer_title_keywords(titles: List[str]) -> List[str]:
     return unique_preserving_order(keywords)
 
 
+def coerce_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_company_match_mode(value: Any) -> str:
+    lowered = normalize_text(str(value or "both")).replace(" ", "_")
+    aliases = {
+        "both": "both",
+        "current": "current_only",
+        "current_only": "current_only",
+        "current_company_only": "current_only",
+        "past": "past_only",
+        "past_only": "past_only",
+        "history": "past_only",
+        "history_only": "past_only",
+        "used_to_work": "past_only",
+    }
+    return aliases.get(lowered, "both")
+
+
+def normalize_years_mode(value: Any) -> str:
+    lowered = normalize_text(str(value or "range")).replace(" ", "_")
+    aliases = {
+        "at_least": "at_least",
+        "minimum": "at_least",
+        "min": "at_least",
+        "at_most": "at_most",
+        "maximum": "at_most",
+        "max": "at_most",
+        "range": "range",
+        "between": "range",
+        "plus_minus": "plus_minus",
+        "tolerance": "plus_minus",
+        "exact": "plus_minus",
+    }
+    return aliases.get(lowered, "range")
+
+
+def normalize_anchor_name(value: str) -> str:
+    lowered = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
+    return ANCHOR_NAME_ALIASES.get(lowered, lowered)
+
+
+def _brief_anchor_defaults(config: Dict[str, Any]) -> Dict[str, float]:
+    geography_config = config.get("geography", {})
+    has_titles = bool(config.get("titles") or config.get("title_keywords"))
+    has_companies = bool(config.get("company_targets"))
+    has_company_interest = bool(config.get("hiring_company_name") or config.get("hiring_company_aliases"))
+    has_location = bool(geography_config.get("location_name") or geography_config.get("country"))
+    has_years = any(
+        config.get(key) is not None for key in ("minimum_years_experience", "maximum_years_experience")
+    )
+    has_skills = bool(
+        config.get("required_keywords")
+        or config.get("preferred_keywords")
+        or config.get("portfolio_keywords")
+        or config.get("commercial_keywords")
+        or config.get("leadership_keywords")
+        or config.get("scope_keywords")
+    )
+    has_industry = bool(config.get("industry_keywords"))
+
+    defaults = dict(DEFAULT_ANCHOR_WEIGHTS)
+    if not has_titles:
+        defaults["title_similarity"] = 0.0
+        defaults["current_function_fit"] = 0.0
+    if not has_companies:
+        defaults["company_match"] = 0.0
+    if not has_company_interest:
+        defaults["company_interest"] = 0.0
+    if not has_location:
+        defaults["location_match"] = 0.0
+    if not has_years:
+        defaults["years_fit"] = 0.0
+    if not has_skills:
+        defaults["skill_overlap"] = 0.0
+    if not has_industry:
+        defaults["industry_fit"] = 0.0
+    return defaults
+
+
+def build_anchor_weights(config: Dict[str, Any]) -> Dict[str, float]:
+    weights = _brief_anchor_defaults(config)
+
+    configured_weights = config.get("anchor_weights", {})
+    if isinstance(configured_weights, dict):
+        for raw_name, raw_weight in configured_weights.items():
+            try:
+                weight = float(raw_weight)
+            except (TypeError, ValueError):
+                continue
+            weights[normalize_anchor_name(str(raw_name))] = max(0.0, weight)
+
+    configured_anchors = config.get("anchors", {})
+    if isinstance(configured_anchors, dict):
+        for raw_name, raw_value in configured_anchors.items():
+            anchor_name = normalize_anchor_name(str(raw_name))
+            if isinstance(raw_value, (int, float)):
+                weights[anchor_name] = max(0.0, float(raw_value))
+                continue
+            priority = normalize_text(str(raw_value)).replace(" ", "_")
+            if priority in ANCHOR_PRIORITY_WEIGHTS:
+                weights[anchor_name] = ANCHOR_PRIORITY_WEIGHTS[priority]
+
+    return {
+        key: round(value, 3)
+        for key, value in weights.items()
+        if value > 0.0
+    }
+
+
 def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
     brief_path = config.get("brief_document_path")
-    document_text = ""
+    inline_document_text = str(
+        config.get("document_text")
+        or config.get("job_description")
+        or config.get("job_description_text")
+        or ""
+    ).strip()
+    document_text = inline_document_text
     if brief_path:
         path = Path(brief_path).expanduser()
         if path.exists():
-            document_text = extract_docx_text(path)
+            extracted_text = extract_docx_text(path)
+            document_text = "\n\n".join(
+                value for value in [inline_document_text, extracted_text] if value
+            )
 
     titles = unique_preserving_order(config.get("titles", []))
     company_targets = unique_preserving_order(config.get("company_targets", []))
@@ -122,6 +291,14 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
     )
 
     geography_config = config.get("geography", {})
+    location_targets = unique_preserving_order(
+        [
+            *config.get("location_targets", []),
+            geography_config.get("location_name", ""),
+            geography_config.get("country", ""),
+            *geography_config.get("location_hints", []),
+        ]
+    )
     geography = GeoSpec(
         location_name=geography_config.get("location_name", ""),
         country=geography_config.get("country", ""),
@@ -136,6 +313,16 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
         summary = "\n".join(document_text.splitlines()[:12])
 
     company_aliases = merge_company_aliases(company_targets, config.get("company_aliases", {}))
+    hiring_company_name = str(config.get("hiring_company_name", "")).strip()
+    configured_hiring_aliases = config.get("hiring_company_aliases", [])
+    if not isinstance(configured_hiring_aliases, list):
+        configured_hiring_aliases = []
+    hiring_company_aliases = unique_preserving_order(
+        [
+            *configured_hiring_aliases,
+            *(default_company_aliases(hiring_company_name) if hiring_company_name else []),
+        ]
+    )
 
     return SearchBrief(
         id=config.get("id", "unnamed-brief"),
@@ -155,11 +342,25 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
         scope_keywords=unique_preserving_order(config.get("scope_keywords", [])),
         seniority_levels=unique_preserving_order(config.get("seniority_levels", [])),
         minimum_years_experience=config.get("minimum_years_experience"),
+        maximum_years_experience=config.get("maximum_years_experience"),
         result_target_min=int(config.get("result_target_min", 100)),
         result_target_max=int(config.get("result_target_max", 200)),
         max_profiles=int(config.get("max_profiles", 200)),
         industry_keywords=unique_preserving_order(config.get("industry_keywords", [])),
         exclude_title_keywords=unique_preserving_order(config.get("exclude_title_keywords", [])),
+        exclude_company_keywords=unique_preserving_order(
+            config.get("exclude_company_keywords", []) + config.get("exclude_companies", [])
+        ),
+        location_targets=location_targets,
+        hiring_company_name=hiring_company_name,
+        hiring_company_aliases=hiring_company_aliases,
+        candidate_interest_required=bool(config.get("candidate_interest_required", False)),
+        company_match_mode=normalize_company_match_mode(config.get("company_match_mode", "both")),
+        years_mode=normalize_years_mode(config.get("years_mode", "range")),
+        years_target=coerce_int(config.get("years_target")),
+        years_tolerance=max(0, int(config.get("years_tolerance", 0) or 0)),
+        jd_breakdown=dict(config.get("jd_breakdown", {})) if isinstance(config.get("jd_breakdown", {}), dict) else {},
+        anchor_weights=build_anchor_weights(config),
         provider_settings=config.get("provider_settings", {}),
         document_text=document_text,
     )

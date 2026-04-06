@@ -96,7 +96,7 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
             slices.append(
                 SearchSlice(
                     id=f"discovery-{index}",
-                    description="Title family + FMCG-adjacent discovery slice",
+                    description="Title family + industry-adjacent discovery slice",
                     companies=[],
                     titles=brief.titles,
                     title_keywords=brief.title_keywords,
@@ -113,7 +113,7 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
             slices.append(
                 SearchSlice(
                     id=f"market-{index}",
-                    description="Exact title + FMCG-adjacent sector discovery slice",
+                    description="Exact title + industry-adjacent sector discovery slice",
                     companies=[],
                     titles=brief.titles[:8],
                     title_keywords=[],

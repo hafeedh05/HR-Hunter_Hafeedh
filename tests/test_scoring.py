@@ -247,6 +247,77 @@ def test_score_candidate_demotes_low_seniority_specialist_role() -> None:
     assert scored.verification_status != "verified"
 
 
+def test_score_candidate_boosts_explicit_company_interest_signal() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-company-interest-test",
+            "role_title": "Senior Data Analyst",
+            "titles": ["Senior Data Analyst", "Data Analyst"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+            },
+            "required_keywords": ["sql", "python"],
+            "hiring_company_name": "OpenAI",
+            "hiring_company_aliases": ["Open AI"],
+            "anchors": {
+                "title": "critical",
+                "skills": "critical",
+                "company_interest": "important",
+            },
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Interested Candidate",
+        current_title="Senior Data Analyst",
+        current_company="Analytics Co",
+        location_name="Dubai, United Arab Emirates",
+        summary="Senior data analyst interested in joining OpenAI and building analytics products.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.company_interest_score >= 0.95
+    assert scored.feature_scores["company_interest"] >= 0.95
+    assert "ranker_bonus: explicit_company_interest" in scored.verification_notes
+
+
+def test_score_candidate_caps_when_company_interest_is_required_but_missing() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-company-interest-required-test",
+            "role_title": "Senior Data Analyst",
+            "titles": ["Senior Data Analyst"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+            },
+            "hiring_company_name": "OpenAI",
+            "candidate_interest_required": True,
+            "anchors": {
+                "title": "critical",
+                "company_interest": "critical",
+            },
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="No Interest Signal",
+        current_title="Senior Data Analyst",
+        current_company="Analytics Co",
+        location_name="Dubai, United Arab Emirates",
+        summary="Senior data analyst focused on dashboarding and experimentation.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.company_interest_score == 0.0
+    assert "company_interest_required" in scored.cap_reasons
+    assert scored.score <= 69.0
+    assert scored.verification_status != "verified"
+
+
 def test_score_candidate_caps_off_function_current_role_even_with_relevant_history() -> None:
     brief = build_search_brief(
         {
@@ -318,7 +389,7 @@ def test_score_candidate_country_only_ireland_signal_caps_verified() -> None:
 
     scored = score_candidate(candidate, brief)
 
-    assert getattr(scored, "location_precision_bucket") == "country_only_ireland"
+    assert getattr(scored, "location_precision_bucket") == "country_only"
     assert scored.verification_status != "verified"
 
 
@@ -351,6 +422,6 @@ def test_score_candidate_outside_search_area_is_rejected() -> None:
 
     scored = score_candidate(candidate, brief)
 
-    assert getattr(scored, "location_precision_bucket") == "outside_ireland"
+    assert getattr(scored, "location_precision_bucket") == "outside_target_area"
     assert scored.location_aligned is False
     assert scored.score < 70.0

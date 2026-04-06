@@ -91,3 +91,50 @@ def test_build_search_brief_infers_adjacent_fmcg_titles() -> None:
     assert "shopper marketing manager" in [value.lower() for value in brief.title_keywords]
     assert "customer marketing manager" in [value.lower() for value in brief.title_keywords]
     assert "category and insights manager" in [value.lower() for value in brief.title_keywords]
+
+
+def test_build_search_brief_resolves_anchor_priorities_and_numeric_weights() -> None:
+    brief = build_search_brief(
+        {
+            "id": "test-brief-anchors",
+            "role_title": "Product Lead",
+            "titles": ["Product Lead"],
+            "company_targets": ["Acme"],
+            "geography": {"location_name": "Dubai", "country": "UAE"},
+            "anchors": {
+                "title": "critical",
+                "company": "preferred",
+                "location": "important",
+            },
+            "anchor_weights": {
+                "skills": 0.9,
+            },
+        }
+    )
+
+    assert brief.anchor_weights["title_similarity"] == 1.0
+    assert brief.anchor_weights["company_match"] == 0.6
+    assert brief.anchor_weights["location_match"] == 0.75
+    assert brief.anchor_weights["skill_overlap"] == 0.9
+
+
+def test_build_search_brief_includes_hiring_company_interest_fields() -> None:
+    brief = build_search_brief(
+        {
+            "id": "test-brief-company-interest",
+            "role_title": "Senior Data Analyst",
+            "titles": ["Senior Data Analyst"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+            "hiring_company_name": "OpenAI",
+            "hiring_company_aliases": ["Open AI"],
+            "candidate_interest_required": True,
+            "anchors": {
+                "candidate_interest": "important",
+            },
+        }
+    )
+
+    assert brief.hiring_company_name == "OpenAI"
+    assert "Open AI" in brief.hiring_company_aliases
+    assert brief.candidate_interest_required is True
+    assert brief.anchor_weights["company_interest"] == 0.75
