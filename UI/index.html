@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HR Hunter</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260407owner2" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260407jd2" />
   </head>
   <body class="theme-bright">
     <div class="auth-shell" id="auth-shell">
@@ -40,7 +40,7 @@
           <p class="eyebrow">HR Hunter</p>
           <h2>Menu</h2>
         </div>
-        <button type="button" class="icon-button" id="nav-close-button" aria-label="Close menu">x</button>
+        <button type="button" class="icon-button drawer-close-button" id="nav-close-button" aria-label="Close menu">&times;</button>
       </div>
       <nav class="nav-links">
         <button type="button" class="nav-link active" data-tab-target="projects">Projects</button>
@@ -90,6 +90,7 @@
           <div class="status-card" id="status-card" data-tone="default">
             <h3 id="status-line">Ready</h3>
             <p id="status-detail">Select or create a project to continue.</p>
+            <div class="status-job-panel" id="status-job-panel" hidden></div>
           </div>
         </section>
 
@@ -326,16 +327,30 @@
               </div>
               <div class="form-grid">
                 <label class="span-2">
-                  <span>Job Description</span>
-                  <textarea id="job-description" rows="8" placeholder="Paste the job description here."></textarea>
+                  <span>Typed JD or Recruiter Notes</span>
+                  <textarea id="job-description" rows="8" placeholder="Paste the JD here, or add optional notes if you upload a file."></textarea>
                 </label>
                 <div class="span-2">
                   <div class="inline-heading">
+                    <span>Upload JD File</span>
+                    <span class="muted small">Upload PDF, DOC, DOCX, TXT, MD, or RTF. Uploading a file runs JD Breakdown automatically.</span>
+                  </div>
+                  <label class="file-upload-field">
+                    <input id="jd-upload-input" type="file" accept=".pdf,.doc,.docx,.txt,.md,.rtf" />
+                  </label>
+                </div>
+                <div class="span-2">
+                  <div class="jd-source-panel" id="jd-upload-summary">
+                    <p class="muted">No JD file uploaded yet. If you upload a file, HR Hunter will use it as the main JD source and treat typed text as optional notes.</p>
+                  </div>
+                </div>
+                <div class="span-2">
+                  <div class="inline-heading">
                     <span>JD Breakdown</span>
-                    <span class="muted small">Generated from the pasted job description.</span>
+                    <span class="muted small">Generated from the uploaded file or the typed description.</span>
                   </div>
                   <div class="breakdown-panel" id="breakdown-panel">
-                    <p class="muted">No breakdown yet. Paste a JD and click Break Down JD.</p>
+                    <p class="muted">No breakdown yet. Upload a JD file or paste a JD and click Break Down JD.</p>
                   </div>
                 </div>
                 <div class="span-2">
@@ -382,11 +397,11 @@
             </article>
           </div>
 
-          <article class="card card-full">
+          <article class="card card-full" id="results-snapshot-card">
             <div class="card-header">
               <div>
                 <p class="eyebrow">Latest Search</p>
-                <h3>Project Search Snapshot</h3>
+                <h3>Latest Completed Run</h3>
               </div>
             </div>
             <div id="results-snapshot" class="stack-list">
@@ -693,7 +708,7 @@
             <h2>Admin Workspace</h2>
             <p class="muted">Manage recruiter access, backend controls, and ranking operations.</p>
           </div>
-          <button type="button" class="icon-button" id="owner-close-button" aria-label="Close owner drawer">x</button>
+          <button type="button" class="icon-button drawer-close-button" id="owner-close-button" aria-label="Close owner drawer">&times;</button>
         </div>
 
         <section class="owner-hero">
@@ -885,7 +900,7 @@
         return false;
       };
     </script>
-    <script src="/assets/app.js?v=20260407owner2" defer></script>
+    <script src="/assets/app.js?v=20260407theme3" defer></script>
     <script>
       window.setTimeout(() => {
         if (window.__HR_HUNTER_LOGIN_BOUND) {

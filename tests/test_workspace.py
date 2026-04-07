@@ -4,6 +4,7 @@ from pathlib import Path
 
 from hr_hunter.models import CandidateProfile, SearchRunReport
 from hr_hunter.output import write_report
+from hr_hunter.state import enqueue_job, load_job, start_job
 from hr_hunter.workspace import (
     DEFAULT_ADMIN_EMAIL,
     authenticate_user,
@@ -175,6 +176,43 @@ def test_delete_project_removes_project_and_related_access(tmp_path: Path):
 
     assert deleted["id"] == project["id"]
     assert list_projects(admin, db_path=db_path) == []
+
+
+def test_delete_project_stops_running_jobs_for_that_project(tmp_path: Path):
+    db_path = tmp_path / "workspace.db"
+    init_workspace_db(db_path)
+    admin_setup = get_user_totp_setup(email=DEFAULT_ADMIN_EMAIL, db_path=db_path)
+    admin = authenticate_user(
+        DEFAULT_ADMIN_EMAIL,
+        generate_totp_code(admin_setup["totp"]["secret"]),
+        db_path=db_path,
+    )["user"]
+
+    project = create_project(
+        admin,
+        name="Delete With Running Job",
+        client_name="Client",
+        role_title="Supply Chain Manager",
+        target_geography="UAE",
+        brief_json={"role_title": "Supply Chain Manager"},
+        db_path=db_path,
+    )
+
+    job = enqueue_job(
+        "search",
+        {"project_id": project["id"], "role_title": "Supply Chain Manager"},
+        db_path=db_path,
+    )
+    start_job(job["job_id"], db_path=db_path)
+
+    deleted = delete_project(admin, project_id=project["id"], db_path=db_path)
+    stopped = load_job(job["job_id"], db_path=db_path)
+
+    assert deleted["id"] == project["id"]
+    assert job["job_id"] in deleted["stopped_job_ids"]
+    assert stopped is not None
+    assert stopped["status"] == "failed"
+    assert "project was deleted" in stopped["error"]
 
 
 def test_admin_can_delete_single_project_run_and_repoint_latest_run(tmp_path: Path):

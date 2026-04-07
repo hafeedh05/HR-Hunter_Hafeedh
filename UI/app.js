@@ -63,6 +63,12 @@ const state = {
   currentRuns: [],
   currentReviews: [],
   currentBreakdown: null,
+  uploadedJobDescription: {
+    name: "",
+    text: "",
+    extension: "",
+    parser: "",
+  },
   activeTab: "projects",
   ownerOpen: false,
   navOpen: false,
@@ -75,6 +81,15 @@ const state = {
   selectedCandidateRef: "",
   settings: {},
 };
+
+function emptyUploadedJobDescription() {
+  return {
+    name: "",
+    text: "",
+    extension: "",
+    parser: "",
+  };
+}
 
 class TokenField {
   constructor(root, suggestions = []) {
@@ -229,6 +244,36 @@ async function fetchJSON(url, options = {}) {
   return payload;
 }
 
+async function fetchFormData(url, formData, options = {}) {
+  const headers = {
+    ...sessionHeaders(),
+    ...(options.headers || {}),
+  };
+  const response = await fetch(url, {
+    method: options.method || "POST",
+    headers,
+    body: formData,
+  });
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+  if (!response.ok) {
+    const detail = typeof payload === "string" ? payload : payload.detail || "Request failed.";
+    throw new Error(detail);
+  }
+  return payload;
+}
+
+function setUploadedJobDescription(payload = {}) {
+  state.uploadedJobDescription = {
+    ...emptyUploadedJobDescription(),
+    name: String(payload.name || payload.uploaded_file_name || "").trim(),
+    text: String(payload.text || payload.uploaded_job_description_text || "").trim(),
+    extension: String(payload.extension || payload.uploaded_file_extension || "").trim(),
+    parser: String(payload.parser || payload.uploaded_parser || "").trim(),
+  };
+  renderUploadedJdSummary();
+}
+
 function readStoredState() {
   try {
     return JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
@@ -358,6 +403,7 @@ function switchTab(tabId) {
   updateTopbarActions();
   closeNav();
   setStatus(state.selectedProject ? `${state.selectedProject.name} selected.` : "Ready", "default", TAB_META[tabId].description);
+  syncLiveJobStatus();
 }
 
 function updateTopbarActions() {
@@ -532,7 +578,7 @@ function renderBreakdown() {
   const root = document.getElementById("breakdown-panel");
   const breakdown = state.currentBreakdown;
   if (!breakdown || !Object.keys(breakdown).length) {
-    root.innerHTML = `<p class="muted">No breakdown yet. Paste a JD and click Break Down JD.</p>`;
+    root.innerHTML = `<p class="muted">No breakdown yet. Upload a JD file or paste a JD and click Break Down JD.</p>`;
     return;
   }
   const keyPoints = Array.isArray(breakdown.key_experience_points) ? breakdown.key_experience_points.slice(0, 5) : [];
@@ -542,7 +588,12 @@ function renderBreakdown() {
   const titles = Array.isArray(breakdown.titles) ? breakdown.titles : [];
   const seniority = Array.isArray(breakdown.seniority_levels) ? breakdown.seniority_levels : [];
   const years = breakdown.years || {};
+  const uploadedSourceName = breakdown.uploaded_file_name || state.uploadedJobDescription?.name || "";
+  const sourceLabel = breakdown.source === "uploaded_file" || uploadedSourceName
+    ? `Uploaded file${uploadedSourceName ? `: ${uploadedSourceName}` : ""}`
+    : "Typed description";
   root.innerHTML = `
+    <p class="muted small"><strong>Source:</strong> ${escapeHtml(sourceLabel)}</p>
     <p>${escapeHtml(breakdown.summary || "Breakdown ready.")}</p>
     ${keyPoints.length
       ? `<div class="breakdown-section"><strong>Key Experience Points</strong><ul class="breakdown-list">${keyPoints.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul></div>`
@@ -556,6 +607,69 @@ function renderBreakdown() {
       ? `<p><strong>Years:</strong> ${escapeHtml(years.min ?? "0")} - ${escapeHtml(years.max ?? years.value ?? "")}</p>`
       : ""}
   `;
+}
+
+function renderUploadedJdSummary() {
+  const root = document.getElementById("jd-upload-summary");
+  if (!root) return;
+  const upload = state.uploadedJobDescription || emptyUploadedJobDescription();
+  if (!upload.name || !upload.text) {
+    root.innerHTML = `<p class="muted">No JD file uploaded yet. If you upload a file, HR Hunter will use it as the main JD source and treat typed text as optional notes.</p>`;
+    return;
+  }
+  const parserLabel = titleCaseWords(String(upload.parser || "uploaded file").replace(/_/g, " "));
+  root.innerHTML = `
+    <div class="jd-source-meta">
+      <strong>${escapeHtml(upload.name)}</strong>
+      ${upload.extension ? `<span class="info-chip">${escapeHtml(upload.extension.toUpperCase().replace(".", ""))}</span>` : ""}
+      <span class="info-chip">${escapeHtml(parserLabel)}</span>
+    </div>
+    <small class="muted">This uploaded file is now the primary JD source. Any typed text below will be treated as optional recruiter notes and used to help extraction.</small>
+    <div class="jd-source-actions">
+      <button type="button" class="button button-secondary button-small" id="jd-clear-upload-button">Remove Uploaded File</button>
+    </div>
+  `;
+  document.getElementById("jd-clear-upload-button")?.addEventListener("click", clearUploadedJobDescription);
+}
+
+function applyBreakdownToForm(breakdown, options = {}) {
+  if (!breakdown || !Object.keys(breakdown).length) {
+    return;
+  }
+  state.currentBreakdown = breakdown;
+  renderBreakdown();
+  renderAnchorGrid({ ...currentAnchorValues(), ...(breakdown.suggested_anchors || {}) });
+  const titleInput = document.getElementById("role-title");
+  if (options.fillRoleTitle !== false && !titleInput.value.trim() && Array.isArray(breakdown.titles) && breakdown.titles.length) {
+    titleInput.value = breakdown.titles[0];
+  }
+  const years = breakdown.years || {};
+  if (years.value !== null && years.value !== undefined && !document.getElementById("years-value").value) {
+    document.getElementById("years-value").value = years.value;
+  }
+  if (years.tolerance !== null && years.tolerance !== undefined && !document.getElementById("years-tolerance").value) {
+    document.getElementById("years-tolerance").value = years.tolerance;
+  }
+  if (years.min !== null && years.min !== undefined && !document.getElementById("min-years").value) {
+    document.getElementById("min-years").value = years.min;
+  }
+  if (years.max !== null && years.max !== undefined && !document.getElementById("max-years").value) {
+    document.getElementById("max-years").value = years.max;
+  }
+}
+
+function clearUploadedJobDescription() {
+  state.uploadedJobDescription = emptyUploadedJobDescription();
+  const uploadInput = document.getElementById("jd-upload-input");
+  if (uploadInput) {
+    uploadInput.value = "";
+  }
+  if (state.currentBreakdown?.source === "uploaded_file") {
+    state.currentBreakdown = null;
+    renderBreakdown();
+  }
+  renderUploadedJdSummary();
+  setStatus("Uploaded JD file removed.", "success", "The typed description will be used the next time you run JD Breakdown.");
 }
 
 function initialiseTokenFields() {
@@ -630,6 +744,7 @@ function resetProjectForm() {
   document.getElementById("company-match-mode").value = state.config?.defaults?.company_match_mode || "both";
   document.getElementById("employment-status-mode").value = state.config?.defaults?.employment_status_mode || "any";
   document.getElementById("job-description").value = "";
+  setUploadedJobDescription();
   Object.values(state.tokenFields).forEach((field) => field.setTokens([]));
   renderMemberPicker(state.user ? [state.user.id] : []);
   state.currentBreakdown = null;
@@ -682,6 +797,10 @@ function buildUiMeta() {
     company_match_mode: document.getElementById("company-match-mode").value,
     employment_status_mode: document.getElementById("employment-status-mode").value,
     job_description: document.getElementById("job-description").value,
+    uploaded_job_description_name: state.uploadedJobDescription?.name || "",
+    uploaded_job_description_text: state.uploadedJobDescription?.text || "",
+    uploaded_job_description_extension: state.uploadedJobDescription?.extension || "",
+    uploaded_job_description_parser: state.uploadedJobDescription?.parser || "",
     anchors: currentAnchorValues(),
   };
 }
@@ -711,15 +830,17 @@ function buildBriefPayload() {
     industry_keywords: uiMeta.industry_keywords,
     exclude_title_keywords: uiMeta.exclude_title_keywords,
     exclude_company_keywords: uiMeta.exclude_company_keywords,
-      job_description: uiMeta.job_description,
-      jd_breakdown: state.currentBreakdown,
-      anchors: uiMeta.anchors,
-      providers: state.settings.providers,
-      limit: candidateLimit,
-      csv_export_limit: candidateLimit,
-      feedback_db: state.settings.feedback_db,
-      model_dir: state.settings.model_dir,
-      output_dir: state.settings.output_dir,
+    job_description: uiMeta.job_description,
+    uploaded_job_description_name: uiMeta.uploaded_job_description_name,
+    uploaded_job_description_text: uiMeta.uploaded_job_description_text,
+    jd_breakdown: state.currentBreakdown,
+    anchors: uiMeta.anchors,
+    providers: state.settings.providers,
+    limit: candidateLimit,
+    csv_export_limit: candidateLimit,
+    feedback_db: state.settings.feedback_db,
+    model_dir: state.settings.model_dir,
+    output_dir: state.settings.output_dir,
     reranker_enabled: state.settings.reranker_enabled,
     learned_ranker_enabled: state.settings.learned_ranker_enabled,
     include_history_slices: state.settings.include_history_slices,
@@ -776,13 +897,17 @@ function formValuesFromProject(project) {
     yearsMode: meta.years_mode || brief.years_mode || "range",
     yearsValue: meta.years_value ?? brief.years_target ?? "",
     yearsTolerance: meta.years_tolerance ?? brief.years_tolerance ?? "",
-      minYears: meta.minimum_years_experience ?? brief.minimum_years_experience ?? "",
-      maxYears: meta.maximum_years_experience ?? brief.maximum_years_experience ?? "",
-      radiusMiles: meta.radius_miles ?? geography.radius_miles ?? state.config?.defaults?.radius_miles ?? 25,
-      candidateLimit: meta.candidate_limit ?? brief.max_profiles ?? state.settings.limit ?? state.config?.defaults?.limit ?? 20,
-      companyMatchMode: meta.company_match_mode || brief.company_match_mode || "both",
-      employmentStatusMode: meta.employment_status_mode || brief.employment_status_mode || "any",
-      jobDescription: meta.job_description || brief.document_text || "",
+    minYears: meta.minimum_years_experience ?? brief.minimum_years_experience ?? "",
+    maxYears: meta.maximum_years_experience ?? brief.maximum_years_experience ?? "",
+    radiusMiles: meta.radius_miles ?? geography.radius_miles ?? state.config?.defaults?.radius_miles ?? 25,
+    candidateLimit: meta.candidate_limit ?? brief.max_profiles ?? state.settings.limit ?? state.config?.defaults?.limit ?? 20,
+    companyMatchMode: meta.company_match_mode || brief.company_match_mode || "both",
+    employmentStatusMode: meta.employment_status_mode || brief.employment_status_mode || "any",
+    jobDescription: meta.job_description || brief.job_description_source?.typed_text || "",
+    uploadedJobDescriptionName: meta.uploaded_job_description_name || brief.uploaded_job_description_name || brief.job_description_source?.file_name || "",
+    uploadedJobDescriptionText: meta.uploaded_job_description_text || brief.uploaded_job_description_text || brief.job_description_source?.uploaded_text || "",
+    uploadedJobDescriptionExtension: meta.uploaded_job_description_extension || "",
+    uploadedJobDescriptionParser: meta.uploaded_job_description_parser || "",
     anchors: meta.anchors || brief.anchors || {},
     breakdown: brief.jd_breakdown || null,
   };
@@ -806,6 +931,12 @@ function populateProjectForm(project) {
   document.getElementById("company-match-mode").value = values.companyMatchMode;
   document.getElementById("employment-status-mode").value = values.employmentStatusMode;
   document.getElementById("job-description").value = values.jobDescription;
+  setUploadedJobDescription({
+    name: values.uploadedJobDescriptionName,
+    text: values.uploadedJobDescriptionText,
+    extension: values.uploadedJobDescriptionExtension,
+    parser: values.uploadedJobDescriptionParser,
+  });
   state.tokenFields.titles.setTokens(values.titles);
   state.tokenFields.countries.setTokens(values.countries);
   state.tokenFields.continents.setTokens(values.continents);
@@ -966,6 +1097,119 @@ function jobRequestedLimit(job) {
   );
 }
 
+function parseTimestamp(value) {
+  const timestamp = new Date(value || "");
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp;
+}
+
+function formatDuration(seconds) {
+  const totalSeconds = Math.max(0, Math.round(safeNumber(seconds, 0)));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const remainder = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${remainder}s`;
+  }
+  return `${remainder}s`;
+}
+
+function estimatedJobDurationSeconds(job) {
+  const requested = jobRequestedLimit(job);
+  if (job?.job_type === "train_ranker") {
+    return Math.max(90, 45 + requested);
+  }
+  let estimate = 90 + requested * 3.4;
+  if (job?.payload?.include_discovery_slices) estimate += 150;
+  if (job?.payload?.include_history_slices) estimate += 90;
+  if (job?.payload?.registry_memory_enabled) estimate += 45;
+  if (job?.payload?.reranker_enabled) estimate += 210;
+  if (job?.payload?.learned_ranker_enabled) estimate += 75;
+  return Math.max(120, Math.round(estimate));
+}
+
+function runningJobProgress(job) {
+  const createdAt = parseTimestamp(job?.started_at || job?.created_at);
+  const elapsedSeconds = createdAt ? Math.max(0, (Date.now() - createdAt.getTime()) / 1000) : 0;
+  const estimatedSeconds = estimatedJobDurationSeconds(job);
+  const rawPercent = estimatedSeconds > 0 ? (elapsedSeconds / estimatedSeconds) * 100 : 0;
+  const status = String(job?.status || "").toLowerCase();
+  const progressPercent = status === "queued"
+    ? 4
+    : Math.max(3, Math.min(95, Math.round(rawPercent)));
+  return {
+    elapsedSeconds,
+    estimatedSeconds,
+    progressPercent,
+    statusLabel: titleCaseWords(status || "queued"),
+    requested: jobRequestedLimit(job),
+  };
+}
+
+function runningJobMarkup(job, options = {}) {
+  const progress = runningJobProgress(job);
+  const compact = Boolean(options.compact);
+  const heading = options.heading || `${progress.statusLabel} Search`;
+  const lead = options.lead || `Requested up to ${progress.requested} candidates.`;
+  const note = options.note || "This is an estimated progress view based on search size and enabled ranking layers.";
+  return `
+    <div class="job-progress-card ${compact ? "job-progress-card-compact" : ""}">
+      <div class="job-progress-head">
+        <div>
+          <h4>${escapeHtml(heading)}</h4>
+          <p>${escapeHtml(lead)}</p>
+        </div>
+        <div class="job-progress-badge">${escapeHtml(progress.statusLabel)}</div>
+      </div>
+      <div class="job-progress-bar">
+        <span style="width:${escapeHtml(String(progress.progressPercent))}%"></span>
+      </div>
+      <div class="job-progress-meta">
+        <span><strong>Estimated Progress</strong> ${escapeHtml(String(progress.progressPercent))}%</span>
+        <span><strong>Elapsed</strong> ${escapeHtml(formatDuration(progress.elapsedSeconds))}</span>
+        <span><strong>Estimated Time</strong> ${escapeHtml(formatDuration(progress.estimatedSeconds))}</span>
+      </div>
+      <p class="muted small">${escapeHtml(note)}</p>
+    </div>
+  `;
+}
+
+function renderStatusJobPanel(job) {
+  const panel = document.getElementById("status-job-panel");
+  if (!panel) return;
+  if (!job || !["queued", "running"].includes(String(job.status || "").toLowerCase())) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML = runningJobMarkup(job, {
+    compact: true,
+    heading: `${titleCaseWords(job.status || "queued")} Search`,
+    lead: `Requested up to ${jobRequestedLimit(job)} candidates for ${state.selectedProject?.role_title || state.selectedProject?.name || "the selected project"}.`,
+    note: "The search is still working in the background. Larger runs with discovery and ranking enabled can take longer.",
+  });
+}
+
+function syncLiveJobStatus() {
+  const activeJob = activeSearchJobForSelectedProject();
+  if (!activeJob) {
+    renderStatusJobPanel(null);
+    return false;
+  }
+  const running = runningJobProgress(activeJob);
+  const tone = String(activeJob.status || "").toLowerCase() === "queued" ? "default" : "warning";
+  setStatus(
+    `Search ${String(activeJob.status || "").toLowerCase() === "queued" ? "queued" : "running"}.`,
+    tone,
+    `${running.statusLabel} for up to ${running.requested} candidates. Elapsed ${formatDuration(running.elapsedSeconds)} so far.`,
+  );
+  renderStatusJobPanel(activeJob);
+  return true;
+}
+
 function searchFailureMarkup(job, buttonId) {
   return `
     <div class="empty-state compact-empty">
@@ -1091,12 +1335,10 @@ function renderResultsSummary() {
       return;
     }
     if (activeJob) {
-      root.innerHTML = `
-        <div class="empty-state compact-empty">
-          <h4>Search In Progress</h4>
-          <p>The ${escapeHtml(titleCaseWords(activeJob.status))} search requested up to ${escapeHtml(String(jobRequestedLimit(activeJob)))} candidates.</p>
-        </div>
-      `;
+      root.innerHTML = runningJobMarkup(activeJob, {
+        heading: "Search In Progress",
+        lead: `The ${titleCaseWords(activeJob.status)} search requested up to ${jobRequestedLimit(activeJob)} candidates.`,
+      });
       return;
     }
     root.innerHTML = `
@@ -1259,12 +1501,15 @@ function renderCandidatesSummary() {
       return;
     }
     root.innerHTML = `
-        <div class="empty-state compact-empty">
-          <h4>${activeJob ? "Search In Progress" : "No Candidates Yet"}</h4>
-          <p>${activeJob
-            ? `The ${escapeHtml(titleCaseWords(activeJob.status))} search requested up to ${escapeHtml(String(activeJob.payload?.limit || currentRequestedCandidateLimit()))} candidates.`
-            : `Run a search for ${escapeHtml(state.selectedProject.name)} to populate the candidate list.`}</p>
-        </div>
+        ${activeJob
+          ? runningJobMarkup(activeJob, {
+            heading: "Candidate Search In Progress",
+            lead: `The ${titleCaseWords(activeJob.status)} search requested up to ${jobRequestedLimit(activeJob)} candidates.`,
+          })
+          : `<div class="empty-state compact-empty">
+          <h4>No Candidates Yet</h4>
+          <p>Run a search for ${escapeHtml(state.selectedProject.name)} to populate the candidate list.</p>
+        </div>`}
       `;
       return;
     }
@@ -1473,7 +1718,10 @@ function renderResults() {
   renderResultsSummary();
   renderCsvSummary();
   const root = document.getElementById("results-snapshot");
+  const card = document.getElementById("results-snapshot-card");
+  const failedJob = failedSearchJobForSelectedProject();
   if (!state.selectedProject) {
+    if (card) card.hidden = true;
     root.innerHTML = `
       <div class="empty-state">
         <h4>Select or Create a Project</h4>
@@ -1483,14 +1731,18 @@ function renderResults() {
     return;
   }
   if (!state.currentReport || !Array.isArray(state.currentReport.candidates) || !state.currentReport.candidates.length) {
+    if (card) card.hidden = true;
     root.innerHTML = `
       <div class="empty-state">
-        <h4>No Results Yet</h4>
-        <p>Run a search for <strong>${escapeHtml(state.selectedProject.name)}</strong> to generate candidates.</p>
+        <h4>${failedJob ? "Latest Search Failed" : "No Results Yet"}</h4>
+        <p>${failedJob
+          ? escapeHtml(failedJob.error || "The latest background search did not finish successfully.")
+          : `Run a search for <strong>${escapeHtml(state.selectedProject.name)}</strong> to generate candidates.`}</p>
       </div>
     `;
     return;
   }
+  if (card) card.hidden = false;
   const summary = state.currentReport.summary || {};
   const requested = currentRequestedCandidateLimit();
   const returned = currentCandidates().length;
@@ -1804,6 +2056,7 @@ async function loadLatestProjectJob(projectId) {
     renderOwnerJobs();
     renderResults();
     renderCandidates();
+    renderStatusJobPanel(null);
     return;
   }
   const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}/latest-job`);
@@ -1811,6 +2064,7 @@ async function loadLatestProjectJob(projectId) {
   renderOwnerJobs();
   renderResults();
   renderCandidates();
+  syncLiveJobStatus();
 }
 
 async function loadProjectRuns(projectId) {
@@ -1949,11 +2203,7 @@ async function runSearch() {
     renderResults();
     renderCandidates();
       switchTab("results");
-      setStatus(
-        "Search queued.",
-        "default",
-        `The backend is running the search in the background. Requested up to ${payload.limit} candidates, so larger searches can take longer.`,
-      );
+      syncLiveJobStatus();
     startJobPolling(job.job_id);
   } catch (error) {
     setStatus("Search could not start.", "danger", error.message);
@@ -1974,6 +2224,7 @@ function startJobPolling(jobId) {
       const job = await fetchJSON(`/app/jobs/${encodeURIComponent(jobId)}`);
       state.activeJob = job;
       renderOwnerJobs();
+      syncLiveJobStatus();
       if (job.status === "completed") {
         clearJobPolling();
         await handleCompletedJob(job);
@@ -2044,34 +2295,67 @@ async function handleCompletedJob(job) {
 async function runBreakdown() {
   const roleTitle = document.getElementById("role-title").value.trim();
   const jobDescription = document.getElementById("job-description").value.trim();
-  if (!jobDescription) {
-    setStatus("Paste a job description first.", "warning", "The JD breakdown runs from the pasted job description.");
+  const uploadedJobDescription = state.uploadedJobDescription?.text || "";
+  if (!jobDescription && !uploadedJobDescription) {
+    setStatus("Add a JD first.", "warning", "Upload a JD file or paste the job description before running JD Breakdown.");
     return;
   }
   try {
     const breakdown = await fetchJSON("/app/jd-breakdown", {
       method: "POST",
-      body: { role_title: roleTitle, job_description: jobDescription },
+      body: {
+        role_title: roleTitle,
+        job_description: jobDescription,
+        uploaded_job_description_text: uploadedJobDescription,
+        uploaded_job_description_name: state.uploadedJobDescription?.name || "",
+      },
     });
-    state.currentBreakdown = breakdown;
-    renderBreakdown();
-    renderAnchorGrid({ ...currentAnchorValues(), ...(breakdown.suggested_anchors || {}) });
-    const years = breakdown.years || {};
-    if (years.value !== null && years.value !== undefined && !document.getElementById("years-value").value) {
-      document.getElementById("years-value").value = years.value;
-    }
-    if (years.tolerance !== null && years.tolerance !== undefined && !document.getElementById("years-tolerance").value) {
-      document.getElementById("years-tolerance").value = years.tolerance;
-    }
-    if (years.min !== null && years.min !== undefined && !document.getElementById("min-years").value) {
-      document.getElementById("min-years").value = years.min;
-    }
-    if (years.max !== null && years.max !== undefined && !document.getElementById("max-years").value) {
-      document.getElementById("max-years").value = years.max;
-    }
-    setStatus("JD breakdown ready.", "success", "Key experience points and suggested anchors have been updated.");
+    applyBreakdownToForm(breakdown);
+    setStatus(
+      "JD breakdown ready.",
+      "success",
+      state.uploadedJobDescription?.name
+        ? `Structured points were extracted from ${state.uploadedJobDescription.name} using your typed notes as optional context.`
+        : "Key experience points and suggested anchors have been updated from the typed description.",
+    );
   } catch (error) {
     setStatus("JD breakdown failed.", "danger", error.message);
+  }
+}
+
+async function handleJdUpload(event) {
+  const input = event.target;
+  const file = input.files?.[0];
+  if (!file) {
+    return;
+  }
+  const roleTitle = document.getElementById("role-title").value.trim();
+  const jobDescriptionNotes = document.getElementById("job-description").value.trim();
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("role_title", roleTitle);
+  formData.append("job_description_notes", jobDescriptionNotes);
+  input.disabled = true;
+  setStatus("Uploading JD file...", "default", `Reading ${file.name} and preparing the JD breakdown.`);
+  try {
+    const payload = await fetchFormData("/app/jd-upload", formData);
+    setUploadedJobDescription({
+      name: payload.uploaded_file_name,
+      text: payload.uploaded_job_description_text,
+      extension: payload.uploaded_file_extension,
+      parser: payload.uploaded_parser,
+    });
+    applyBreakdownToForm(payload.breakdown || {});
+    setStatus(
+      "JD file uploaded.",
+      "success",
+      `${payload.uploaded_file_name || file.name} is now the primary JD source and the breakdown has been updated automatically.`,
+    );
+  } catch (error) {
+    setStatus("JD upload failed.", "danger", error.message);
+  } finally {
+    input.disabled = false;
+    input.value = "";
   }
 }
 
@@ -2256,8 +2540,8 @@ function loadDemoBrief() {
     document.getElementById("project-notes").value = existingProject.notes;
     renderMemberPicker(existingProject.assignedRecruiterIds.length ? existingProject.assignedRecruiterIds : (state.user ? [state.user.id] : []));
   } else {
-    document.getElementById("project-name").value = "Senior Data Analyst - UAE";
-    document.getElementById("client-name").value = "Demo Client";
+    document.getElementById("project-name").value = preset.project_name || `${preset.role_title || "Demo Role"} - UAE`;
+    document.getElementById("client-name").value = preset.client_name || "Demo Client";
     document.getElementById("project-status").value = "active";
   }
   document.getElementById("role-title").value = preset.role_title || "";
@@ -2272,6 +2556,7 @@ function loadDemoBrief() {
   document.getElementById("company-match-mode").value = preset.company_match_mode || "both";
   document.getElementById("employment-status-mode").value = preset.employment_status_mode || "any";
   document.getElementById("job-description").value = preset.job_description || "";
+  setUploadedJobDescription();
   state.tokenFields.titles.setTokens(preset.titles || []);
   state.tokenFields.countries.setTokens(preset.countries || []);
   state.tokenFields.continents.setTokens(preset.continents || []);
@@ -2396,6 +2681,7 @@ function bindEvents() {
     state.candidateSearchQuery = event.target.value.trim();
     renderCandidates();
   });
+  document.getElementById("jd-upload-input").addEventListener("change", handleJdUpload);
   document.getElementById("breakdown-button").addEventListener("click", runBreakdown);
   document.getElementById("top-save-button").addEventListener("click", async () => {
     try {
@@ -2489,6 +2775,7 @@ async function initialiseApp() {
   renderThemeToggle();
   renderProviderOptions();
   renderAnchorGrid();
+  renderUploadedJdSummary();
   populateSettingsFields();
   await restoreSession();
 }

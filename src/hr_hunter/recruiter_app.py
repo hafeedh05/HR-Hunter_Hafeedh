@@ -246,6 +246,7 @@ KEYWORD_PHRASES = [
     "aws",
     "azure",
     "bigquery",
+    "budgeting",
     "brand strategy",
     "business intelligence",
     "campaign management",
@@ -262,6 +263,10 @@ KEYWORD_PHRASES = [
     "dbt",
     "etl",
     "experimentation",
+    "financial analysis",
+    "financial planning",
+    "fp&a",
+    "fpa",
     "forecasting",
     "ga4",
     "go-to-market",
@@ -368,6 +373,10 @@ YEARS_RANGE_PATTERN = re.compile(r"(?P<min>\d{1,2})\s*[-to]{1,3}\s*(?P<max>\d{1,
 YEARS_PLUS_PATTERN = re.compile(r"(?P<value>\d{1,2})\s*\+\s*years", re.IGNORECASE)
 YEARS_AT_LEAST_PATTERN = re.compile(r"(at least|minimum of|min\.)\s*(?P<value>\d{1,2})\s*years", re.IGNORECASE)
 YEARS_AT_MOST_PATTERN = re.compile(r"(up to|maximum of|max\.)\s*(?P<value>\d{1,2})\s*years", re.IGNORECASE)
+ROLE_HINT_PATTERNS = [
+    re.compile(r"\b(?:we are hiring|hiring|seeking|looking for)\s+(?:an?\s+)?(?P<title>[A-Z][A-Za-z&/\-\s]{3,80})", re.IGNORECASE),
+    re.compile(r"\b(?:role|position|job title)\s*:\s*(?P<title>[A-Z][A-Za-z&/\-\s]{3,80})", re.IGNORECASE),
+]
 
 
 def slugify(value: str) -> str:
@@ -552,8 +561,71 @@ def _extract_years_signal(text: str) -> Dict[str, Any]:
     return {"mode": "range", "value": None, "min": None, "max": None, "tolerance": 0}
 
 
+def resolve_job_description_source(
+    *,
+    typed_text: str = "",
+    uploaded_text: str = "",
+    uploaded_file_name: str = "",
+) -> Dict[str, Any]:
+    typed = str(typed_text or "").strip()
+    uploaded = str(uploaded_text or "").strip()
+    file_name = str(uploaded_file_name or "").strip()
+
+    if uploaded:
+        combined = uploaded
+        if typed:
+            combined = f"{uploaded}\n\nRecruiter Notes:\n{typed}"
+        return {
+            "source": "uploaded_file",
+            "file_name": file_name,
+            "typed_text": typed,
+            "uploaded_text": uploaded,
+            "primary_text": uploaded,
+            "combined_text": combined,
+        }
+
+    return {
+        "source": "typed_text",
+        "file_name": "",
+        "typed_text": typed,
+        "uploaded_text": "",
+        "primary_text": typed,
+        "combined_text": typed,
+    }
+
+
+def _infer_role_titles(text: str, role_title: str = "") -> List[str]:
+    inferred = unique_preserving_order([role_title] if role_title else [])
+    source_text = str(text or "").strip()
+    if not source_text:
+        return inferred
+
+    for pattern in ROLE_HINT_PATTERNS:
+        match = pattern.search(source_text)
+        if not match:
+            continue
+        candidate = re.split(r"[\.;,\n]", match.group("title"))[0].strip(" -:")
+        candidate = re.sub(
+            r"\b(?:based in|located in|for|to lead|with|who|in\s+[A-Z][A-Za-z\s/&-]+)\b.*$",
+            "",
+            candidate,
+            flags=re.IGNORECASE,
+        ).strip(" -:")
+        if 3 <= len(candidate) <= 80:
+            inferred = unique_preserving_order([*inferred, candidate])
+
+    if not inferred:
+        first_line = next((line.strip(" -:") for line in source_text.splitlines() if line.strip()), "")
+        if first_line and 4 <= len(first_line) <= 80 and re.search(r"\b(manager|analyst|lead|director|engineer|specialist|coordinator|partner|officer|executive)\b", first_line, re.IGNORECASE):
+            inferred = unique_preserving_order([first_line])
+
+    return inferred
+
+
 def extract_job_description_breakdown(job_description: str, role_title: str = "") -> Dict[str, Any]:
     text = str(job_description or "").strip()
+    inferred_titles = _infer_role_titles(text, role_title=role_title)
+    resolved_role_title = role_title or (inferred_titles[0] if inferred_titles else "")
     if not text:
         return {
             "summary": "",
@@ -561,14 +633,14 @@ def extract_job_description_breakdown(job_description: str, role_title: str = ""
             "required_keywords": [],
             "preferred_keywords": [],
             "industry_keywords": [],
-            "titles": [role_title] if role_title else [],
+            "titles": inferred_titles,
             "seniority_levels": [],
             "years": {"mode": "range", "value": None, "min": None, "max": None, "tolerance": 0},
             "suggested_anchors": {},
         }
 
     sentence_candidates = _sentence_candidates(text)
-    key_points = _extract_key_experience_points(text, role_title=role_title)
+    key_points = _extract_key_experience_points(text, role_title=resolved_role_title)
     if not key_points:
         key_points = unique_preserving_order(
             [_normalize_jd_point(sentence) for sentence in sentence_candidates if _normalize_jd_point(sentence)]
@@ -587,7 +659,7 @@ def extract_job_description_breakdown(job_description: str, role_title: str = ""
     required_keywords = _match_phrases(" ".join(required_lines or key_points), KEYWORD_PHRASES)
     preferred_keywords = _match_phrases(" ".join(preferred_lines), KEYWORD_PHRASES)
     industry_keywords = _match_phrases(text, INDUSTRY_PHRASES)
-    seniority = _match_phrases(" ".join([role_title, text]), SENIORITY_LEVELS)
+    seniority = _match_phrases(" ".join([resolved_role_title, text]), SENIORITY_LEVELS)
     years = _extract_years_signal(text)
 
     suggested_anchors: Dict[str, str] = {
@@ -602,7 +674,7 @@ def extract_job_description_breakdown(job_description: str, role_title: str = ""
 
     return {
         "summary": _build_jd_summary(
-            role_title=role_title,
+            role_title=resolved_role_title,
             years=years,
             required_keywords=required_keywords,
             preferred_keywords=preferred_keywords,
@@ -613,11 +685,78 @@ def extract_job_description_breakdown(job_description: str, role_title: str = ""
         "required_keywords": required_keywords,
         "preferred_keywords": [value for value in preferred_keywords if value not in required_keywords],
         "industry_keywords": industry_keywords,
-        "titles": unique_preserving_order([role_title] if role_title else []),
+        "titles": inferred_titles,
         "seniority_levels": seniority,
         "years": years,
         "suggested_anchors": suggested_anchors,
     }
+
+
+def ensure_structured_jd_breakdown(
+    breakdown: Dict[str, Any] | None,
+    *,
+    job_description: str,
+    role_title: str = "",
+) -> Dict[str, Any]:
+    local_breakdown = extract_job_description_breakdown(job_description, role_title=role_title)
+    if not isinstance(breakdown, dict):
+        return local_breakdown
+
+    merged = dict(breakdown)
+
+    def _missing_list(name: str) -> bool:
+        value = merged.get(name)
+        return not isinstance(value, list) or not [item for item in value if str(item).strip()]
+
+    for key in [
+        "titles",
+        "key_experience_points",
+        "required_keywords",
+        "preferred_keywords",
+        "industry_keywords",
+        "seniority_levels",
+    ]:
+        if _missing_list(key):
+            merged[key] = local_breakdown.get(key, [])
+
+    years = merged.get("years")
+    local_years = local_breakdown.get("years", {})
+    if (
+        not isinstance(years, dict)
+        or all(years.get(field) in (None, "", 0) for field in ("value", "min", "max"))
+        or (
+            isinstance(local_years, dict)
+            and (local_years.get("min") is not None or local_years.get("max") is not None)
+            and years.get("min") is None
+            and years.get("max") is None
+        )
+    ):
+        merged["years"] = local_breakdown.get("years", {})
+
+    merged["required_keywords"] = unique_preserving_order(
+        [str(value).strip() for value in merged.get("required_keywords", []) if str(value).strip()]
+    )
+    merged["preferred_keywords"] = [
+        value
+        for value in unique_preserving_order(
+            [str(value).strip() for value in merged.get("preferred_keywords", []) if str(value).strip()]
+        )
+        if value not in merged["required_keywords"]
+    ]
+
+    if not isinstance(merged.get("suggested_anchors"), dict) or not merged.get("suggested_anchors"):
+        merged["suggested_anchors"] = local_breakdown.get("suggested_anchors", {})
+
+    merged["summary"] = _build_jd_summary(
+        role_title=role_title or (merged.get("titles") or [""])[0],
+        years=merged.get("years", {}),
+        required_keywords=merged.get("required_keywords", []),
+        preferred_keywords=merged.get("preferred_keywords", []),
+        industry_keywords=merged.get("industry_keywords", []),
+        key_points=merged.get("key_experience_points", []),
+    )
+
+    return merged
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -672,7 +811,15 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     nice_to_have = parse_multi_value(payload.get("nice_to_have_keywords"))
     industry_keywords = parse_multi_value(payload.get("industry_keywords"))
     providers = parse_multi_value(payload.get("providers")) or ["scrapingbee_google"]
-    job_description = str(payload.get("job_description", "")).strip()
+    job_description_notes = str(payload.get("job_description", "")).strip()
+    uploaded_job_description_text = str(payload.get("uploaded_job_description_text", "")).strip()
+    uploaded_job_description_name = str(payload.get("uploaded_job_description_name", "")).strip()
+    job_description_source = resolve_job_description_source(
+        typed_text=job_description_notes,
+        uploaded_text=uploaded_job_description_text,
+        uploaded_file_name=uploaded_job_description_name,
+    )
+    job_description = job_description_source["combined_text"]
     breakdown = payload.get("jd_breakdown")
     if not isinstance(breakdown, dict):
         breakdown = extract_job_description_breakdown(job_description, role_title=role_title)
@@ -806,6 +953,32 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "result_target_max": max(limit, 40),
         "max_profiles": max(limit, 80),
         "provider_settings": providers_settings,
+        "ui_meta": {
+            "titles": titles,
+            "countries": countries,
+            "continents": continents,
+            "cities": cities,
+            "company_targets": companies,
+            "must_have_keywords": must_have,
+            "nice_to_have_keywords": nice_to_have,
+            "industry_keywords": industry_keywords,
+            "exclude_title_keywords": exclude_titles,
+            "exclude_company_keywords": exclude_companies,
+            "years_mode": years_mode,
+            "years_value": years_value,
+            "years_tolerance": years_tolerance,
+            "minimum_years_experience": minimum_years_experience,
+            "maximum_years_experience": maximum_years_experience,
+            "radius_miles": radius_miles,
+            "candidate_limit": limit,
+            "company_match_mode": company_match_mode,
+            "employment_status_mode": employment_status_mode,
+            "job_description": job_description_notes,
+            "job_description_source": job_description_source["source"],
+            "uploaded_job_description_name": uploaded_job_description_name,
+            "uploaded_job_description_text": uploaded_job_description_text,
+            "anchors": anchors,
+        },
     }
 
     return {
@@ -818,6 +991,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "feedback_db": str(feedback_db),
         "model_dir": str(model_dir),
         "job_description_breakdown": breakdown,
+        "job_description_source": job_description_source,
     }
 
 
@@ -859,6 +1033,8 @@ def build_app_bootstrap() -> Dict[str, Any]:
         },
         "presets": {
             "supply_chain_manager_uae": {
+                "project_name": "Supply Chain Manager - UAE",
+                "client_name": "Demo Client",
                 "role_title": "Supply Chain Manager",
                 "titles": [
                     "Supply Chain Manager",

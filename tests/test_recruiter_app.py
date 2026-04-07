@@ -4,7 +4,9 @@ from hr_hunter.recruiter_app import (
     build_ui_brief_payload,
     compute_internal_fetch_limit,
     compute_top_up_fetch_limit,
+    ensure_structured_jd_breakdown,
     extract_job_description_breakdown,
+    resolve_job_description_source,
 )
 
 
@@ -130,3 +132,65 @@ def test_build_ui_brief_payload_respects_internal_fetch_override():
     assert payload["brief_config"]["provider_settings"]["retrieval"]["results_per_slice"] == 600
     assert payload["brief_config"]["provider_settings"]["registry_memory"]["limit"] == 600
     assert payload["brief_config"]["provider_settings"]["reranker"]["top_n"] == 600
+
+
+def test_resolve_job_description_source_prefers_uploaded_text_and_keeps_notes():
+    source = resolve_job_description_source(
+        typed_text="Focus on retail and GCC exposure.",
+        uploaded_text="We are hiring a Supply Chain Manager.\nStrong SAP and S&OP experience required.",
+        uploaded_file_name="supply-chain-manager.pdf",
+    )
+
+    assert source["source"] == "uploaded_file"
+    assert source["file_name"] == "supply-chain-manager.pdf"
+    assert source["primary_text"].startswith("We are hiring a Supply Chain Manager")
+    assert "Recruiter Notes" in source["combined_text"]
+    assert "Focus on retail and GCC exposure." in source["combined_text"]
+
+
+def test_build_ui_brief_payload_persists_uploaded_jd_metadata():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "",
+            "titles": [],
+            "countries": ["United Arab Emirates"],
+            "job_description": "Please prioritize GCC retail exposure.",
+            "uploaded_job_description_name": "supply-chain-manager.pdf",
+            "uploaded_job_description_text": "We are hiring a Supply Chain Manager with 6-9 years of experience in SAP, S&OP, and demand planning.",
+        }
+    )
+
+    assert payload["brief_config"]["document_text"].startswith("We are hiring a Supply Chain Manager")
+    assert "Recruiter Notes" in payload["brief_config"]["document_text"]
+    assert payload["brief_config"]["ui_meta"]["uploaded_job_description_name"] == "supply-chain-manager.pdf"
+    assert payload["brief_config"]["ui_meta"]["uploaded_job_description_text"].startswith("We are hiring a Supply Chain Manager")
+    assert payload["brief_config"]["role_title"] == "Supply Chain Manager"
+
+
+def test_ensure_structured_jd_breakdown_repairs_echoed_remote_response():
+    text = (
+        "We are hiring a Finance Manager in Dubai. "
+        "The role requires 6-9 years of experience, strong budgeting, forecasting, FP&A, and stakeholder management. "
+        "Preferred background in retail and GCC markets. Recruiter Notes: Focus on UAE retail exposure."
+    )
+
+    repaired = ensure_structured_jd_breakdown(
+        {
+            "summary": text,
+            "titles": [],
+            "required_keywords": [],
+            "preferred_keywords": [],
+            "industry_keywords": [],
+            "key_experience_points": [],
+            "years": {"mode": "range", "value": None, "min": None, "max": None, "tolerance": 0},
+        },
+        job_description=text,
+        role_title="",
+    )
+
+    assert repaired["summary"].startswith("Target role:")
+    assert repaired["titles"]
+    assert repaired["titles"][0] == "Finance Manager"
+    assert "forecasting" in repaired["required_keywords"]
+    assert repaired["years"]["min"] == 6
+    assert repaired["years"]["max"] == 9

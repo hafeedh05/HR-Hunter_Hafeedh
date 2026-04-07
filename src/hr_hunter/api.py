@@ -25,11 +25,14 @@ from hr_hunter.output import (
     collect_seen_provider_queries,
     write_report,
 )
+from hr_hunter.parsers.documents import extract_document_text_from_bytes
 from hr_hunter.recruiter_app import (
     build_app_bootstrap,
     build_ui_brief_payload,
     compute_top_up_fetch_limit,
+    ensure_structured_jd_breakdown,
     extract_job_description_breakdown,
+    resolve_job_description_source,
     safe_artifact_path,
 )
 from hr_hunter.remote import RemoteSourcingClient, RemoteSourcingError, candidate_from_remote
@@ -74,14 +77,17 @@ from hr_hunter.workspace import (
 )
 
 try:
-    from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+    from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
 except ImportError as exc:  # pragma: no cover - optional dependency
     FastAPI = None
     BackgroundTasks = None
+    File = None
+    Form = None
     HTTPException = RuntimeError
     Request = object
+    UploadFile = None
     FileResponse = None
     StaticFiles = None
     FASTAPI_IMPORT_ERROR = exc
@@ -812,16 +818,94 @@ def create_app() -> "FastAPI":
     @app.post("/app/jd-breakdown")
     async def app_jd_breakdown(request: Request, payload: Dict[str, Any]) -> Dict[str, Any]:
         _require_app_user(request)
+        source = resolve_job_description_source(
+            typed_text=str(payload.get("job_description", "")),
+            uploaded_text=str(payload.get("uploaded_job_description_text", "")),
+            uploaded_file_name=str(payload.get("uploaded_job_description_name", "")),
+        )
+        parse_payload = dict(payload)
+        parse_payload["job_description"] = source["combined_text"]
+        breakdown: Dict[str, Any] | None = None
         if remote_client.is_configured():
             try:
-                return await remote_client.parse_brief(payload)
+                breakdown = await remote_client.parse_brief(parse_payload)
             except Exception as exc:
                 if remote_client.is_required() and not _remote_error_allows_local_fallback(exc):
                     raise HTTPException(status_code=502, detail=f"Remote brief parsing failed: {exc}") from exc
-        return extract_job_description_breakdown(
-            str(payload.get("job_description", "")),
+        if breakdown is None:
+            breakdown = extract_job_description_breakdown(
+                source["combined_text"],
+                role_title=str(payload.get("role_title", "")),
+            )
+        breakdown = ensure_structured_jd_breakdown(
+            breakdown,
+            job_description=source["combined_text"],
             role_title=str(payload.get("role_title", "")),
         )
+        breakdown["source"] = source["source"]
+        breakdown["uploaded_file_name"] = source["file_name"]
+        return breakdown
+
+    @app.post("/app/jd-upload")
+    async def app_jd_upload(
+        request: Request,
+        file: UploadFile = File(...),
+        role_title: str = Form(""),
+        job_description_notes: str = Form(""),
+    ) -> Dict[str, Any]:
+        _require_app_user(request)
+        file_name = str(file.filename or "").strip()
+        if not file_name:
+            raise HTTPException(status_code=400, detail="Choose a JD file to upload.")
+
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="The uploaded JD file is empty.")
+
+        try:
+            extracted = extract_document_text_from_bytes(file_name, content)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        source = resolve_job_description_source(
+            typed_text=job_description_notes,
+            uploaded_text=str(extracted.get("text", "")),
+            uploaded_file_name=file_name,
+        )
+        parse_payload = {
+            "role_title": role_title,
+            "job_description": source["combined_text"],
+        }
+        if remote_client.is_configured():
+            try:
+                breakdown = await remote_client.parse_brief(parse_payload)
+            except Exception as exc:
+                if remote_client.is_required() and not _remote_error_allows_local_fallback(exc):
+                    raise HTTPException(status_code=502, detail=f"Remote brief parsing failed: {exc}") from exc
+                breakdown = extract_job_description_breakdown(source["combined_text"], role_title=role_title)
+        else:
+            breakdown = extract_job_description_breakdown(source["combined_text"], role_title=role_title)
+
+        breakdown = ensure_structured_jd_breakdown(
+            breakdown,
+            job_description=source["combined_text"],
+            role_title=role_title,
+        )
+
+        if not role_title and isinstance(breakdown.get("titles"), list) and breakdown["titles"]:
+            parse_payload["role_title"] = str(breakdown["titles"][0])
+
+        breakdown["source"] = source["source"]
+        breakdown["uploaded_file_name"] = file_name
+        return {
+            "uploaded_file_name": file_name,
+            "uploaded_file_extension": extracted.get("file_extension", ""),
+            "uploaded_parser": extracted.get("parser", ""),
+            "uploaded_job_description_text": extracted.get("text", ""),
+            "job_description": job_description_notes,
+            "effective_job_description": source["combined_text"],
+            "breakdown": breakdown,
+        }
 
     @app.post("/app/search")
     async def app_search(request: Request, payload: Dict[str, Any]) -> Dict[str, Any]:

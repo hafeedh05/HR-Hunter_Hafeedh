@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from io import BytesIO
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from zipfile import ZipFile
@@ -9,11 +10,8 @@ from zipfile import ZipFile
 WORD_NAMESPACE = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
 
-def extract_docx_text(path: Path) -> str:
-    if not path.exists():
-        raise FileNotFoundError(f"DOCX file not found: {path}")
-
-    with ZipFile(path) as archive:
+def extract_docx_text_bytes(content: bytes) -> str:
+    with ZipFile(BytesIO(content)) as archive:
         xml_bytes = archive.read("word/document.xml")
 
     root = ET.fromstring(xml_bytes)
@@ -34,3 +32,9 @@ def extract_docx_text(path: Path) -> str:
             paragraphs.append(text)
 
     return "\n".join(paragraphs)
+
+
+def extract_docx_text(path: Path) -> str:
+    if not path.exists():
+        raise FileNotFoundError(f"DOCX file not found: {path}")
+    return extract_docx_text_bytes(path.read_bytes())

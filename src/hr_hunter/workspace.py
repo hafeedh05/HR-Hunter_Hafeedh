@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from hr_hunter.db import DbIntegrityError, connect_database, resolve_database_target
 from hr_hunter.output import load_report
-from hr_hunter.state import _run_summary_from_artifact, init_state_db
+from hr_hunter.state import _run_summary_from_artifact, init_state_db, list_jobs, stop_job
 
 
 DEFAULT_ADMIN_EMAIL = "admin.hrhunter@hyve"
@@ -1099,6 +1099,22 @@ def delete_project(
     project_id: str,
     db_path: Path | None = None,
 ) -> Dict[str, Any]:
+    stopped_job_ids: List[str] = []
+    try:
+        active_jobs = list_jobs(db_path=db_path, limit=500, project_id=project_id)
+    except Exception:
+        active_jobs = []
+    for job in active_jobs:
+        if str(job.get("status", "")).strip().lower() not in {"queued", "running"}:
+            continue
+        stopped = stop_job(
+            str(job.get("job_id", "")).strip(),
+            reason="Stopped automatically because the project was deleted.",
+            db_path=db_path,
+        )
+        if stopped:
+            stopped_job_ids.append(str(stopped.get("job_id", "")).strip())
+
     resolved = init_workspace_db(db_path)
     with _connect(resolved) as connection:
         row = _project_row_for_user(connection, user, project_id)
@@ -1108,6 +1124,7 @@ def delete_project(
             "id": row["id"],
             "name": row["name"],
             "role_title": row["role_title"] or "",
+            "stopped_job_ids": stopped_job_ids,
         }
         connection.execute("DELETE FROM project_members WHERE project_id = ?", (project_id,))
         connection.execute("DELETE FROM run_candidates WHERE mandate_id = ?", (project_id,))

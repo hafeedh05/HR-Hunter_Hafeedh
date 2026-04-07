@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from hr_hunter.models import GeoSpec, SearchBrief
-from hr_hunter.parsers.docx import extract_docx_text
+from hr_hunter.parsers.documents import extract_document_text_from_path
 
 
 COMPANY_SUFFIX_PATTERN = re.compile(
@@ -292,7 +292,7 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
     if brief_path:
         path = Path(brief_path).expanduser()
         if path.exists():
-            extracted_text = extract_docx_text(path)
+            extracted_text = extract_document_text_from_path(path)
             document_text = "\n\n".join(
                 value for value in [inline_document_text, extracted_text] if value
             )

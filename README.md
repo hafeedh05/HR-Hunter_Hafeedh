@@ -39,7 +39,10 @@ The app supports multiple recruiters, admin-only controls, recruiter account pro
   - target companies and company match mode
   - employment status mode
   - must-have and nice-to-have keywords
-  - job description and JD breakdown
+  - typed job descriptions and recruiter notes
+  - JD uploads from `pdf`, `doc`, `docx`, `txt`, `md`, and `rtf`
+  - automatic structured JD breakdown from uploaded files
+  - manual JD breakdown from typed descriptions
   - ranking anchors
 - Separate tabs for:
   - Projects
@@ -136,6 +139,12 @@ uv run hr-hunter serve --host 127.0.0.1 --port 8765
 Then open:
 
 - `http://127.0.0.1:8765`
+
+JD handling in the app:
+
+- Uploading a JD file automatically runs structured JD breakdown.
+- Typed JD text can be broken down with the `Break Down JD` button.
+- If both an uploaded file and typed text are present, the uploaded file is used as the primary JD source and the typed text is treated as optional recruiter notes.
 
 ## CLI Commands
 
