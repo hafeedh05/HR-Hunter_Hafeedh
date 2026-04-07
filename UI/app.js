@@ -1,31 +1,79 @@
-const STORAGE_KEY = "hr-hunter-ui-settings";
+const STORAGE_KEY = "hr-hunter-ui-v3";
+const SESSION_KEY = "hr-hunter-session-token";
+const SESSION_HANDOFF_KEY = "hr-hunter-session-handoff";
+window.__HR_HUNTER_UI_READY = true;
 const TAB_META = {
-  search: {
-    title: "Recruiter",
-    description: "Build the search brief, break down the JD, and prepare the candidate run.",
+  projects: {
+    title: "Projects",
+    description: "Search existing projects, pick the active mandate, or start a new project.",
+  },
+  recruiter: {
+    title: "Hunt",
+    description: "Complete the hunt brief, assign teammates, and run searches for the current project.",
   },
   results: {
     title: "Results",
-    description: "Review ranked candidates, CSV exports, and score explanations.",
+    description: "Review the latest ranked candidates for the selected project.",
+  },
+  candidates: {
+    title: "Candidates",
+    description: "Browse, filter, and review the latest candidate list for the selected project.",
   },
   feedback: {
     title: "Feedback",
-    description: "Save recruiter actions and train the learned ranker from real feedback.",
+    description: "See recruiter actions and use them to improve ranking over time.",
+  },
+  history: {
+    title: "History",
+    description: "Open previous runs and project activity for the selected mandate.",
   },
   settings: {
     title: "Settings",
-    description: "Change themes, manage file paths, and send support or feature requests.",
+    description: "Switch theme, change paths, and send support or feature requests.",
   },
 };
-
+const ANCHOR_LEVELS = [
+  { id: "ignore", label: "Ignore" },
+  { id: "preferred", label: "Preferred" },
+  { id: "important", label: "Important" },
+  { id: "critical", label: "Critical" },
+];
+const FEATURE_LABELS = {
+  title_similarity: "Title Fit",
+  company_match: "Company Fit",
+  employment_status: "Employment Status",
+  location_match: "Location Fit",
+  skill_overlap: "Skills Fit",
+  industry_fit: "Industry Fit",
+  years_fit: "Years Fit",
+  current_function_fit: "Function Fit",
+  semantic_similarity: "Semantic Fit",
+  parser_confidence: "Parser Confidence",
+  evidence_quality: "Evidence Quality",
+};
 const state = {
   config: null,
+  sessionToken: "",
+  user: null,
+  users: [],
+  projects: [],
+  selectedProjectId: "",
+  selectedProject: null,
+  currentReport: null,
+  currentRuns: [],
+  currentReviews: [],
   currentBreakdown: null,
-  currentSearch: null,
-  tokenFields: {},
-  activeTab: "search",
+  activeTab: "projects",
+  ownerOpen: false,
   navOpen: false,
-  developerOpen: false,
+  activeJob: null,
+  jobPollHandle: null,
+  tokenFields: {},
+  projectSearchQuery: "",
+  candidateSearchQuery: "",
+  candidateStatusFilter: "all",
+  selectedCandidateRef: "",
+  settings: {},
 };
 
 class TokenField {
@@ -33,6 +81,7 @@ class TokenField {
     this.root = root;
     this.tokens = [];
     this.suggestions = suggestions;
+    this.root.innerHTML = "";
     this.input = document.createElement("input");
     this.input.className = "token-input";
     this.input.type = "text";
@@ -46,8 +95,8 @@ class TokenField {
         option.value = suggestion;
         datalist.appendChild(option);
       });
-      this.input.setAttribute("list", listId);
       root.appendChild(datalist);
+      this.input.setAttribute("list", listId);
     }
     this.input.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === ",") {
@@ -76,8 +125,9 @@ class TokenField {
   }
 
   addFromInput() {
-    if (!this.input.value.trim()) return;
-    this.add(this.input.value);
+    const value = this.input.value.trim();
+    if (!value) return;
+    this.add(value);
     this.input.value = "";
   }
 
@@ -120,30 +170,66 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function formatJson(value) {
-  return JSON.stringify(value, null, 2);
-}
-
-function safeNumber(value) {
+function safeNumber(value, fallback = 0) {
   const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : 0;
+  return Number.isFinite(numeric) ? numeric : fallback;
 }
 
-function featureValue(candidate, key) {
-  if (candidate?.feature_scores && candidate.feature_scores[key] !== undefined) {
-    return safeNumber(candidate.feature_scores[key]);
+function formatTimestamp(value) {
+  if (!value) return "Unknown";
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? String(value) : timestamp.toLocaleString();
+}
+
+function formatScore(value) {
+  return safeNumber(value).toFixed(2);
+}
+
+function titleCaseWords(value) {
+  return String(value || "")
+    .split(/[\s_:-]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function humanizeNote(note) {
+  const text = String(note || "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+}
+
+function artifactHref(path) {
+  return `/app/artifact?path=${encodeURIComponent(path)}`;
+}
+
+function sessionHeaders() {
+  return state.sessionToken ? { "X-Session-Token": state.sessionToken } : {};
+}
+
+async function fetchJSON(url, options = {}) {
+  const headers = {
+    ...(options.body ? { "Content-Type": "application/json" } : {}),
+    ...sessionHeaders(),
+    ...(options.headers || {}),
+  };
+  const response = await fetch(url, {
+    method: options.method || "GET",
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+  if (!response.ok) {
+    const detail = typeof payload === "string" ? payload : payload.detail || "Request failed.";
+    throw new Error(detail);
   }
-  return 0;
+  return payload;
 }
 
-function statusKey(status) {
-  const normalized = String(status || "").trim().toLowerCase();
-  if (normalized === "verified") return "verified";
-  if (normalized === "review" || normalized === "needs_review") return "review";
-  return "reject";
-}
-
-function getStoredSettings() {
+function readStoredState() {
   try {
     return JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
   } catch {
@@ -151,107 +237,329 @@ function getStoredSettings() {
   }
 }
 
-function saveStoredSettings(value) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+function persistStoredState() {
+  window.localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      settings: state.settings,
+      selectedProjectId: state.selectedProjectId,
+    }),
+  );
 }
 
-function clearStoredSettings() {
+function clearStoredState() {
   window.localStorage.removeItem(STORAGE_KEY);
 }
 
-async function fetchJSON(url, options = {}) {
-  const response = await fetch(url, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
-  const contentType = response.headers.get("content-type") || "";
-  const payload = contentType.includes("application/json") ? await response.json() : await response.text();
-  if (!response.ok) {
-    const detail = typeof payload === "string" ? payload : payload.detail || "Request failed";
-    throw new Error(detail);
-  }
-  return payload;
-}
-
 function setStatus(message, tone = "default", detail = "") {
-  const line = document.getElementById("status-line");
-  const extra = document.getElementById("status-detail");
-  const statusCard = document.querySelector(".status-card");
-  line.textContent = message;
-  extra.textContent = detail || TAB_META[state.activeTab]?.description || "";
+  const statusLine = document.getElementById("status-line");
+  const statusDetail = document.getElementById("status-detail");
+  const statusCard = document.getElementById("status-card");
+  statusLine.textContent = message;
+  statusDetail.textContent = detail || TAB_META[state.activeTab]?.description || "";
   statusCard.dataset.tone = tone;
 }
 
-function closeNavDrawer() {
-  state.navOpen = false;
-  document.getElementById("nav-drawer").hidden = true;
-  document.getElementById("nav-backdrop").hidden = true;
-  document.body.classList.remove("nav-open");
+function applyTheme(themeId) {
+  const resolved = themeId === "dark" ? "dark" : "bright";
+  document.body.classList.remove("theme-bright", "theme-dark");
+  document.body.classList.add(`theme-${resolved}`);
+  state.settings.theme = resolved;
+  document.querySelectorAll("[data-theme-button]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.themeButton === resolved);
+  });
 }
 
-function openNavDrawer() {
+function defaultSettingsFromConfig() {
+  const defaults = state.config?.defaults || {};
+  const paths = state.config?.paths || {};
+  return {
+    theme: defaults.theme || "bright",
+    limit: safeNumber(defaults.limit, 20),
+    feedback_db: defaults.feedback_db || paths.feedback_db || "",
+    model_dir: defaults.model_dir || paths.model_dir || "",
+    output_dir: defaults.output_dir || paths.output_dir || "",
+    providers: Array.isArray(defaults.providers) ? defaults.providers : ["scrapingbee_google"],
+    reranker_enabled: defaults.reranker_enabled !== false,
+    learned_ranker_enabled: Boolean(defaults.learned_ranker_enabled),
+    include_history_slices: defaults.include_history_slices !== false,
+    include_discovery_slices: defaults.include_discovery_slices !== false,
+    registry_memory_enabled: defaults.registry_memory_enabled !== false,
+    reranker_model_name: defaults.reranker_model_name || "BAAI/bge-reranker-v2-m3",
+  };
+}
+
+function hydrateSettings() {
+  const stored = readStoredState();
+  state.selectedProjectId = String(stored.selectedProjectId || "").trim();
+  const defaults = defaultSettingsFromConfig();
+  const candidateProviders = Array.isArray(stored.settings?.providers) ? stored.settings.providers : defaults.providers;
+  state.settings = {
+    ...defaults,
+    ...(stored.settings || {}),
+    providers: candidateProviders.filter((provider) => (state.config?.providers || []).includes(provider)),
+  };
+  if (!state.settings.providers.length) {
+    state.settings.providers = [...defaults.providers];
+  }
+  if (!Number.isFinite(Number(state.settings.limit)) || Number(state.settings.limit) < 1) {
+    state.settings.limit = defaults.limit;
+  }
+  applyTheme(state.settings.theme);
+}
+
+function showAuthShell() {
+  closeNav();
+  closeOwnerDrawer();
+  document.getElementById("auth-shell").hidden = false;
+  document.getElementById("app-shell").hidden = true;
+}
+
+function showAppShell() {
+  document.getElementById("auth-shell").hidden = true;
+  document.getElementById("app-shell").hidden = false;
+}
+
+function openNav() {
   state.navOpen = true;
   document.getElementById("nav-drawer").hidden = false;
   document.getElementById("nav-backdrop").hidden = false;
-  document.body.classList.add("nav-open");
 }
 
-function toggleNavDrawer() {
-  if (state.navOpen) {
-    closeNavDrawer();
-    return;
-  }
-  openNavDrawer();
+function closeNav() {
+  state.navOpen = false;
+  document.getElementById("nav-drawer").hidden = true;
+  document.getElementById("nav-backdrop").hidden = true;
 }
 
-function closeDeveloperPanel() {
-  state.developerOpen = false;
-  document.getElementById("developer-panel").hidden = true;
-  document.getElementById("developer-backdrop").hidden = true;
-  document.body.classList.remove("developer-open");
+function openOwnerDrawer() {
+  if (!state.user?.is_admin) return;
+  state.ownerOpen = true;
+  document.getElementById("owner-drawer").hidden = false;
+  renderOwnerSnapshot();
 }
 
-function openDeveloperPanel() {
-  state.developerOpen = true;
-  document.getElementById("developer-panel").hidden = false;
-  document.getElementById("developer-backdrop").hidden = false;
-  document.body.classList.add("developer-open");
-}
-
-function toggleDeveloperPanel() {
-  if (state.developerOpen) {
-    closeDeveloperPanel();
-    return;
-  }
-  openDeveloperPanel();
+function closeOwnerDrawer() {
+  state.ownerOpen = false;
+  document.getElementById("owner-drawer").hidden = true;
 }
 
 function switchTab(tabId) {
   state.activeTab = tabId;
-  document.querySelectorAll(".nav-button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.tab === tabId);
-  });
   document.querySelectorAll("[data-tab-panel]").forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.tabPanel === tabId);
   });
-  const meta = TAB_META[tabId] || TAB_META.search;
-  document.getElementById("tab-title").textContent = meta.title;
-  document.getElementById("tab-description").textContent = meta.description;
-  setStatus(document.getElementById("status-line").textContent || "Workspace ready.", "default", meta.description);
-  closeNavDrawer();
+  document.querySelectorAll("[data-tab-target]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.tabTarget === tabId);
+  });
+  document.getElementById("view-title").textContent = TAB_META[tabId].title;
+  document.getElementById("view-heading").textContent = TAB_META[tabId].title;
+  document.getElementById("view-description").textContent = TAB_META[tabId].description;
+  updateTopbarActions();
+  closeNav();
+  setStatus(state.selectedProject ? `${state.selectedProject.name} selected.` : "Ready", "default", TAB_META[tabId].description);
 }
 
-function applyTheme(themeId) {
-  const allowedThemes = new Set((state.config?.themes || []).map((theme) => theme.id));
-  const fallbackTheme = state.config?.defaults?.theme || "bright";
-  const theme = allowedThemes.has(themeId) ? themeId : fallbackTheme;
-  document.body.dataset.theme = theme;
-  document.querySelectorAll(".theme-button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.theme === theme);
+function updateTopbarActions() {
+  const saveButton = document.getElementById("top-save-button");
+  const deleteButton = document.getElementById("top-delete-button");
+  const runButton = document.getElementById("top-run-button");
+  const onProjects = state.activeTab === "projects";
+  const onHunt = state.activeTab === "recruiter";
+
+  saveButton.hidden = !onProjects;
+  deleteButton.hidden = !(onProjects && state.selectedProjectId);
+  runButton.hidden = !onHunt;
+}
+
+function selectedProjectFromList() {
+  return state.projects.find((project) => project.id === state.selectedProjectId) || null;
+}
+
+function currentAnchorValues() {
+  const values = {};
+  document.querySelectorAll("[data-anchor-select]").forEach((select) => {
+    values[select.dataset.anchorSelect] = select.value || "ignore";
+  });
+  return values;
+}
+
+function defaultAnchorValues() {
+  const values = {};
+  (state.config?.anchors || []).forEach((anchor) => {
+    values[anchor.id] = anchor.default || "preferred";
+  });
+  return values;
+}
+
+function renderAnchorGrid(values = {}) {
+  const root = document.getElementById("anchor-grid");
+  root.innerHTML = "";
+  const merged = { ...defaultAnchorValues(), ...values };
+  (state.config?.anchors || []).forEach((anchor) => {
+    const wrapper = document.createElement("div");
+    wrapper.className = "anchor-card";
+    wrapper.innerHTML = `
+      <div class="inline-heading">
+        <span>${escapeHtml(anchor.label)}</span>
+      </div>
+      <p class="muted small">${escapeHtml(anchor.description || "")}</p>
+    `;
+    const select = document.createElement("select");
+    select.dataset.anchorSelect = anchor.id;
+    ANCHOR_LEVELS.forEach((level) => {
+      const option = document.createElement("option");
+      option.value = level.id;
+      option.textContent = level.label;
+      if (merged[anchor.id] === level.id) {
+        option.selected = true;
+      }
+      select.appendChild(option);
+    });
+    wrapper.appendChild(select);
+    root.appendChild(wrapper);
   });
 }
 
-function createTokenFields(config) {
+function renderThemeToggle() {
+  const root = document.getElementById("theme-toggle");
+  root.innerHTML = "";
+  (state.config?.themes || []).forEach((theme) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "theme-button";
+    button.dataset.themeButton = theme.id;
+    button.innerHTML = `<strong>${escapeHtml(theme.label)}</strong><span>${escapeHtml(theme.description || "")}</span>`;
+    button.addEventListener("click", () => {
+      applyTheme(theme.id);
+      persistStoredState();
+    });
+    root.appendChild(button);
+  });
+  applyTheme(state.settings.theme);
+}
+
+function renderProjectStatuses() {
+  const select = document.getElementById("project-status");
+  select.innerHTML = "";
+  (state.config?.project_statuses || []).forEach((status) => {
+    const option = document.createElement("option");
+    option.value = status.id;
+    option.textContent = status.label;
+    select.appendChild(option);
+  });
+}
+
+function renderProviderOptions() {
+  const root = document.getElementById("provider-options");
+  if (!root) return;
+  root.innerHTML = "";
+}
+
+function hideProvisioningCard() {
+  const card = document.getElementById("owner-provision-card");
+  if (card) {
+    card.hidden = true;
+  }
+}
+
+async function copyToClipboard(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function renderProvisioningCard(payload, detailMessage = "") {
+  const card = document.getElementById("owner-provision-card");
+  if (!card || !payload?.totp) return;
+  document.getElementById("owner-provision-email").value = payload.user?.email || payload.totp.account_name || "";
+  document.getElementById("owner-provision-secret").value = payload.totp.secret || "";
+  document.getElementById("owner-provision-uri").value = payload.totp.provisioning_uri || "";
+  document.getElementById("owner-provision-note").textContent =
+    detailMessage || "Add the manual key to any authenticator app if the provisioning link cannot be opened directly.";
+  card.hidden = false;
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function setCheckboxIfPresent(id, value) {
+  const input = document.getElementById(id);
+  if (input) {
+    input.checked = Boolean(value);
+  }
+}
+
+function bindOwnerToggle(ownerId, settingsId, stateKey, detailMessage) {
+  const input = document.getElementById(ownerId);
+  if (!input) return;
+  input.addEventListener("change", () => {
+    state.settings[stateKey] = input.checked;
+    if (settingsId) {
+      setCheckboxIfPresent(settingsId, input.checked);
+    }
+    persistStoredState();
+    setStatus("Developer controls updated.", "success", detailMessage);
+  });
+}
+
+function renderMemberPicker(selectedIds = []) {
+  const root = document.getElementById("assigned-recruiters");
+  root.innerHTML = "";
+  if (!state.users.length) {
+    root.innerHTML = `<p class="muted">No recruiter accounts loaded yet.</p>`;
+    return;
+  }
+  state.users.forEach((user) => {
+    const row = document.createElement("label");
+    row.className = "member-option";
+    row.innerHTML = `
+      <input type="checkbox" data-member-id="${escapeHtml(user.id)}" />
+      <span>
+        <strong>${escapeHtml(user.full_name || user.email)}</strong>
+        <small>${escapeHtml(user.email)}${user.team_id ? ` | ${escapeHtml(user.team_id)}` : ""}${user.is_admin ? " | Admin" : ""}</small>
+      </span>
+    `;
+    row.querySelector("input").checked = selectedIds.includes(user.id);
+    root.appendChild(row);
+  });
+}
+
+function renderBreakdown() {
+  const root = document.getElementById("breakdown-panel");
+  const breakdown = state.currentBreakdown;
+  if (!breakdown || !Object.keys(breakdown).length) {
+    root.innerHTML = `<p class="muted">No breakdown yet. Paste a JD and click Break Down JD.</p>`;
+    return;
+  }
+  const keyPoints = Array.isArray(breakdown.key_experience_points) ? breakdown.key_experience_points.slice(0, 5) : [];
+  const required = Array.isArray(breakdown.required_keywords) ? breakdown.required_keywords : [];
+  const preferred = Array.isArray(breakdown.preferred_keywords) ? breakdown.preferred_keywords : [];
+  const industries = Array.isArray(breakdown.industry_keywords) ? breakdown.industry_keywords : [];
+  const titles = Array.isArray(breakdown.titles) ? breakdown.titles : [];
+  const seniority = Array.isArray(breakdown.seniority_levels) ? breakdown.seniority_levels : [];
+  const years = breakdown.years || {};
+  root.innerHTML = `
+    <p>${escapeHtml(breakdown.summary || "Breakdown ready.")}</p>
+    ${keyPoints.length
+      ? `<div class="breakdown-section"><strong>Key Experience Points</strong><ul class="breakdown-list">${keyPoints.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul></div>`
+      : ""}
+    ${required.length ? `<p><strong>Required:</strong> ${escapeHtml(required.join(", "))}</p>` : ""}
+    ${preferred.length ? `<p><strong>Preferred:</strong> ${escapeHtml(preferred.join(", "))}</p>` : ""}
+    ${industries.length ? `<p><strong>Industry:</strong> ${escapeHtml(industries.join(", "))}</p>` : ""}
+    ${titles.length ? `<p><strong>Titles:</strong> ${escapeHtml(titles.join(", "))}</p>` : ""}
+    ${seniority.length ? `<p><strong>Seniority:</strong> ${escapeHtml(seniority.map(titleCaseWords).join(", "))}</p>` : ""}
+    ${(years.min !== null && years.min !== undefined) || (years.max !== null && years.max !== undefined)
+      ? `<p><strong>Years:</strong> ${escapeHtml(years.min ?? "0")} - ${escapeHtml(years.max ?? years.value ?? "")}</p>`
+      : ""}
+  `;
+}
+
+function initialiseTokenFields() {
+  const config = state.config || {};
   state.tokenFields = {
     titles: new TokenField(document.getElementById("titles-field")),
     countries: new TokenField(document.getElementById("countries-field"), config.countries || []),
@@ -266,350 +574,1703 @@ function createTokenFields(config) {
   };
 }
 
-function renderThemeOptions(config) {
-  const box = document.getElementById("theme-options");
-  box.innerHTML = "";
-  (config.themes || []).forEach((theme) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "theme-button";
-    button.dataset.theme = theme.id;
-    button.innerHTML = `<strong>${escapeHtml(theme.label)}</strong><span>${escapeHtml(theme.description)}</span>`;
-    button.addEventListener("click", () => applyTheme(theme.id));
-    box.appendChild(button);
-  });
+function getCheckedMemberIds() {
+  return Array.from(document.querySelectorAll("[data-member-id]"))
+    .filter((checkbox) => checkbox.checked)
+    .map((checkbox) => checkbox.dataset.memberId);
 }
 
-function renderAnchors(config) {
-  const grid = document.getElementById("anchor-grid");
-  grid.innerHTML = "";
-  const levels = [
-    { value: "critical", label: "Critical" },
-    { value: "important", label: "Important" },
-    { value: "preferred", label: "Preferred" },
-    { value: "ignore", label: "Ignore" },
-  ];
-  (config.anchors || []).forEach((anchor) => {
-    const card = document.createElement("div");
-    card.className = "anchor-card";
-    const select = document.createElement("select");
-    select.id = `anchor-${anchor.id}`;
-    levels.forEach((level) => {
-      const option = document.createElement("option");
-      option.value = level.value;
-      option.textContent = level.label;
-      if ((anchor.default || "preferred") === level.value) option.selected = true;
-      select.appendChild(option);
-    });
-    card.innerHTML = `<label for="anchor-${anchor.id}">${escapeHtml(anchor.label)}</label><p>${escapeHtml(anchor.description)}</p>`;
-    card.appendChild(select);
-    grid.appendChild(card);
-  });
+function populateSettingsFields() {
+  document.getElementById("settings-limit").value = String(state.settings.limit || 20);
+  document.getElementById("settings-feedback-db").value = state.settings.feedback_db || "";
+  document.getElementById("settings-model-dir").value = state.settings.model_dir || "";
+  document.getElementById("settings-output-dir").value = state.settings.output_dir || "";
+  document.getElementById("settings-semantic-enabled").checked = Boolean(state.settings.reranker_enabled);
+  document.getElementById("settings-feedback-model-enabled").checked = Boolean(state.settings.learned_ranker_enabled);
+  document.getElementById("settings-history-context-enabled").checked = Boolean(state.settings.include_history_slices);
+  setCheckboxIfPresent("owner-semantic-enabled", state.settings.reranker_enabled);
+  setCheckboxIfPresent("owner-feedback-model-enabled", state.settings.learned_ranker_enabled);
+  setCheckboxIfPresent("owner-history-context-enabled", state.settings.include_history_slices);
+  setCheckboxIfPresent("owner-discovery-enabled", state.settings.include_discovery_slices);
+  setCheckboxIfPresent("owner-memory-enabled", state.settings.registry_memory_enabled);
+  const modelLabel = document.getElementById("settings-model-display");
+  if (modelLabel) {
+    modelLabel.textContent = "HR Hunter Model V1";
+  }
 }
 
-function renderProviders(config) {
-  const box = document.getElementById("provider-box");
-  box.innerHTML = "";
-  (config.providers || []).forEach((provider) => {
-    const displayName = provider === "mock" ? "mock (developer only)" : provider;
-    const label = document.createElement("label");
-    label.className = "provider-option";
-    label.innerHTML = `<input type="checkbox" name="providers" value="${escapeHtml(provider)}"><span>${escapeHtml(displayName)}</span>`;
-    box.appendChild(label);
-  });
+function collectSettingsFromInputs() {
+  state.settings.limit = Math.max(1, safeNumber(document.getElementById("settings-limit").value, 20));
+  state.settings.feedback_db = document.getElementById("settings-feedback-db").value.trim();
+  state.settings.model_dir = document.getElementById("settings-model-dir").value.trim();
+  state.settings.output_dir = document.getElementById("settings-output-dir").value.trim();
+  state.settings.reranker_enabled = document.getElementById("settings-semantic-enabled").checked;
+  state.settings.learned_ranker_enabled = document.getElementById("settings-feedback-model-enabled").checked;
+  state.settings.include_history_slices = document.getElementById("settings-history-context-enabled").checked;
+  state.settings.providers = Array.isArray(state.config?.defaults?.providers)
+    ? [...state.config.defaults.providers]
+    : ["scrapingbee_google"];
+  state.settings.reranker_model_name = state.config?.defaults?.reranker_model_name || "BAAI/bge-reranker-v2-m3";
 }
 
-function collectAnchors() {
-  const anchors = {};
-  (state.config.anchors || []).forEach((anchor) => {
-    const element = document.getElementById(`anchor-${anchor.id}`);
-    if (!element) return;
-    const value = element.value;
-    if (value && value !== "ignore") {
-      anchors[anchor.id] = value;
-    }
-  });
-  return anchors;
+function resetProjectForm() {
+  document.getElementById("project-name").value = "";
+  document.getElementById("client-name").value = "";
+  document.getElementById("project-status").value = "active";
+  document.getElementById("role-title").value = "";
+  document.getElementById("target-geography").value = "";
+  document.getElementById("project-notes").value = "";
+  document.getElementById("years-mode").value = "range";
+  document.getElementById("years-value").value = "";
+  document.getElementById("years-tolerance").value = "";
+  document.getElementById("min-years").value = "";
+  document.getElementById("max-years").value = "";
+  document.getElementById("radius-miles").value = String(state.config?.defaults?.radius_miles || 25);
+  document.getElementById("candidate-limit").value = String(state.settings.limit || state.config?.defaults?.limit || 20);
+  document.getElementById("company-match-mode").value = state.config?.defaults?.company_match_mode || "both";
+  document.getElementById("employment-status-mode").value = state.config?.defaults?.employment_status_mode || "any";
+  document.getElementById("job-description").value = "";
+  Object.values(state.tokenFields).forEach((field) => field.setTokens([]));
+  renderMemberPicker(state.user ? [state.user.id] : []);
+  state.currentBreakdown = null;
+  renderBreakdown();
+  renderAnchorGrid();
 }
 
-function currentProviderSelection() {
-  const selected = Array.from(document.querySelectorAll('input[name="providers"]:checked')).map((input) => input.value);
-  return selected.length ? selected : ["scrapingbee_google"];
+function startNewProject() {
+  state.selectedProjectId = "";
+  state.selectedProject = null;
+  state.currentReport = null;
+  state.currentRuns = [];
+  state.currentReviews = [];
+  state.activeJob = null;
+  state.candidateSearchQuery = "";
+  state.candidateStatusFilter = "all";
+  state.selectedCandidateRef = "";
+  resetProjectForm();
+  renderProjectList();
+  renderProjectSummary();
+  renderResults();
+  renderCandidates();
+  renderFeedback();
+  renderHistory();
+  updateTopbarActions();
+  persistStoredState();
+  switchTab("recruiter");
+  setStatus("New project form ready.", "default", "Fill the hunt brief, then save the project.");
 }
 
-function collectPayload() {
-  const rowLimit = document.getElementById("row-limit").value;
+function buildUiMeta() {
   return {
-    role_title: document.getElementById("role-title").value.trim(),
     titles: state.tokenFields.titles.getTokens(),
+    countries: state.tokenFields.countries.getTokens(),
+    continents: state.tokenFields.continents.getTokens(),
+    cities: state.tokenFields.cities.getTokens(),
+    company_targets: state.tokenFields.companies.getTokens(),
+    must_have_keywords: state.tokenFields.mustHave.getTokens(),
+    nice_to_have_keywords: state.tokenFields.niceToHave.getTokens(),
+    industry_keywords: state.tokenFields.industry.getTokens(),
+    exclude_title_keywords: state.tokenFields.excludeTitles.getTokens(),
+    exclude_company_keywords: state.tokenFields.excludeCompanies.getTokens(),
     years_mode: document.getElementById("years-mode").value,
     years_value: document.getElementById("years-value").value,
     years_tolerance: document.getElementById("years-tolerance").value,
     minimum_years_experience: document.getElementById("min-years").value,
     maximum_years_experience: document.getElementById("max-years").value,
     radius_miles: document.getElementById("radius-miles").value,
-    countries: state.tokenFields.countries.getTokens(),
-    continents: state.tokenFields.continents.getTokens(),
-    cities: state.tokenFields.cities.getTokens(),
-    company_targets: state.tokenFields.companies.getTokens(),
+    candidate_limit: document.getElementById("candidate-limit").value,
     company_match_mode: document.getElementById("company-match-mode").value,
+    employment_status_mode: document.getElementById("employment-status-mode").value,
     job_description: document.getElementById("job-description").value,
-    must_have_keywords: state.tokenFields.mustHave.getTokens(),
-    nice_to_have_keywords: state.tokenFields.niceToHave.getTokens(),
-    industry_keywords: state.tokenFields.industry.getTokens(),
-    exclude_title_keywords: state.tokenFields.excludeTitles.getTokens(),
-    exclude_company_keywords: state.tokenFields.excludeCompanies.getTokens(),
-    anchors: collectAnchors(),
-    providers: currentProviderSelection(),
-    reranker_enabled: document.getElementById("reranker-enabled").checked,
-    learned_ranker_enabled: document.getElementById("learned-ranker-enabled").checked,
-    limit: rowLimit,
-    csv_export_limit: rowLimit,
-    feedback_db: document.getElementById("feedback-db").value,
-    model_dir: document.getElementById("model-dir").value,
-    output_dir: document.getElementById("output-dir").value,
-    jd_breakdown: state.currentBreakdown,
+    anchors: currentAnchorValues(),
   };
 }
 
-function renderBreakdown(breakdown) {
-  const container = document.getElementById("jd-breakdown");
-  if (!breakdown) {
-    container.className = "breakdown-empty";
-    container.textContent = "No JD breakdown yet. Paste a job description and use Break down JD.";
-    return;
-  }
-  container.className = "breakdown-grid";
-  const keyPoints = (breakdown.key_experience_points || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
-  const required = (breakdown.required_keywords || []).map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("");
-  const preferred = (breakdown.preferred_keywords || []).map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("");
-  const industries = (breakdown.industry_keywords || []).map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("");
-  const years = breakdown.years || {};
-  const yearText = years.min || years.max || years.value
-    ? `${years.mode} | min: ${years.min ?? "-"} | max: ${years.max ?? "-"}`
-    : "No clear years signal found";
-  container.innerHTML = `
-    <div class="breakdown-block">
-      <p class="field-label">Summary</p>
-      <p>${escapeHtml(breakdown.summary || "")}</p>
-      <p class="field-label">Key experience points</p>
-      <ul>${keyPoints || "<li>No strong signals extracted yet.</li>"}</ul>
-    </div>
-    <div class="breakdown-block">
-      <p class="field-label">Required keywords</p>
-      <div class="candidate-tags">${required || "<span class='tag'>None detected</span>"}</div>
-      <p class="field-label">Preferred keywords</p>
-      <div class="candidate-tags">${preferred || "<span class='tag'>None detected</span>"}</div>
-      <p class="field-label">Industry hints</p>
-      <div class="candidate-tags">${industries || "<span class='tag'>None detected</span>"}</div>
-      <p class="field-label">Years signal</p>
-      <p>${escapeHtml(yearText)}</p>
-    </div>
-  `;
+function buildBriefPayload() {
+  collectSettingsFromInputs();
+  const roleTitle = document.getElementById("role-title").value.trim();
+  const uiMeta = buildUiMeta();
+  const candidateLimit = Math.max(1, safeNumber(uiMeta.candidate_limit, state.settings.limit || 20));
+  return {
+    role_title: roleTitle,
+    titles: uiMeta.titles,
+    countries: uiMeta.countries,
+    continents: uiMeta.continents,
+    cities: uiMeta.cities,
+    company_targets: uiMeta.company_targets,
+    company_match_mode: uiMeta.company_match_mode,
+    employment_status_mode: uiMeta.employment_status_mode,
+    years_mode: uiMeta.years_mode,
+    years_value: uiMeta.years_value,
+    years_tolerance: uiMeta.years_tolerance,
+    minimum_years_experience: uiMeta.minimum_years_experience,
+    maximum_years_experience: uiMeta.maximum_years_experience,
+    radius_miles: uiMeta.radius_miles,
+    must_have_keywords: uiMeta.must_have_keywords,
+    nice_to_have_keywords: uiMeta.nice_to_have_keywords,
+    industry_keywords: uiMeta.industry_keywords,
+    exclude_title_keywords: uiMeta.exclude_title_keywords,
+    exclude_company_keywords: uiMeta.exclude_company_keywords,
+      job_description: uiMeta.job_description,
+      jd_breakdown: state.currentBreakdown,
+      anchors: uiMeta.anchors,
+      providers: state.settings.providers,
+      limit: candidateLimit,
+      csv_export_limit: candidateLimit,
+      feedback_db: state.settings.feedback_db,
+      model_dir: state.settings.model_dir,
+      output_dir: state.settings.output_dir,
+    reranker_enabled: state.settings.reranker_enabled,
+    learned_ranker_enabled: state.settings.learned_ranker_enabled,
+    include_history_slices: state.settings.include_history_slices,
+    include_discovery_slices: state.settings.include_discovery_slices,
+    registry_memory_enabled: state.settings.registry_memory_enabled,
+    reranker_model_name: state.settings.reranker_model_name,
+    ui_meta: uiMeta,
+  };
 }
 
-function renderSummary(summary) {
-  const grid = document.getElementById("summary-grid");
-  if (!summary) {
-    grid.innerHTML = "<article class='summary-card empty'><p class='eyebrow'>No run yet</p><strong>0</strong><h3>Search results will appear here after a run.</h3></article>";
-    return;
-  }
-  const counts = summary.verification_status_counts || {};
-  const cards = [
-    { label: "Candidates", value: summary.candidate_count || 0, detail: "Profiles returned" },
-    { label: "Verified", value: counts.verified || summary.verified_count || 0, detail: "70.00 - 100.00" },
-    { label: "Needs review", value: counts.review || summary.review_count || 0, detail: "50.00 - 69.99" },
-    { label: "Rejected", value: counts.reject || summary.reject_count || 0, detail: "0.00 - 49.99" },
-  ];
-  grid.innerHTML = cards
-    .map((card) => `<article class="summary-card"><p class="eyebrow">${escapeHtml(card.label)}</p><strong>${escapeHtml(card.value)}</strong><h3>${escapeHtml(card.detail)}</h3></article>`)
-    .join("");
+function projectPayloadForSave() {
+  const briefPayload = buildBriefPayload();
+  const projectName = document.getElementById("project-name").value.trim();
+  const roleTitle = document.getElementById("role-title").value.trim();
+  const targetGeography = document.getElementById("target-geography").value.trim()
+    || state.tokenFields.cities.getTokens()[0]
+    || state.tokenFields.countries.getTokens()[0]
+    || state.tokenFields.continents.getTokens()[0]
+    || "";
+  return {
+    name: projectName || `${roleTitle || "New Role"}${targetGeography ? ` - ${targetGeography}` : ""}`,
+    client_name: document.getElementById("client-name").value.trim(),
+    role_title: roleTitle,
+    target_geography: targetGeography,
+    status: document.getElementById("project-status").value || "active",
+    notes: document.getElementById("project-notes").value.trim(),
+    assigned_user_ids: getCheckedMemberIds(),
+    brief_json: briefPayload,
+  };
 }
 
-function renderArtifacts(response) {
-  const panel = document.getElementById("artifacts-panel");
-  if (!response?.report_paths?.csv) {
-    panel.innerHTML = "<p class='panel-note'>Run a search to generate the CSV export.</p>";
-    return;
-  }
-  const csvLink = `/app/artifact?path=${encodeURIComponent(response.report_paths.csv)}`;
-  panel.innerHTML = `
-    <div class="artifact-links">
-      <a class="artifact-link" href="${csvLink}" target="_blank" rel="noreferrer">Download CSV</a>
-    </div>
-    <p class="panel-note">Rows exported: ${escapeHtml(response.csv_export_limit || 0)}</p>
-    <p class="panel-note">${escapeHtml(response.report_paths.csv)}</p>
-  `;
+function formValuesFromProject(project) {
+  const brief = project?.latest_brief_json || {};
+  const meta = brief.ui_meta || {};
+  const geography = brief.geography || {};
+  return {
+    projectName: project?.name || "",
+    clientName: project?.client_name || "",
+    status: project?.status || "active",
+    roleTitle: project?.role_title || brief.role_title || "",
+    targetGeography: project?.target_geography || "",
+    notes: project?.notes || "",
+    assignedRecruiterIds: (project?.assigned_recruiters || []).map((user) => user.id),
+    titles: meta.titles || brief.titles || [],
+    countries: meta.countries || (geography.country ? [geography.country] : []),
+    continents: meta.continents || [],
+    cities: meta.cities || (geography.location_name && geography.location_name !== geography.country ? [geography.location_name] : []),
+    companyTargets: meta.company_targets || brief.company_targets || [],
+    mustHaveKeywords: meta.must_have_keywords || brief.required_keywords || [],
+    niceToHaveKeywords: meta.nice_to_have_keywords || brief.preferred_keywords || [],
+    industryKeywords: meta.industry_keywords || brief.industry_keywords || [],
+    excludeTitles: meta.exclude_title_keywords || brief.exclude_title_keywords || [],
+    excludeCompanies: meta.exclude_company_keywords || brief.exclude_company_keywords || [],
+    yearsMode: meta.years_mode || brief.years_mode || "range",
+    yearsValue: meta.years_value ?? brief.years_target ?? "",
+    yearsTolerance: meta.years_tolerance ?? brief.years_tolerance ?? "",
+      minYears: meta.minimum_years_experience ?? brief.minimum_years_experience ?? "",
+      maxYears: meta.maximum_years_experience ?? brief.maximum_years_experience ?? "",
+      radiusMiles: meta.radius_miles ?? geography.radius_miles ?? state.config?.defaults?.radius_miles ?? 25,
+      candidateLimit: meta.candidate_limit ?? brief.max_profiles ?? state.settings.limit ?? state.config?.defaults?.limit ?? 20,
+      companyMatchMode: meta.company_match_mode || brief.company_match_mode || "both",
+      employmentStatusMode: meta.employment_status_mode || brief.employment_status_mode || "any",
+      jobDescription: meta.job_description || brief.document_text || "",
+    anchors: meta.anchors || brief.anchors || {},
+    breakdown: brief.jd_breakdown || null,
+  };
 }
 
-function statusLabel(status) {
-  if (statusKey(status) === "verified") return "Verified";
-  if (statusKey(status) === "review") return "Needs review";
-  return "Rejected";
+function populateProjectForm(project) {
+  const values = formValuesFromProject(project);
+  document.getElementById("project-name").value = values.projectName;
+  document.getElementById("client-name").value = values.clientName;
+  document.getElementById("project-status").value = values.status;
+  document.getElementById("role-title").value = values.roleTitle;
+  document.getElementById("target-geography").value = values.targetGeography;
+  document.getElementById("project-notes").value = values.notes;
+  document.getElementById("years-mode").value = values.yearsMode;
+  document.getElementById("years-value").value = values.yearsValue;
+  document.getElementById("years-tolerance").value = values.yearsTolerance;
+  document.getElementById("min-years").value = values.minYears;
+  document.getElementById("max-years").value = values.maxYears;
+  document.getElementById("radius-miles").value = values.radiusMiles;
+  document.getElementById("candidate-limit").value = values.candidateLimit;
+  document.getElementById("company-match-mode").value = values.companyMatchMode;
+  document.getElementById("employment-status-mode").value = values.employmentStatusMode;
+  document.getElementById("job-description").value = values.jobDescription;
+  state.tokenFields.titles.setTokens(values.titles);
+  state.tokenFields.countries.setTokens(values.countries);
+  state.tokenFields.continents.setTokens(values.continents);
+  state.tokenFields.cities.setTokens(values.cities);
+  state.tokenFields.companies.setTokens(values.companyTargets);
+  state.tokenFields.mustHave.setTokens(values.mustHaveKeywords);
+  state.tokenFields.niceToHave.setTokens(values.niceToHaveKeywords);
+  state.tokenFields.industry.setTokens(values.industryKeywords);
+  state.tokenFields.excludeTitles.setTokens(values.excludeTitles);
+  state.tokenFields.excludeCompanies.setTokens(values.excludeCompanies);
+  renderMemberPicker(values.assignedRecruiterIds.length ? values.assignedRecruiterIds : (state.user ? [state.user.id] : []));
+  state.currentBreakdown = values.breakdown;
+  renderBreakdown();
+  renderAnchorGrid(values.anchors);
 }
 
-function statusClass(status) {
-  if (statusKey(status) === "verified") return "status-verified";
-  if (statusKey(status) === "review") return "status-review";
-  return "status-reject";
-}
-
-function renderCandidateLinks(candidate) {
-  const links = [];
-  if (candidate.linkedin_url) links.push(`<a href="${escapeHtml(candidate.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>`);
-  if (candidate.source_url) links.push(`<a href="${escapeHtml(candidate.source_url)}" target="_blank" rel="noreferrer">Source</a>`);
-  return links.join("");
-}
-
-function renderMetrics(candidate) {
-  const metrics = [
-    ["Title", featureValue(candidate, "title_similarity")],
-    ["Company", featureValue(candidate, "company_match")],
-    ["Location", featureValue(candidate, "location_match")],
-    ["Skills", featureValue(candidate, "skill_overlap")],
-    ["Industry", featureValue(candidate, "industry_fit")],
-    ["Years", featureValue(candidate, "years_fit")],
-    ["Semantic", featureValue(candidate, "semantic_similarity")],
-  ];
-  return metrics
-    .map(([label, value]) => `
-      <div class="metric-card">
-        <span>${escapeHtml(label)}</span>
-        <strong>${safeNumber(value).toFixed(2)}</strong>
-        <div class="meter"><i style="width:${Math.max(0, Math.min(100, safeNumber(value) * 100))}%"></i></div>
+function renderProjectSummary() {
+  const root = document.getElementById("project-summary");
+  if (!state.selectedProject) {
+    root.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>Select or Create a Project</h4>
+        <p>Once you choose a project, its latest brief, results, and history will appear here.</p>
       </div>
-    `)
-    .join("");
-}
-
-function renderContributionChips(candidate) {
-  const contributions = Object.entries(candidate.anchor_scores || {})
-    .filter(([, value]) => safeNumber(value) > 0)
-    .sort((left, right) => safeNumber(right[1]) - safeNumber(left[1]))
-    .slice(0, 8);
-  if (!contributions.length) {
-    return "<span class='tag'>No anchor contribution recorded</span>";
-  }
-  return contributions
-    .map(([key, value]) => `<span class="contribution-chip"><span>${escapeHtml(key.replaceAll("_", " "))}</span><strong>${safeNumber(value).toFixed(2)}</strong></span>`)
-    .join("");
-}
-
-function renderCandidateTags(candidate) {
-  const tags = [];
-  (candidate.matched_titles || []).slice(0, 3).forEach((value) => tags.push(`Title: ${value}`));
-  (candidate.matched_companies || []).slice(0, 3).forEach((value) => tags.push(`Company: ${value}`));
-  (candidate.cap_reasons || []).slice(0, 3).forEach((value) => tags.push(`Cap: ${value}`));
-  if (safeNumber(candidate.reranker_score) > 0) {
-    tags.push(`Reranker: ${safeNumber(candidate.reranker_score).toFixed(2)}`);
-  }
-  return tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
-}
-
-function feedbackOptionsMarkup(actions) {
-  return actions.map((action) => `<option value="${escapeHtml(action)}">${escapeHtml(action)}</option>`).join("");
-}
-
-async function handleFeedbackSave(candidate, card) {
-  if (!state.currentSearch?.report_paths?.json) {
-    throw new Error("Run a search first so the app has a report to attach feedback to.");
-  }
-  const recruiterId = document.getElementById("recruiter-id").value.trim();
-  if (!recruiterId) {
-    throw new Error("Add a recruiter ID in the Feedback tab before saving feedback.");
-  }
-  const payload = {
-    report_path: state.currentSearch.report_paths.json,
-    candidate_ref: candidate.linkedin_url || candidate.source_url || candidate.full_name,
-    recruiter_id: recruiterId,
-    recruiter_name: document.getElementById("recruiter-name").value.trim(),
-    team_id: document.getElementById("team-id").value.trim(),
-    action: card.querySelector(".feedback-action").value,
-    reason_code: card.querySelector(".feedback-reason").value.trim(),
-    note: card.querySelector(".feedback-note").value.trim(),
-    feedback_db: document.getElementById("feedback-db").value.trim(),
-    brief: state.currentSearch.brief,
-  };
-  const result = await fetchJSON("/app/feedback", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  card.querySelector(".feedback-status").textContent = `Saved: ${payload.action}`;
-  if (result.feedback_db) {
-    document.getElementById("feedback-db").value = result.feedback_db;
-  }
-  renderFeedbackSummary(state.currentSearch);
-}
-
-function renderCandidates(response) {
-  const list = document.getElementById("candidate-results");
-  const candidates = response?.candidates || [];
-  if (!candidates.length) {
-    list.innerHTML = "<article class='empty-card'><h4>No candidates yet</h4><p>Run a search from the Recruiter tab to populate this view.</p></article>";
+    `;
     return;
   }
-  const template = document.getElementById("candidate-template");
-  list.innerHTML = "";
-  candidates.forEach((candidate) => {
-    const fragment = template.content.cloneNode(true);
-    const card = fragment.querySelector(".candidate-card");
-    fragment.querySelector(".candidate-name").textContent = candidate.full_name || "Unnamed candidate";
-    fragment.querySelector(".candidate-meta").textContent = [candidate.current_title, candidate.current_company, candidate.location_name].filter(Boolean).join(" | ");
-    fragment.querySelector(".candidate-links").innerHTML = renderCandidateLinks(candidate);
-    fragment.querySelector(".status-badge").textContent = statusLabel(candidate.verification_status);
-    fragment.querySelector(".status-badge").classList.add(statusClass(candidate.verification_status));
-    fragment.querySelector(".candidate-score").textContent = safeNumber(candidate.score).toFixed(2);
-    fragment.querySelector(".candidate-model").textContent = `Model: ${candidate.ranking_model_version || "heuristic"}${safeNumber(candidate.reranker_score) ? ` | reranker ${safeNumber(candidate.reranker_score).toFixed(2)}` : ""}`;
-    fragment.querySelector(".metric-grid").innerHTML = renderMetrics(candidate);
-    fragment.querySelector(".contribution-list").innerHTML = renderContributionChips(candidate);
-    fragment.querySelector(".candidate-notes").textContent = (candidate.verification_notes || []).slice(0, 8).join(" | ") || "No scoring notes recorded.";
-    fragment.querySelector(".candidate-tags").innerHTML = renderCandidateTags(candidate);
-    fragment.querySelector(".feedback-action").innerHTML = feedbackOptionsMarkup(state.config.feedback_actions || []);
-    fragment.querySelector(".feedback-save").addEventListener("click", async () => {
+  const recruiters = state.selectedProject.assigned_recruiters || [];
+  root.innerHTML = `
+    <div class="project-summary-block">
+      <div class="project-summary-row">
+        <div>
+          <h4>${escapeHtml(state.selectedProject.name)}</h4>
+          <p class="muted">${escapeHtml(state.selectedProject.client_name || "No client set")} | ${escapeHtml(state.selectedProject.role_title || "No role title")}</p>
+        </div>
+        <span class="status-pill status-${escapeHtml(state.selectedProject.status)}">${escapeHtml(titleCaseWords(state.selectedProject.status))}</span>
+      </div>
+      <div class="chip-row">
+        ${state.selectedProject.target_geography ? `<span class="info-chip">${escapeHtml(state.selectedProject.target_geography)}</span>` : ""}
+        <span class="info-chip">${escapeHtml(String(state.selectedProject.run_count || 0))} Runs</span>
+        <span class="info-chip">${escapeHtml(String(state.selectedProject.latest_run_candidate_count || 0))} Latest Candidates</span>
+      </div>
+      <p class="muted">${escapeHtml(state.selectedProject.notes || "No project notes yet.")}</p>
+      <div class="stack-list compact-stack">
+        ${recruiters.map((user) => `<div class="list-row"><strong>${escapeHtml(user.full_name || user.email)}</strong><span>${escapeHtml(user.email)}</span></div>`).join("")}
+      </div>
+        <div class="card-actions">
+          <button type="button" class="button button-secondary" id="summary-open-recruiter">Open Hunt</button>
+          <button type="button" class="button button-primary" id="summary-open-results">Open Results</button>
+          <button type="button" class="button button-secondary" id="summary-open-candidates">Open Candidates</button>
+        </div>
+      </div>
+    `;
+    document.getElementById("summary-open-recruiter").addEventListener("click", () => switchTab("recruiter"));
+    document.getElementById("summary-open-results").addEventListener("click", () => switchTab("results"));
+    document.getElementById("summary-open-candidates").addEventListener("click", () => switchTab("candidates"));
+  }
+
+function projectCardMarkup(project, selected) {
+  const runCount = safeNumber(project.run_count);
+  const latestCandidates = safeNumber(project.latest_run_candidate_count);
+  return `
+    <button type="button" class="project-card ${selected ? "selected" : ""}" data-project-id="${escapeHtml(project.id)}">
+      <div class="project-card-top">
+        <div>
+          <strong>${escapeHtml(project.name)}</strong>
+          <p>${escapeHtml(project.client_name || "No client")} | ${escapeHtml(project.role_title || "No role")}</p>
+        </div>
+        <span class="status-pill status-${escapeHtml(project.status)}">${escapeHtml(titleCaseWords(project.status))}</span>
+      </div>
+      <div class="chip-row">
+        ${project.target_geography ? `<span class="info-chip">${escapeHtml(project.target_geography)}</span>` : ""}
+        <span class="info-chip">${runCount} Runs</span>
+        <span class="info-chip">${latestCandidates} Latest Candidates</span>
+      </div>
+      <small class="muted">Updated ${escapeHtml(formatTimestamp(project.latest_run_at || project.updated_at))}</small>
+    </button>
+  `;
+}
+
+function renderProjectList() {
+  const root = document.getElementById("project-list");
+  if (!state.projects.length) {
+    root.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>No Projects Yet</h4>
+        <p>Create your first project to start saving recruiter briefs and search history.</p>
+      </div>
+    `;
+    return;
+  }
+  root.innerHTML = state.projects.map((project) => projectCardMarkup(project, project.id === state.selectedProjectId)).join("");
+  root.querySelectorAll("[data-project-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      loadProject(button.dataset.projectId);
+      switchTab("projects");
+    });
+  });
+}
+
+function statusFromCandidate(candidate) {
+  const normalized = String(candidate.verification_status || "").toLowerCase();
+  if (normalized === "verified") return { key: "verified", label: "Verified" };
+  if (normalized === "review" || normalized === "needs_review") return { key: "review", label: "Needs Review" };
+  return { key: "reject", label: "Rejected" };
+}
+
+function activeSearchJobForSelectedProject() {
+  if (!state.activeJob || state.activeJob.job_type !== "search") {
+    return null;
+  }
+  const projectId = String(state.activeJob.payload?.project_id || state.activeJob.result?.project?.id || "").trim();
+  if (!projectId || projectId !== state.selectedProjectId) {
+    return null;
+  }
+  return ["queued", "running"].includes(String(state.activeJob.status || "").toLowerCase()) ? state.activeJob : null;
+}
+
+function latestSearchJobForSelectedProject() {
+  if (!state.activeJob || state.activeJob.job_type !== "search") {
+    return null;
+  }
+  const projectId = String(state.activeJob.payload?.project_id || state.activeJob.result?.project?.id || "").trim();
+  if (!projectId || projectId !== state.selectedProjectId) {
+    return null;
+  }
+  return state.activeJob;
+}
+
+function failedSearchJobForSelectedProject() {
+  const job = latestSearchJobForSelectedProject();
+  return job && String(job.status || "").toLowerCase() === "failed" ? job : null;
+}
+
+function hasRunningBackgroundJob() {
+  return Boolean(state.activeJob) && ["queued", "running"].includes(String(state.activeJob.status || "").toLowerCase());
+}
+
+function backgroundJobExitMessage() {
+  const jobType = titleCaseWords(state.activeJob?.job_type || "job").toLowerCase();
+  return `A ${jobType} is still running in the background. Closing HR Hunter will not stop it, but you may lose live progress updates until you reopen the app.`;
+}
+
+function handleBeforeUnload(event) {
+  if (!hasRunningBackgroundJob()) {
+    return undefined;
+  }
+  const message = backgroundJobExitMessage();
+  event.preventDefault();
+  event.returnValue = message;
+  return message;
+}
+
+function jobRequestedLimit(job) {
+  return Math.max(
+    1,
+    safeNumber(job?.payload?.limit || job?.payload?.csv_export_limit || currentRequestedCandidateLimit(), currentRequestedCandidateLimit()),
+  );
+}
+
+function searchFailureMarkup(job, buttonId) {
+  return `
+    <div class="empty-state compact-empty">
+      <h4>Latest Search Failed</h4>
+      <p>${escapeHtml(job?.error || "The latest background search did not complete successfully.")}</p>
+      <div class="inline-actions">
+        <button type="button" class="button button-secondary" id="${buttonId}">Retry Search</button>
+      </div>
+    </div>
+  `;
+}
+
+function currentCandidates() {
+  return Array.isArray(state.currentReport?.candidates) ? state.currentReport.candidates : [];
+}
+
+function currentRequestedCandidateLimit() {
+  const formLimit = document.getElementById("candidate-limit")?.value;
+  const savedLimit =
+    state.selectedProject?.latest_brief_json?.ui_meta?.candidate_limit
+    ?? state.selectedProject?.latest_brief_json?.max_profiles
+    ?? state.settings.limit;
+  return Math.max(1, safeNumber(formLimit || savedLimit, state.settings.limit || 20));
+}
+
+function filteredCandidates() {
+  const query = String(state.candidateSearchQuery || "").trim().toLowerCase();
+  return currentCandidates().filter((candidate) => {
+    const status = statusFromCandidate(candidate).key;
+    if (state.candidateStatusFilter !== "all" && status !== state.candidateStatusFilter) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+    const haystack = [
+      candidate.full_name,
+      candidate.current_title,
+      candidate.current_company,
+      candidate.location_name,
+      candidate.summary,
+    ]
+      .filter(Boolean)
+      .join(" | ")
+      .toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+function bucketCountFor(statusKey) {
+  return currentCandidates().filter((candidate) => statusFromCandidate(candidate).key === statusKey).length;
+}
+
+function candidateIdentityRef(candidate) {
+  return candidate.linkedin_url || candidate.source_url || candidate.full_name || "";
+}
+
+function candidateSignalEntries(candidate) {
+  const entries = Object.entries(candidate.feature_scores || {})
+    .filter(([key, value]) => safeNumber(value) > 0.12 && key !== "company_interest")
+    .map(([key, value]) => ({
+      key,
+      label: FEATURE_LABELS[key] || titleCaseWords(key),
+      value: safeNumber(value),
+    }))
+    .sort((left, right) => right.value - left.value);
+  if (safeNumber(candidate.reranker_score) > 0.12) {
+    entries.push({
+      key: "reranker",
+      label: "Semantic Reranker",
+      value: safeNumber(candidate.reranker_score),
+    });
+  }
+  return entries.slice(0, 4);
+}
+
+function candidateInsightBuckets(candidate) {
+  const notes = Array.isArray(candidate.verification_notes) ? candidate.verification_notes.map(humanizeNote).filter(Boolean) : [];
+  const positives = notes.filter((note) => !/missing|cap|reject|no public|weak/i.test(note)).slice(0, 3);
+  const gaps = notes.filter((note) => /missing|no public|weak|cap/i.test(note)).slice(0, 2);
+  if (!positives.length) {
+    const matchedTitles = Array.isArray(candidate.matched_titles) ? candidate.matched_titles : [];
+    if (matchedTitles.length) {
+      positives.push(`Matched title: ${matchedTitles[0]}`);
+    }
+  }
+  return { positives, gaps };
+}
+
+function compactFeatureSummary(candidate) {
+  const signals = candidateSignalEntries(candidate);
+  if (!signals.length) {
+    return `<p class="muted">Public evidence was limited, so the score leaned more on the overall reranker and parsed profile quality.</p>`;
+  }
+  return `
+    <div class="chip-row">
+      ${signals
+        .map(
+          (signal) => `<span class="info-chip"><strong>${escapeHtml(signal.label)}</strong> ${escapeHtml(formatScore(signal.value))}</span>`,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderResultsSummary() {
+  const root = document.getElementById("results-summary");
+  const activeJob = activeSearchJobForSelectedProject();
+  const failedJob = failedSearchJobForSelectedProject();
+  if (!state.selectedProject) {
+    root.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>Select or Create a Project</h4>
+        <p>Choose a project first, then run or load a search to see the summary.</p>
+      </div>
+    `;
+    return;
+  }
+  if (!state.currentReport) {
+    if (failedJob) {
+      root.innerHTML = searchFailureMarkup(failedJob, "results-retry-search");
+      document.getElementById("results-retry-search")?.addEventListener("click", retrySearchForSelectedProject);
+      return;
+    }
+    if (activeJob) {
+      root.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>Search In Progress</h4>
+          <p>The ${escapeHtml(titleCaseWords(activeJob.status))} search requested up to ${escapeHtml(String(jobRequestedLimit(activeJob)))} candidates.</p>
+        </div>
+      `;
+      return;
+    }
+    root.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>No Results Yet</h4>
+        <p>Run a search for <strong>${escapeHtml(state.selectedProject.name)}</strong> to populate the current results.</p>
+      </div>
+    `;
+    return;
+  }
+  const summary = state.currentReport.summary || {};
+  const cards = [
+    { label: "Candidates", value: safeNumber(summary.candidate_count, state.currentReport.candidates?.length || 0) },
+    { label: "Verified", value: safeNumber(summary.verified_count) },
+    { label: "Needs Review", value: safeNumber(summary.review_count) },
+    { label: "Rejected", value: safeNumber(summary.reject_count) },
+  ];
+  root.innerHTML = `
+        <div class="summary-cards">
+      ${cards
+        .map(
+          (card) => `
+          <div class="summary-card">
+            <span>${escapeHtml(card.label)}</span>
+            <strong>${escapeHtml(String(card.value))}</strong>
+          </div>
+        `,
+        )
+        .join("")}
+        </div>
+        <p class="muted">Latest run: ${escapeHtml(formatTimestamp(state.currentReport.generated_at))} for ${escapeHtml(state.selectedProject.name)}.</p>
+        ${activeJob ? `<p class="muted">A newer search is currently ${escapeHtml(titleCaseWords(activeJob.status))}. Requested limit: ${escapeHtml(String(activeJob.payload?.limit || currentRequestedCandidateLimit()))} candidates.</p>` : ""}
+        ${failedJob ? `<p class="muted">The latest search failed: ${escapeHtml(failedJob.error || "Retry when ready.")}</p><div class="inline-actions"><button type="button" class="button button-secondary" id="results-retry-search">Retry Search</button></div>` : ""}
+      `;
+  document.getElementById("results-retry-search")?.addEventListener("click", retrySearchForSelectedProject);
+}
+
+function renderCsvSummary() {
+  const root = document.getElementById("csv-summary");
+  const reportPaths = state.currentReport?.report_paths || {};
+  if (!state.selectedProject || !reportPaths.csv) {
+    root.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>No CSV Yet</h4>
+        <p>Run a search to generate a CSV for the selected project.</p>
+      </div>
+    `;
+    return;
+  }
+  const csvFileName = String(reportPaths.csv).split(/[\\/]/).pop() || reportPaths.csv;
+  root.innerHTML = `
+      <p><a class="inline-link" href="${artifactHref(reportPaths.csv)}">Download CSV</a></p>
+      <p class="muted">Requested CSV rows: ${escapeHtml(String(currentRequestedCandidateLimit()))}</p>
+      <small class="muted">${escapeHtml(csvFileName)}</small>
+    `;
+}
+
+function feedbackFormMarkup(candidate) {
+  const actionOptions = (state.config?.feedback_actions || []).map(
+    (action) => `<option value="${escapeHtml(action)}">${escapeHtml(titleCaseWords(action))}</option>`,
+  );
+  const candidateRef = candidateIdentityRef(candidate);
+  return `
+    <form class="feedback-form" data-feedback-ref="${escapeHtml(candidateRef)}">
+      <select data-feedback-action>
+        ${actionOptions.join("")}
+      </select>
+      <input type="text" data-feedback-reason placeholder="Reason code (optional)" />
+      <input type="text" data-feedback-note placeholder="Recruiter note (optional)" />
+      <button type="submit" class="button button-primary button-small">Save Feedback</button>
+    </form>
+  `;
+}
+
+function candidateCardMarkup(candidate) {
+  const status = statusFromCandidate(candidate);
+  const signals = compactFeatureSummary(candidate);
+  const insights = candidateInsightBuckets(candidate);
+  const links = [];
+  if (candidate.linkedin_url) links.push(`<a class="inline-link" href="${escapeHtml(candidate.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>`);
+  if (candidate.source_url) links.push(`<a class="inline-link" href="${escapeHtml(candidate.source_url)}" target="_blank" rel="noreferrer">Source</a>`);
+  const registrySeen = safeNumber(candidate.raw?.registry?.search_count);
+  return `
+    <article class="candidate-card">
+      <div class="candidate-top">
+        <div>
+          <div class="candidate-name-row">
+            <h4>${escapeHtml(candidate.full_name || "Unnamed Candidate")}</h4>
+            <span class="status-pill status-${escapeHtml(status.key)}">${escapeHtml(status.label)}</span>
+          </div>
+          <p class="candidate-subtitle">${escapeHtml(candidate.current_title || "No title")} | ${escapeHtml(candidate.current_company || "No company")} | ${escapeHtml(candidate.location_name || "No location")}</p>
+          <div class="candidate-meta">
+            ${links.join("<span class=\"divider\">|</span>")}
+            ${registrySeen > 1 ? `<span class="muted">Seen in ${registrySeen} runs</span>` : `<span class="muted">New to the registry</span>`}
+          </div>
+        </div>
+        <div class="candidate-score">
+          <strong>${escapeHtml(formatScore(candidate.score))}</strong>
+        </div>
+      </div>
+      ${signals}
+      ${insights.positives.length ? `<p class="candidate-notes"><strong>Why it matched:</strong> ${escapeHtml(insights.positives.join(" | "))}</p>` : ""}
+      ${insights.gaps.length ? `<p class="candidate-notes muted"><strong>Evidence gaps:</strong> ${escapeHtml(insights.gaps.join(" | "))}</p>` : ""}
+      ${feedbackFormMarkup(candidate)}
+    </article>
+  `;
+}
+
+function candidateTableRowMarkup(candidate, selectedRef) {
+  const status = statusFromCandidate(candidate);
+  const candidateRef = candidateIdentityRef(candidate);
+  const qualification = titleCaseWords(candidate.qualification_tier || "unclassified");
+  const links = [];
+  if (candidate.linkedin_url) {
+    links.push(`<a class="inline-link" href="${escapeHtml(candidate.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>`);
+  }
+  if (candidate.source_url) {
+    links.push(`<a class="inline-link" href="${escapeHtml(candidate.source_url)}" target="_blank" rel="noreferrer">Source</a>`);
+  }
+  return `
+    <tr class="candidate-table-row ${candidateRef === selectedRef ? "selected" : ""}" data-candidate-row="${escapeHtml(candidateRef)}">
+      <td>
+        <div class="candidate-primary">
+          <strong>${escapeHtml(candidate.full_name || "Unnamed Candidate")}</strong>
+          <span class="candidate-secondary">${escapeHtml(candidate.location_name || "No location")}</span>
+        </div>
+      </td>
+      <td>${escapeHtml(candidate.current_title || "No title")}</td>
+      <td>${escapeHtml(candidate.current_company || "No company")}</td>
+      <td class="candidate-score-cell">${escapeHtml(formatScore(candidate.score))}</td>
+      <td><span class="status-pill status-${escapeHtml(status.key)}">${escapeHtml(status.label)}</span></td>
+      <td>${escapeHtml(qualification)}</td>
+      <td>
+        <div class="candidate-links-cell">
+          ${links.length ? links.join("") : `<span class="muted">No links</span>`}
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+function renderCandidatesSummary() {
+  const root = document.getElementById("candidates-summary");
+  const candidates = currentCandidates();
+  const activeJob = activeSearchJobForSelectedProject();
+  const failedJob = failedSearchJobForSelectedProject();
+  if (!state.selectedProject) {
+    root.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>Select or Create a Project</h4>
+        <p>Choose a project first to browse its latest candidate set.</p>
+      </div>
+    `;
+    return;
+  }
+  if (!candidates.length) {
+    if (failedJob) {
+      root.innerHTML = searchFailureMarkup(failedJob, "candidates-retry-search");
+      document.getElementById("candidates-retry-search")?.addEventListener("click", retrySearchForSelectedProject);
+      return;
+    }
+    root.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>${activeJob ? "Search In Progress" : "No Candidates Yet"}</h4>
+          <p>${activeJob
+            ? `The ${escapeHtml(titleCaseWords(activeJob.status))} search requested up to ${escapeHtml(String(activeJob.payload?.limit || currentRequestedCandidateLimit()))} candidates.`
+            : `Run a search for ${escapeHtml(state.selectedProject.name)} to populate the candidate list.`}</p>
+        </div>
+      `;
+      return;
+    }
+    const summary = state.currentReport?.summary || {};
+    const requested = currentRequestedCandidateLimit();
+  const cards = [
+    { label: "Returned", value: candidates.length },
+    { label: "Verified", value: bucketCountFor("verified") },
+    { label: "Needs Review", value: bucketCountFor("review") },
+    { label: "Rejected", value: bucketCountFor("reject") },
+  ];
+  root.innerHTML = `
+    <div class="summary-cards">
+      ${cards
+        .map(
+          (card) => `
+            <div class="summary-card">
+              <span>${escapeHtml(card.label)}</span>
+              <strong>${escapeHtml(String(card.value))}</strong>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+    <div class="candidate-table-meta">
+      <p class="muted">Latest run: ${escapeHtml(formatTimestamp(state.currentReport.generated_at))}</p>
+      <p class="muted">Requested up to ${escapeHtml(String(requested))} candidates | Returned ${escapeHtml(String(candidates.length))}</p>
+    </div>
+    ${activeJob ? `<p class="muted">A newer search is still ${escapeHtml(titleCaseWords(activeJob.status))}. The list below shows the latest completed run until the fresh one finishes.</p>` : ""}
+    ${failedJob ? `<p class="muted">The latest search failed: ${escapeHtml(failedJob.error || "Retry when ready.")}</p><div class="inline-actions"><button type="button" class="button button-secondary" id="candidates-retry-search">Retry Search</button></div>` : ""}
+    ${summary.slice_count ? `<p class="muted">Retrieval slices used: ${escapeHtml(String(summary.slice_count))}</p>` : ""}
+  `;
+  document.getElementById("candidates-retry-search")?.addEventListener("click", retrySearchForSelectedProject);
+}
+
+function renderCandidateControls() {
+  const pillRoot = document.getElementById("candidate-filter-pills");
+  const exportRoot = document.getElementById("candidate-export-actions");
+  const exportNote = document.getElementById("candidate-export-note");
+  const buckets = [
+    { id: "all", label: "All", count: currentCandidates().length },
+    { id: "verified", label: "Verified", count: bucketCountFor("verified") },
+    { id: "review", label: "Needs Review", count: bucketCountFor("review") },
+    { id: "reject", label: "Rejected", count: bucketCountFor("reject") },
+  ];
+  pillRoot.innerHTML = buckets
+    .map(
+      (bucket) => `
+        <button type="button" class="filter-pill ${state.candidateStatusFilter === bucket.id ? "active" : ""}" data-candidate-bucket="${escapeHtml(bucket.id)}">
+          ${escapeHtml(bucket.label)} (${escapeHtml(String(bucket.count))})
+        </button>
+      `,
+    )
+    .join("");
+  const csvPath = state.currentReport?.report_paths?.csv || "";
+  if (csvPath) {
+    exportRoot.innerHTML = `<a class="button button-secondary" href="${artifactHref(csvPath)}">Export CSV</a>`;
+    exportNote.textContent = `The latest export is set to include up to ${currentRequestedCandidateLimit()} rows.`;
+  } else {
+    exportRoot.innerHTML = `<span class="muted">No CSV available yet.</span>`;
+    exportNote.textContent = "Run a search to generate the latest project CSV.";
+  }
+  pillRoot.querySelectorAll("[data-candidate-bucket]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.candidateStatusFilter = button.dataset.candidateBucket || "all";
+      renderCandidates();
+    });
+  });
+}
+
+function renderCandidates() {
+  const searchInput = document.getElementById("candidate-search-input");
+  if (searchInput && searchInput.value !== state.candidateSearchQuery) {
+    searchInput.value = state.candidateSearchQuery;
+  }
+  renderCandidatesSummary();
+  renderCandidateControls();
+  const tableRoot = document.getElementById("candidate-table-container");
+  const detailRoot = document.getElementById("candidate-detail");
+  const candidates = filteredCandidates();
+  if (!state.selectedProject) {
+    tableRoot.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>Select or Create a Project</h4>
+        <p>Choose a project first to view its candidate list.</p>
+      </div>
+    `;
+    detailRoot.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>No Candidate Selected</h4>
+        <p>Select a project first, then open a saved run.</p>
+      </div>
+    `;
+    return;
+  }
+  if (!currentCandidates().length) {
+    tableRoot.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>No Candidates Yet</h4>
+        <p>Run a search for <strong>${escapeHtml(state.selectedProject.name)}</strong> to populate the candidate directory.</p>
+      </div>
+    `;
+    detailRoot.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>No Candidate Selected</h4>
+        <p>The latest candidate detail will appear here after a run completes.</p>
+      </div>
+    `;
+    return;
+  }
+  if (!candidates.length) {
+    tableRoot.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>No Matches For This Filter</h4>
+        <p>Try a different bucket or clear the candidate search field.</p>
+      </div>
+    `;
+    detailRoot.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>No Candidate Selected</h4>
+        <p>The current filter returned no candidates.</p>
+      </div>
+    `;
+    return;
+  }
+  const selectedRef = candidates.some((candidate) => candidateIdentityRef(candidate) === state.selectedCandidateRef)
+    ? state.selectedCandidateRef
+    : candidateIdentityRef(candidates[0]);
+  state.selectedCandidateRef = selectedRef;
+  const selectedCandidate = candidates.find((candidate) => candidateIdentityRef(candidate) === selectedRef) || candidates[0];
+  tableRoot.innerHTML = `
+    <div class="candidate-table-meta">
+      <p class="muted">Showing ${escapeHtml(String(candidates.length))} of ${escapeHtml(String(currentCandidates().length))} candidates.</p>
+      <p class="muted">Selected bucket: ${escapeHtml(titleCaseWords(state.candidateStatusFilter === "all" ? "all" : state.candidateStatusFilter))}</p>
+    </div>
+    <div class="candidate-table-wrap">
+      <table class="candidate-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Title</th>
+            <th>Company</th>
+            <th>Score</th>
+            <th>Review Bucket</th>
+            <th>Qualification</th>
+            <th>Links</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${candidates.map((candidate) => candidateTableRowMarkup(candidate, selectedRef)).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+  detailRoot.innerHTML = `<div class="candidate-detail-shell">${candidateCardMarkup(selectedCandidate)}</div>`;
+  tableRoot.querySelectorAll("[data-candidate-row]").forEach((row) => {
+    row.addEventListener("click", () => {
+      state.selectedCandidateRef = row.dataset.candidateRow || "";
+      renderCandidates();
+    });
+  });
+  attachFeedbackHandlers();
+}
+
+function attachFeedbackHandlers() {
+  document.querySelectorAll("[data-feedback-ref]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!state.selectedProject || !state.currentReport?.report_paths?.json) {
+        setStatus("Select a project and load results before saving feedback.", "warning");
+        return;
+      }
+      const candidateRef = form.dataset.feedbackRef;
+      const action = form.querySelector("[data-feedback-action]").value;
+      const reasonCode = form.querySelector("[data-feedback-reason]").value.trim();
+      const note = form.querySelector("[data-feedback-note]").value.trim();
+      const submitButton = form.querySelector("button[type='submit']");
+      submitButton.disabled = true;
       try {
-        await handleFeedbackSave(candidate, card);
-        setStatus(`Feedback saved for ${candidate.full_name}.`, "success", TAB_META.results.description);
+        await fetchJSON("/app/feedback", {
+          method: "POST",
+          body: {
+            project_id: state.selectedProjectId,
+            report_path: state.currentReport.report_paths.json,
+            candidate_ref: candidateRef,
+            action,
+            reason_code: reasonCode,
+            note,
+            feedback_db: state.settings.feedback_db,
+            brief: state.selectedProject?.latest_brief_json || {},
+          },
+        });
+        form.reset();
+        setStatus("Feedback saved.", "success", "The recruiter action is now stored against the selected project.");
+        await loadProjectReviews(state.selectedProjectId);
       } catch (error) {
-        setStatus(error.message, "error", TAB_META.results.description);
+        setStatus("Could not save feedback.", "danger", error.message);
+      } finally {
+        submitButton.disabled = false;
       }
     });
-    list.appendChild(fragment);
   });
 }
 
-function renderFeedbackSummary(response) {
-  const box = document.getElementById("feedback-summary");
-  if (!response?.report_paths) {
-    box.innerHTML = "<p class='panel-note'>Once a search finishes, this tab will show the active report reference and feedback database.</p>";
+function renderResults() {
+  renderResultsSummary();
+  renderCsvSummary();
+  const root = document.getElementById("results-snapshot");
+  if (!state.selectedProject) {
+    root.innerHTML = `
+      <div class="empty-state">
+        <h4>Select or Create a Project</h4>
+        <p>Choose a project first to open its latest search snapshot.</p>
+      </div>
+    `;
     return;
   }
-  box.innerHTML = `
-    <p><strong>Run reference:</strong> ${escapeHtml(response.report_paths.json)}</p>
-    <p><strong>CSV export:</strong> ${escapeHtml(response.report_paths.csv)}</p>
-    <p><strong>Feedback DB:</strong> ${escapeHtml(document.getElementById("feedback-db").value.trim())}</p>
-    <p><strong>Model directory:</strong> ${escapeHtml(document.getElementById("model-dir").value.trim())}</p>
-    <p><strong>Candidate count:</strong> ${escapeHtml(response.summary?.candidate_count || 0)}</p>
+  if (!state.currentReport || !Array.isArray(state.currentReport.candidates) || !state.currentReport.candidates.length) {
+    root.innerHTML = `
+      <div class="empty-state">
+        <h4>No Results Yet</h4>
+        <p>Run a search for <strong>${escapeHtml(state.selectedProject.name)}</strong> to generate candidates.</p>
+      </div>
+    `;
+    return;
+  }
+  const summary = state.currentReport.summary || {};
+  const requested = currentRequestedCandidateLimit();
+  const returned = currentCandidates().length;
+  const activeJob = activeSearchJobForSelectedProject();
+  root.innerHTML = `
+    <div class="list-row list-row-detail">
+      <div>
+        <strong>${escapeHtml(formatTimestamp(state.currentReport.generated_at))}</strong>
+        <p>${escapeHtml(state.selectedProject.role_title || state.selectedProject.name)} | Requested ${escapeHtml(String(requested))} candidates | Returned ${escapeHtml(String(returned))}</p>
+      </div>
+      <div class="list-meta run-history-meta">
+        <span>${escapeHtml(String(summary.verified_count || 0))} Verified</span>
+        <small>${escapeHtml(String(summary.review_count || 0))} Needs Review | ${escapeHtml(String(summary.reject_count || 0))} Rejected</small>
+      </div>
+    </div>
+    <div class="results-snapshot-actions">
+      <button type="button" class="button button-secondary" id="results-open-candidates">Open Candidates</button>
+      <button type="button" class="button button-secondary" id="results-open-history">Open History</button>
+      ${state.currentReport?.report_paths?.csv ? `<a class="button button-secondary" href="${artifactHref(state.currentReport.report_paths.csv)}">Download CSV</a>` : ""}
+    </div>
+    ${activeJob ? `<p class="muted snapshot-note">A newer search is still ${escapeHtml(titleCaseWords(activeJob.status))}. This snapshot shows the latest completed run until that new one finishes.</p>` : ""}
+  `;
+  document.getElementById("results-open-candidates")?.addEventListener("click", () => switchTab("candidates"));
+  document.getElementById("results-open-history")?.addEventListener("click", () => switchTab("history"));
+}
+
+function reviewRowMarkup(review) {
+  return `
+    <div class="list-row list-row-detail">
+      <div>
+        <strong>${escapeHtml(review.full_name || review.candidate_id)}</strong>
+          <p>${escapeHtml(titleCaseWords(review.action))}${review.reason_code ? ` | ${escapeHtml(review.reason_code)}` : ""}</p>
+      </div>
+      <div class="list-meta">
+        <span>${escapeHtml(review.reviewer_name || review.reviewer_id)}</span>
+        <small>${escapeHtml(formatTimestamp(review.created_at))}</small>
+      </div>
+    </div>
   `;
 }
 
-function renderDeveloperState(payload = null, response = null) {
-  document.getElementById("debug-brief").textContent = payload ? formatJson(payload) : "No brief collected yet.";
-  document.getElementById("debug-summary").textContent = response
-    ? formatJson({ summary: response.summary, report_paths: response.report_paths, brief: response.brief })
-    : "No search response yet.";
-  document.getElementById("debug-providers").textContent = response?.provider_results
-    ? formatJson(response.provider_results)
-    : "No provider diagnostics yet.";
+function renderFeedback() {
+  const root = document.getElementById("feedback-list");
+  if (!state.selectedProject) {
+    root.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>Select or Create a Project</h4>
+        <p>Choose a project first to see its recruiter feedback history.</p>
+      </div>
+    `;
+    } else if (!state.currentReviews.length) {
+      root.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>No Feedback Yet</h4>
+          <p>Save recruiter feedback from the Results or Candidates tab to start building project history.</p>
+        </div>
+      `;
+  } else {
+    root.innerHTML = state.currentReviews.map(reviewRowMarkup).join("");
+  }
+  document.getElementById("training-card").hidden = !state.user?.is_admin;
 }
 
-function fillFromPreset(preset) {
+function runHistoryRowMarkup(run) {
+  const summary = run.summary || {};
+  const actions = [
+    `<button type="button" class="button button-secondary button-small" data-load-run="${escapeHtml(run.run_id)}">Load Results</button>`,
+  ];
+  if (state.user?.is_admin) {
+    actions.push(`<button type="button" class="button button-danger button-small" data-delete-run="${escapeHtml(run.run_id)}">Delete Run</button>`);
+  }
+  return `
+    <div class="list-row list-row-detail">
+      <div>
+        <strong>${escapeHtml(formatTimestamp(run.created_at))}</strong>
+        <p>${escapeHtml(run.role_title || state.selectedProject?.role_title || "Search Run")} | ${escapeHtml(String(run.candidate_count || 0))} candidates</p>
+      </div>
+      <div class="list-meta run-history-meta">
+        <span>${escapeHtml(String(summary.verified_count || 0))} Verified</span>
+        <div class="run-history-actions">
+          ${actions.join("")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function recentProjectRowMarkup(project) {
+  return `
+    <button type="button" class="list-row list-row-detail project-row-button" data-project-open="${escapeHtml(project.id)}">
+      <div>
+        <strong>${escapeHtml(project.name)}</strong>
+        <p>${escapeHtml(project.client_name || "No client")} | ${escapeHtml(project.role_title || "No role")}</p>
+      </div>
+      <div class="list-meta">
+        <span>${escapeHtml(titleCaseWords(project.status))}</span>
+        <small>${escapeHtml(formatTimestamp(project.latest_run_at || project.updated_at))}</small>
+      </div>
+    </button>
+  `;
+}
+
+function attachHistoryHandlers() {
+  document.querySelectorAll("[data-load-run]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await loadProjectRun(state.selectedProjectId, button.dataset.loadRun);
+      switchTab("results");
+    });
+  });
+  document.querySelectorAll("[data-delete-run]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await deleteRun(button.dataset.deleteRun);
+    });
+  });
+  document.querySelectorAll("[data-project-open]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await loadProject(button.dataset.projectOpen);
+      switchTab("results");
+    });
+  });
+}
+
+function renderHistory() {
+  const runRoot = document.getElementById("run-history-list");
+  const projectRoot = document.getElementById("recent-projects-list");
+  if (!state.selectedProject) {
+    runRoot.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>Select or Create a Project</h4>
+        <p>Choose a project first to see its saved runs.</p>
+      </div>
+    `;
+  } else if (!state.currentRuns.length) {
+    runRoot.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>No Saved Runs Yet</h4>
+        <p>Run a search and the project history will appear here.</p>
+      </div>
+    `;
+  } else {
+    runRoot.innerHTML = state.currentRuns.map(runHistoryRowMarkup).join("");
+  }
+  if (!state.projects.length) {
+    projectRoot.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>No Projects Yet</h4>
+        <p>Recent project activity will appear once projects are saved.</p>
+      </div>
+    `;
+  } else {
+    projectRoot.innerHTML = state.projects.slice(0, 8).map(recentProjectRowMarkup).join("");
+  }
+  attachHistoryHandlers();
+}
+
+function renderOwnerSnapshot() {
+  if (!state.user?.is_admin) {
+    document.getElementById("owner-fab").hidden = true;
+    closeOwnerDrawer();
+    return;
+  }
+  document.getElementById("owner-fab").hidden = false;
+  document.getElementById("owner-user-name").textContent = state.user.full_name || state.user.email;
+  document.getElementById("owner-user-role").textContent = state.user.is_admin ? "Admin" : "Recruiter";
+  const metricsRoot = document.getElementById("owner-metrics");
+  const ops = state.ops;
+  if (!ops) {
+    metricsRoot.innerHTML = `<p class="muted">System information will appear here once loaded.</p>`;
+  } else {
+    const remote = ops.remote_sourcing || {};
+    metricsRoot.innerHTML = `
+      <div class="chip-row">
+        <span class="info-chip">Projects ${escapeHtml(String(ops.counts?.mandates || 0))}</span>
+        <span class="info-chip">Runs ${escapeHtml(String(ops.counts?.search_runs || 0))}</span>
+        <span class="info-chip">Saved Candidates ${escapeHtml(String(ops.counts?.candidate_registry || 0))}</span>
+        <span class="info-chip">Feedback ${escapeHtml(String(ops.counts?.review_actions || 0))}</span>
+      </div>
+      <p class="muted">Private sourcing connection: ${remote.configured ? "Connected" : "Not connected"}${remote.required ? " | Required for live searches" : ""}</p>
+    `;
+  }
+  const userRoot = document.getElementById("owner-user-list");
+  if (!state.users.length) {
+    userRoot.innerHTML = `<p class="muted">No recruiter accounts loaded yet.</p>`;
+  } else {
+    userRoot.innerHTML = state.users
+      .map(
+        (user) => `
+        <section class="directory-card">
+          <div class="directory-card-head">
+            <div>
+              <strong>${escapeHtml(user.full_name || user.email)}</strong>
+              <p>${escapeHtml(user.email)}</p>
+            </div>
+            <div class="directory-chip-row">
+              <span class="info-chip">${escapeHtml(user.is_admin ? "Admin" : "Recruiter")}</span>
+              <span class="info-chip">${escapeHtml(user.team_id || "No Team")}</span>
+              <span class="info-chip ${user.has_totp_secret ? "chip-good" : "chip-warn"}">${escapeHtml(user.has_totp_secret ? "Authenticator Ready" : "Authenticator Missing")}</span>
+            </div>
+          </div>
+          <div class="directory-card-actions">
+            <button type="button" class="button button-secondary button-small" data-user-show-totp="${escapeHtml(user.id)}">Show Setup Key</button>
+            <button type="button" class="button button-secondary button-small" data-user-rotate-totp="${escapeHtml(user.id)}">Rotate Key</button>
+          </div>
+        </section>
+      `,
+      )
+      .join("");
+  }
+  renderOwnerJobs();
+}
+
+function renderOwnerJobs() {
+  const root = document.getElementById("owner-job-list");
+  if (!state.activeJob) {
+    root.innerHTML = `<p class="muted">Queued searches and training jobs will appear here.</p>`;
+    return;
+  }
+  const isSearchJob = state.activeJob.job_type === "search";
+  const isRunningJob = ["queued", "running"].includes(String(state.activeJob.status || "").toLowerCase());
+  const isFailedJob = String(state.activeJob.status || "").toLowerCase() === "failed";
+  root.innerHTML = `
+    <div class="list-row list-row-detail">
+      <div>
+        <strong>${escapeHtml(titleCaseWords(state.activeJob.job_type || "job"))}</strong>
+        <p>${escapeHtml(titleCaseWords(state.activeJob.status || "queued"))}</p>
+        ${state.activeJob.error ? `<small>${escapeHtml(state.activeJob.error)}</small>` : ""}
+      </div>
+      <div class="list-meta">
+        <span>${escapeHtml(formatTimestamp(state.activeJob.created_at))}</span>
+        <small>${escapeHtml(state.activeJob.job_id || "")}</small>
+      </div>
+    </div>
+    <div class="inline-actions">
+      ${isRunningJob && state.user?.is_admin ? `<button type="button" class="button button-secondary button-small" id="owner-stop-job">Stop Job</button>` : ""}
+      ${isFailedJob && isSearchJob ? `<button type="button" class="button button-secondary button-small" id="owner-retry-search">Retry Search</button>` : ""}
+    </div>
+  `;
+  document.getElementById("owner-stop-job")?.addEventListener("click", stopActiveJob);
+  document.getElementById("owner-retry-search")?.addEventListener("click", retrySearchForSelectedProject);
+}
+
+async function refreshProjects(query = state.projectSearchQuery) {
+  if (!state.user) return;
+  state.projectSearchQuery = query;
+  const payload = await fetchJSON(`/app/projects?query=${encodeURIComponent(query)}&limit=60`);
+  state.projects = Array.isArray(payload.projects) ? payload.projects : [];
+  renderProjectList();
+  renderHistory();
+  const selected = selectedProjectFromList();
+  if (selected && !state.selectedProject) {
+    state.selectedProject = selected;
+  } else if (!selected && state.selectedProjectId) {
+    state.selectedProjectId = "";
+    state.selectedProject = null;
+  }
+  updateTopbarActions();
+}
+
+async function refreshUsers() {
+  if (!state.user) return;
+  const payload = await fetchJSON("/app/users");
+  state.users = Array.isArray(payload.users) ? payload.users : [];
+  const selectedIds =
+    state.selectedProject?.assigned_recruiters?.map((user) => user.id)
+    || (state.user ? [state.user.id] : []);
+  renderMemberPicker(selectedIds);
+  renderOwnerSnapshot();
+}
+
+async function refreshOps() {
+  if (!state.user?.is_admin) return;
+  state.ops = await fetchJSON("/app/ops");
+  renderOwnerSnapshot();
+}
+
+async function loadProject(projectId) {
+  if (!projectId) return;
+  const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}`);
+  state.selectedProjectId = payload.project.id;
+  state.selectedProject = payload.project;
+  state.candidateSearchQuery = "";
+  state.candidateStatusFilter = "all";
+  state.selectedCandidateRef = "";
+  persistStoredState();
+  populateProjectForm(payload.project);
+  renderProjectSummary();
+  renderProjectList();
+  updateTopbarActions();
+  await Promise.allSettled([
+    loadProjectRuns(projectId),
+    loadProjectReviews(projectId),
+    loadLatestProjectJob(projectId),
+    loadProjectRun(projectId),
+  ]);
+  const failedJob = failedSearchJobForSelectedProject();
+  const activeJob = activeSearchJobForSelectedProject();
+  if (failedJob) {
+    setStatus("Latest search failed.", "danger", `${failedJob.error || "The latest search did not complete successfully."} Retry when ready.`);
+    return;
+  }
+  if (activeJob) {
+    setStatus("Search still running.", "warning", `The latest search is ${titleCaseWords(activeJob.status)} for up to ${jobRequestedLimit(activeJob)} candidates.`);
+    return;
+  }
+  setStatus(`${payload.project.name} loaded.`, "success", "The project brief, results, feedback, and history are ready.");
+}
+
+async function loadLatestProjectJob(projectId) {
+  if (!projectId) {
+    state.activeJob = null;
+    renderOwnerJobs();
+    renderResults();
+    renderCandidates();
+    return;
+  }
+  const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}/latest-job`);
+  state.activeJob = payload?.job || null;
+  renderOwnerJobs();
+  renderResults();
+  renderCandidates();
+}
+
+async function loadProjectRuns(projectId) {
+  if (!projectId) {
+    state.currentRuns = [];
+    renderHistory();
+    return;
+  }
+  const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}/runs?limit=25`);
+  state.currentRuns = Array.isArray(payload.runs) ? payload.runs : [];
+  renderHistory();
+}
+
+async function loadProjectReviews(projectId) {
+  if (!projectId) {
+    state.currentReviews = [];
+    renderFeedback();
+    return;
+  }
+  const payload = await fetchJSON(`/app/reviews?project_id=${encodeURIComponent(projectId)}&limit=50`);
+  state.currentReviews = Array.isArray(payload.reviews) ? payload.reviews : [];
+  renderFeedback();
+}
+
+async function loadProjectRun(projectId, runId = "") {
+  if (!projectId) {
+    state.currentReport = null;
+    state.candidateSearchQuery = "";
+    state.candidateStatusFilter = "all";
+    state.selectedCandidateRef = "";
+    renderResults();
+    renderCandidates();
+    return;
+  }
+  const query = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+  const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}/run${query}`);
+  state.currentReport = payload && payload.run_id ? payload : null;
+  state.candidateSearchQuery = "";
+  state.candidateStatusFilter = "all";
+  state.selectedCandidateRef = "";
+  renderResults();
+  renderCandidates();
+}
+
+async function saveProject() {
+  if (!state.user) return;
+  const payload = projectPayloadForSave();
+  const methodUrl = state.selectedProjectId
+    ? `/app/projects/${encodeURIComponent(state.selectedProjectId)}`
+    : "/app/projects";
+  const response = await fetchJSON(methodUrl, { method: "POST", body: payload });
+  state.selectedProjectId = response.project.id;
+  state.selectedProject = response.project;
+  persistStoredState();
+  populateProjectForm(response.project);
+  await refreshProjects(state.projectSearchQuery);
+  renderProjectSummary();
+  updateTopbarActions();
+  setStatus("Project saved.", "success", "The hunt brief and project metadata are now stored.");
+  return response.project;
+}
+
+async function deleteProject() {
+  if (!state.user || !state.selectedProjectId || !state.selectedProject) return;
+  const confirmed = window.confirm(
+    `Delete project "${state.selectedProject.name}"? This will remove its saved runs and review history from the workspace.`,
+  );
+  if (!confirmed) return;
+
+  const deletedName = state.selectedProject.name;
+  await fetchJSON(`/app/projects/${encodeURIComponent(state.selectedProjectId)}`, { method: "DELETE" });
+  state.selectedProjectId = "";
+  state.selectedProject = null;
+  state.currentReport = null;
+  state.currentRuns = [];
+  state.currentReviews = [];
+  state.candidateSearchQuery = "";
+  state.candidateStatusFilter = "all";
+  state.selectedCandidateRef = "";
+  persistStoredState();
+  resetProjectForm();
+  await refreshProjects(state.projectSearchQuery);
+  renderProjectSummary();
+  renderResults();
+  renderCandidates();
+  renderFeedback();
+  renderHistory();
+  updateTopbarActions();
+  switchTab("projects");
+  setStatus("Project deleted.", "success", `${deletedName} was removed from this workspace.`);
+}
+
+async function deleteRun(runId) {
+  if (!state.user?.is_admin || !state.selectedProjectId || !runId) return;
+  const run = state.currentRuns.find((entry) => entry.run_id === runId);
+  const projectName = state.selectedProject?.name || "this project";
+  const confirmed = window.confirm(
+    `Delete this saved run from ${projectName}? This removes the run from project history and deletes its saved report files.`,
+  );
+  if (!confirmed) return;
+  try {
+    await fetchJSON(
+      `/app/projects/${encodeURIComponent(state.selectedProjectId)}/runs/${encodeURIComponent(runId)}`,
+      { method: "DELETE" },
+    );
+    await refreshProjects(state.projectSearchQuery);
+    await loadProject(state.selectedProjectId);
+    switchTab("history");
+    setStatus(
+      "Saved run deleted.",
+      "success",
+      `${run?.candidate_count ?? 0} candidates were removed from ${projectName} history.`,
+    );
+  } catch (error) {
+    setStatus("Could not delete saved run.", "danger", error.message);
+  }
+}
+
+async function runSearch() {
+  if (!state.user) return;
+  const roleTitle = document.getElementById("role-title").value.trim();
+  if (!roleTitle) {
+    setStatus("Role title is required.", "warning", "Add a role title before running search.");
+    switchTab("recruiter");
+    return;
+  }
+  try {
+    const project = await saveProject();
+    const payload = {
+      ...buildBriefPayload(),
+      project_id: project.id,
+    };
+    const job = await fetchJSON("/app/search-jobs", { method: "POST", body: payload });
+    state.activeJob = job;
+    renderOwnerJobs();
+    renderResults();
+    renderCandidates();
+      switchTab("results");
+      setStatus(
+        "Search queued.",
+        "default",
+        `The backend is running the search in the background. Requested up to ${payload.limit} candidates, so larger searches can take longer.`,
+      );
+    startJobPolling(job.job_id);
+  } catch (error) {
+    setStatus("Search could not start.", "danger", error.message);
+  }
+}
+
+function clearJobPolling() {
+  if (state.jobPollHandle) {
+    window.clearTimeout(state.jobPollHandle);
+    state.jobPollHandle = null;
+  }
+}
+
+function startJobPolling(jobId) {
+  clearJobPolling();
+  const poll = async () => {
+    try {
+      const job = await fetchJSON(`/app/jobs/${encodeURIComponent(jobId)}`);
+      state.activeJob = job;
+      renderOwnerJobs();
+      if (job.status === "completed") {
+        clearJobPolling();
+        await handleCompletedJob(job);
+        return;
+      }
+      if (job.status === "failed") {
+        clearJobPolling();
+        renderOwnerJobs();
+        renderResults();
+        renderCandidates();
+        setStatus("Search failed.", "danger", `${job.error || "The job did not complete successfully."} Retry the search when you're ready.`);
+        return;
+      }
+      state.jobPollHandle = window.setTimeout(poll, 2000);
+    } catch {
+      state.jobPollHandle = window.setTimeout(poll, 2500);
+    }
+  };
+  poll();
+}
+
+async function retrySearchForSelectedProject() {
+  if (!state.selectedProjectId) {
+    setStatus("Select a project first.", "warning", "Choose a project before retrying the search.");
+    return;
+  }
+  await runSearch();
+}
+
+async function stopActiveJob() {
+  if (!state.user?.is_admin || !state.activeJob?.job_id) return;
+  try {
+    const job = await fetchJSON(`/app/jobs/${encodeURIComponent(state.activeJob.job_id)}/stop`, {
+      method: "POST",
+      body: { reason: "Stopped by admin. Retry when ready." },
+    });
+    state.activeJob = job;
+    renderOwnerJobs();
+    renderResults();
+    renderCandidates();
+    setStatus("Background job stopped.", "warning", "The job was stopped and can be retried when ready.");
+  } catch (error) {
+    setStatus("Could not stop background job.", "danger", error.message);
+  }
+}
+
+async function handleCompletedJob(job) {
+  if (job.job_type === "search") {
+    const projectId = job.result?.project?.id || state.selectedProjectId;
+    if (projectId) {
+      await refreshProjects(state.projectSearchQuery);
+      await loadProject(projectId);
+      if (job.result?.run_id) {
+        await loadProjectRun(projectId, job.result.run_id);
+      }
+    }
+    setStatus("Search completed.", "success", "The latest run has been attached to the current project.");
+    switchTab("results");
+    return;
+  }
+  if (job.job_type === "train_ranker") {
+    setStatus("Feedback-trained model ready.", "success", "The latest trained model from recruiter feedback has been saved.");
+    return;
+  }
+  setStatus("Background job completed.", "success");
+}
+
+async function runBreakdown() {
+  const roleTitle = document.getElementById("role-title").value.trim();
+  const jobDescription = document.getElementById("job-description").value.trim();
+  if (!jobDescription) {
+    setStatus("Paste a job description first.", "warning", "The JD breakdown runs from the pasted job description.");
+    return;
+  }
+  try {
+    const breakdown = await fetchJSON("/app/jd-breakdown", {
+      method: "POST",
+      body: { role_title: roleTitle, job_description: jobDescription },
+    });
+    state.currentBreakdown = breakdown;
+    renderBreakdown();
+    renderAnchorGrid({ ...currentAnchorValues(), ...(breakdown.suggested_anchors || {}) });
+    const years = breakdown.years || {};
+    if (years.value !== null && years.value !== undefined && !document.getElementById("years-value").value) {
+      document.getElementById("years-value").value = years.value;
+    }
+    if (years.tolerance !== null && years.tolerance !== undefined && !document.getElementById("years-tolerance").value) {
+      document.getElementById("years-tolerance").value = years.tolerance;
+    }
+    if (years.min !== null && years.min !== undefined && !document.getElementById("min-years").value) {
+      document.getElementById("min-years").value = years.min;
+    }
+    if (years.max !== null && years.max !== undefined && !document.getElementById("max-years").value) {
+      document.getElementById("max-years").value = years.max;
+    }
+    setStatus("JD breakdown ready.", "success", "Key experience points and suggested anchors have been updated.");
+  } catch (error) {
+    setStatus("JD breakdown failed.", "danger", error.message);
+  }
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  const email = document.getElementById("login-email").value.trim();
+  const otpCode = document.getElementById("login-otp-code").value.trim();
+  const message = document.getElementById("login-message");
+  message.textContent = "Signing in...";
+  try {
+    const payload = await fetchJSON("/app/auth/login", {
+      method: "POST",
+      body: { email, otp_code: otpCode },
+    });
+    state.sessionToken = payload.session_token;
+    window.localStorage.setItem(SESSION_KEY, state.sessionToken);
+    window.localStorage.setItem(SESSION_HANDOFF_KEY, "1");
+    message.textContent = "Signing in...";
+    window.setTimeout(() => {
+      window.location.assign("/");
+    }, 60);
+  } catch (error) {
+    showAuthShell();
+    message.textContent = error.message;
+  }
+}
+
+async function restoreSession() {
+  const storedToken = window.localStorage.getItem(SESSION_KEY) || "";
+  const handoffFlag = window.localStorage.getItem(SESSION_HANDOFF_KEY) || "";
+  const sessionParam = new URLSearchParams(window.location.search).get("session") || "";
+  if (!storedToken) {
+    showAuthShell();
+    return;
+  }
+  if (!handoffFlag && !sessionParam) {
+    showAuthShell();
+    return;
+  }
+  state.sessionToken = storedToken;
+  try {
+    const payload = await fetchJSON("/app/auth/session");
+    showAppShell();
+    setStatus("Restoring your session...", "default", "Loading your projects and hunt workspace.");
+    await completeSessionBootstrap(payload.user, payload.projects || []);
+    window.localStorage.removeItem(SESSION_HANDOFF_KEY);
+    if (window.location.search) {
+      window.history.replaceState({}, "", "/");
+    }
+    switchTab("projects");
+    setStatus(`Welcome back, ${payload.user.full_name || payload.user.email}.`, "success", "Select a project or open the hunt brief.");
+  } catch {
+    window.localStorage.removeItem(SESSION_KEY);
+    window.localStorage.removeItem(SESSION_HANDOFF_KEY);
+    state.sessionToken = "";
+    showAuthShell();
+  }
+}
+
+async function completeSessionBootstrap(user, initialProjects = []) {
+  state.user = user;
+  state.projects = Array.isArray(initialProjects) ? initialProjects : [];
+  document.getElementById("nav-user-name").textContent = user.full_name || user.email;
+  document.getElementById("nav-user-role").textContent = user.is_admin ? "Admin" : "Recruiter";
+  document.getElementById("owner-user-name").textContent = user.full_name || user.email;
+  document.getElementById("owner-user-role").textContent = user.is_admin ? "Admin" : "Recruiter";
+  populateSettingsFields();
+  renderProjectList();
+  renderHistory();
+  const bootstrapTasks = [
+    refreshUsers(),
+    refreshProjects(state.projectSearchQuery),
+  ];
+  if (state.user?.is_admin) {
+    bootstrapTasks.push(refreshOps());
+  }
+  const bootstrapResults = await Promise.allSettled(bootstrapTasks);
+  const bootstrapFailure = bootstrapResults.find((result) => result.status === "rejected");
+  const storedProject = state.selectedProjectId;
+  try {
+    if (storedProject && state.projects.some((project) => project.id === storedProject)) {
+      await loadProject(storedProject);
+    } else {
+      startNewProject();
+      switchTab("projects");
+    }
+  } catch {
+    startNewProject();
+    switchTab("projects");
+  }
+  if (bootstrapFailure && bootstrapFailure.reason) {
+    setStatus(
+      "Signed in with partial data.",
+      "warning",
+      bootstrapFailure.reason.message || "Some workspace data could not be loaded yet.",
+    );
+  }
+}
+
+async function logout() {
+  try {
+    await fetchJSON("/app/auth/logout", { method: "POST" });
+  } catch {
+    // no-op
+  }
+  clearJobPolling();
+  window.localStorage.removeItem(SESSION_KEY);
+  window.localStorage.removeItem(SESSION_HANDOFF_KEY);
+  state.sessionToken = "";
+  state.user = null;
+  state.users = [];
+  state.projects = [];
+  state.selectedProjectId = "";
+  state.selectedProject = null;
+  state.currentReport = null;
+  state.currentRuns = [];
+  state.currentReviews = [];
+  state.activeJob = null;
+  document.getElementById("nav-user-name").textContent = "Guest";
+  document.getElementById("nav-user-role").textContent = "Signed Out";
+  document.getElementById("owner-user-name").textContent = "HR Hunter Admin";
+  document.getElementById("owner-user-role").textContent = "Admin";
+  clearStoredState();
+  hideProvisioningCard();
+  showAuthShell();
+}
+
+async function handleCreateRecruiter(event) {
+  event.preventDefault();
+  try {
+    const payload = await fetchJSON("/app/admin/users", {
+      method: "POST",
+      body: {
+        full_name: document.getElementById("new-user-name").value.trim(),
+        email: document.getElementById("new-user-email").value.trim(),
+        team_id: document.getElementById("new-user-team").value.trim(),
+      },
+    });
+    event.target.reset();
+    await refreshUsers();
+    renderProvisioningCard(payload.user, `Share this key with ${payload.user?.full_name || payload.user?.email}. They will sign in with their email and a 6-digit authenticator code.`);
+    setStatus("Recruiter account created.", "success", "The authenticator setup key is ready to share with the new recruiter.");
+  } catch (error) {
+    setStatus("Could not create recruiter.", "danger", error.message);
+  }
+}
+
+async function handleRevealUserTotp(userId, rotate = false) {
+  try {
+    const payload = await fetchJSON(`/app/admin/users/${encodeURIComponent(userId)}/totp`, {
+      method: "POST",
+      body: { rotate },
+    });
+    renderProvisioningCard(
+      payload,
+      rotate
+        ? `A new authenticator key has been issued for ${payload.user?.full_name || payload.user?.email}. Share the updated key with them.`
+        : `Share this authenticator key only with ${payload.user?.full_name || payload.user?.email}.`,
+    );
+    setStatus(
+      rotate ? "Authenticator key rotated." : "Authenticator key loaded.",
+      "success",
+      rotate
+        ? "The previous key is no longer valid for that recruiter."
+        : "The current authenticator setup key is ready to share.",
+    );
+    await refreshUsers();
+  } catch (error) {
+    setStatus("Could not load authenticator key.", "danger", error.message);
+  }
+}
+
+function loadDemoBrief() {
+  const preset = state.config?.presets?.supply_chain_manager_uae;
+  if (!preset) return;
+  const existingProject = state.selectedProject ? formValuesFromProject(state.selectedProject) : null;
+  if (existingProject) {
+    document.getElementById("project-name").value = existingProject.projectName;
+    document.getElementById("client-name").value = existingProject.clientName;
+    document.getElementById("project-status").value = existingProject.status;
+    document.getElementById("target-geography").value = existingProject.targetGeography;
+    document.getElementById("project-notes").value = existingProject.notes;
+    renderMemberPicker(existingProject.assignedRecruiterIds.length ? existingProject.assignedRecruiterIds : (state.user ? [state.user.id] : []));
+  } else {
+    document.getElementById("project-name").value = "Senior Data Analyst - UAE";
+    document.getElementById("client-name").value = "Demo Client";
+    document.getElementById("project-status").value = "active";
+  }
   document.getElementById("role-title").value = preset.role_title || "";
-  document.getElementById("years-mode").value = preset.years_mode || "plus_minus";
-  document.getElementById("years-value").value = preset.years_value || "";
-  document.getElementById("years-tolerance").value = preset.years_tolerance ?? 2;
-  document.getElementById("min-years").value = preset.minimum_years_experience || "";
-  document.getElementById("max-years").value = preset.maximum_years_experience || "";
+  if (!existingProject) {
+    document.getElementById("target-geography").value = (preset.countries || [])[0] || "";
+  }
+  document.getElementById("years-mode").value = preset.years_mode || "range";
+  document.getElementById("years-value").value = preset.years_value ?? "";
+  document.getElementById("years-tolerance").value = preset.years_tolerance ?? "";
+  document.getElementById("radius-miles").value = state.config?.defaults?.radius_miles || 25;
+  document.getElementById("candidate-limit").value = preset.max_profiles || state.settings.limit || state.config?.defaults?.limit || 20;
   document.getElementById("company-match-mode").value = preset.company_match_mode || "both";
+  document.getElementById("employment-status-mode").value = preset.employment_status_mode || "any";
   document.getElementById("job-description").value = preset.job_description || "";
   state.tokenFields.titles.setTokens(preset.titles || []);
   state.tokenFields.countries.setTokens(preset.countries || []);
@@ -619,299 +2280,225 @@ function fillFromPreset(preset) {
   state.tokenFields.mustHave.setTokens(preset.must_have_keywords || []);
   state.tokenFields.niceToHave.setTokens(preset.nice_to_have_keywords || []);
   state.tokenFields.industry.setTokens(preset.industry_keywords || []);
-  state.tokenFields.excludeTitles.setTokens(preset.exclude_title_keywords || []);
-  state.tokenFields.excludeCompanies.setTokens(preset.exclude_company_keywords || []);
-  (state.config.anchors || []).forEach((anchor) => {
-    const select = document.getElementById(`anchor-${anchor.id}`);
-    if (!select) return;
-    select.value = preset.anchors?.[anchor.id] || anchor.default || "preferred";
-  });
-  state.currentBreakdown = null;
-  renderBreakdown(null);
-  renderDeveloperState(collectPayload(), state.currentSearch);
-  switchTab("search");
-}
-
-function resetBriefForm() {
-  document.getElementById("role-title").value = "";
-  document.getElementById("years-mode").value = "plus_minus";
-  document.getElementById("years-value").value = "";
-  document.getElementById("years-tolerance").value = 2;
-  document.getElementById("min-years").value = "";
-  document.getElementById("max-years").value = "";
-  document.getElementById("radius-miles").value = state.config?.defaults?.radius_miles || 25;
-  document.getElementById("company-match-mode").value = state.config?.defaults?.company_match_mode || "both";
-  document.getElementById("job-description").value = "";
-  Object.values(state.tokenFields).forEach((field) => field.setTokens([]));
-  (state.config.anchors || []).forEach((anchor) => {
-    const select = document.getElementById(`anchor-${anchor.id}`);
-    if (select) {
-      select.value = anchor.default || "preferred";
-    }
-  });
-  state.currentBreakdown = null;
-  renderBreakdown(null);
-  renderDeveloperState(collectPayload(), state.currentSearch);
-}
-
-function buildSettingsSnapshot() {
-  return {
-    theme: document.body.dataset.theme || state.config?.defaults?.theme || "bright",
-    feedback_db: document.getElementById("feedback-db").value,
-    model_dir: document.getElementById("model-dir").value,
-    output_dir: document.getElementById("output-dir").value,
-    recruiter_id: document.getElementById("recruiter-id").value,
-    recruiter_name: document.getElementById("recruiter-name").value,
-    team_id: document.getElementById("team-id").value,
-    providers: currentProviderSelection(),
-    reranker_enabled: document.getElementById("reranker-enabled").checked,
-    learned_ranker_enabled: document.getElementById("learned-ranker-enabled").checked,
-    row_limit: document.getElementById("row-limit").value,
-    company_match_mode: document.getElementById("company-match-mode").value,
-  };
-}
-
-function applySettingsSnapshot(snapshot) {
-  if (!snapshot) return;
-  const allowedThemes = new Set((state.config?.themes || []).map((theme) => theme.id));
-  if (snapshot.theme && allowedThemes.has(snapshot.theme)) {
-    applyTheme(snapshot.theme);
-  }
-  if (snapshot.feedback_db !== undefined) document.getElementById("feedback-db").value = snapshot.feedback_db;
-  if (snapshot.model_dir !== undefined) document.getElementById("model-dir").value = snapshot.model_dir;
-  if (snapshot.output_dir !== undefined) document.getElementById("output-dir").value = snapshot.output_dir;
-  if (snapshot.recruiter_id !== undefined) document.getElementById("recruiter-id").value = snapshot.recruiter_id;
-  if (snapshot.recruiter_name !== undefined) document.getElementById("recruiter-name").value = snapshot.recruiter_name;
-  if (snapshot.team_id !== undefined) document.getElementById("team-id").value = snapshot.team_id;
-  if (snapshot.row_limit !== undefined) document.getElementById("row-limit").value = snapshot.row_limit;
-  if (snapshot.company_match_mode) document.getElementById("company-match-mode").value = snapshot.company_match_mode;
-  if (snapshot.reranker_enabled !== undefined) document.getElementById("reranker-enabled").checked = Boolean(snapshot.reranker_enabled);
-  if (snapshot.learned_ranker_enabled !== undefined) document.getElementById("learned-ranker-enabled").checked = Boolean(snapshot.learned_ranker_enabled);
-  if (Array.isArray(snapshot.providers)) {
-    document.querySelectorAll('input[name="providers"]').forEach((input) => {
-      input.checked = snapshot.providers.includes(input.value);
-    });
-  }
-}
-
-function applyDefaults(config) {
-  const defaults = config.defaults || {};
-  document.getElementById("row-limit").value = defaults.limit || 20;
-  document.getElementById("radius-miles").value = defaults.radius_miles || 25;
-  document.getElementById("company-match-mode").value = defaults.company_match_mode || "both";
-  document.getElementById("feedback-db").value = defaults.feedback_db || "";
-  document.getElementById("model-dir").value = defaults.model_dir || "";
-  document.getElementById("output-dir").value = defaults.output_dir || "";
-  document.getElementById("reranker-enabled").checked = Boolean(defaults.reranker_enabled);
-  document.getElementById("learned-ranker-enabled").checked = Boolean(defaults.learned_ranker_enabled);
-  applyTheme(defaults.theme || "bright");
-  document.querySelectorAll('input[name="providers"]').forEach((input) => {
-    input.checked = (defaults.providers || []).includes(input.value);
-  });
-  applySettingsSnapshot(getStoredSettings());
-  applyTheme(document.body.dataset.theme || defaults.theme || "bright");
-}
-
-async function runBreakdown() {
-  try {
-    setStatus("Breaking down the job description...", "default", TAB_META.search.description);
-    const payload = {
-      role_title: document.getElementById("role-title").value.trim(),
-      job_description: document.getElementById("job-description").value,
-    };
-    const response = await fetchJSON("/app/jd-breakdown", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    state.currentBreakdown = response;
-    renderBreakdown(response);
-    renderDeveloperState(collectPayload(), state.currentSearch);
-    setStatus("JD breakdown ready.", "success", TAB_META.search.description);
-  } catch (error) {
-    setStatus(error.message, "error", TAB_META.search.description);
-  }
-}
-
-async function runSearch() {
-  try {
-    setStatus("Running search and grading candidates...", "default", TAB_META.search.description);
-    const payload = collectPayload();
-    renderDeveloperState(payload, state.currentSearch);
-    const response = await fetchJSON("/app/search", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    state.currentSearch = response;
-    state.currentBreakdown = response.jd_breakdown || state.currentBreakdown;
-    if (response.feedback_db) document.getElementById("feedback-db").value = response.feedback_db;
-    if (response.model_dir) document.getElementById("model-dir").value = response.model_dir;
-    renderSummary(response.summary);
-    renderArtifacts(response);
-    renderBreakdown(state.currentBreakdown);
-    renderCandidates(response);
-    renderFeedbackSummary(response);
-    renderDeveloperState(payload, response);
-    switchTab("results");
-    setStatus(`Search complete. ${response.summary?.candidate_count || 0} candidates returned.`, "success", TAB_META.results.description);
-  } catch (error) {
-    setStatus(error.message, "error", TAB_META.search.description);
-  }
+  state.currentBreakdown = preset.jd_breakdown || null;
+  renderBreakdown();
+  renderAnchorGrid(preset.anchors || {});
+  switchTab("recruiter");
+  setStatus(
+    "Demo brief loaded.",
+    "success",
+    existingProject
+      ? `Demo hunt criteria loaded into ${existingProject.projectName}. Save or run when you're ready.`
+      : "You can edit it before saving or running the project.",
+  );
 }
 
 async function trainRanker() {
+  if (!state.user?.is_admin) return;
+  collectSettingsFromInputs();
   try {
-    setStatus("Training learned ranker from recruiter feedback...", "default", TAB_META.feedback.description);
-    const response = await fetchJSON("/app/train-ranker", {
+    const job = await fetchJSON("/app/train-ranker-jobs", {
       method: "POST",
-      body: JSON.stringify({
-        feedback_db: document.getElementById("feedback-db").value.trim(),
-        model_dir: document.getElementById("model-dir").value.trim(),
-        n_estimators: document.getElementById("train-estimators").value,
-        num_leaves: document.getElementById("train-num-leaves").value,
-      }),
+      body: {
+        feedback_db: state.settings.feedback_db,
+        model_dir: state.settings.model_dir,
+        n_estimators: safeNumber(document.getElementById("ranker-estimators").value, 80),
+        num_leaves: safeNumber(document.getElementById("ranker-num-leaves").value, 31),
+      },
     });
-    document.getElementById("learned-ranker-enabled").checked = true;
-    document.getElementById("model-dir").value = response.model_dir || document.getElementById("model-dir").value;
-    setStatus(`Learned ranker trained with ${response.training_row_count} rows.`, "success", TAB_META.feedback.description);
+    state.activeJob = job;
+    renderOwnerJobs();
+    setStatus("Ranker training queued.", "default", "The learned ranker is training in the background.");
+    startJobPolling(job.job_id);
   } catch (error) {
-    setStatus(error.message, "error", TAB_META.feedback.description);
+    setStatus("Could not queue ranker training.", "danger", error.message);
   }
 }
 
-async function submitSupportRequest() {
+async function submitSupport(event) {
+  event.preventDefault();
   try {
-    const payload = {
-      name: document.getElementById("support-name").value.trim(),
-      contact: document.getElementById("support-contact").value.trim(),
-      topic: document.getElementById("support-topic").value.trim(),
-      message: document.getElementById("support-message").value.trim(),
-      report_path: state.currentSearch?.report_paths?.json || "",
-      workspace_root: state.config?.paths?.workspace_root || "",
-    };
-    if (!payload.topic || !payload.message) {
-      throw new Error("Add both a support topic and message.");
-    }
-    const response = await fetchJSON("/app/support-request", {
+    await fetchJSON("/app/support-request", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: {
+        name: document.getElementById("support-name").value.trim(),
+        contact: document.getElementById("support-contact").value.trim(),
+        topic: document.getElementById("support-topic").value.trim(),
+        message: document.getElementById("support-message").value.trim(),
+      },
     });
-    document.getElementById("support-status").textContent = `Support request saved to ${response.saved_to}`;
-    setStatus("Support request saved.", "success", TAB_META.settings.description);
+    event.target.reset();
+    setStatus("Support request sent.", "success", "The request has been written to the app inbox.");
   } catch (error) {
-    document.getElementById("support-status").textContent = error.message;
-    setStatus(error.message, "error", TAB_META.settings.description);
+    setStatus("Support request failed.", "danger", error.message);
   }
 }
 
-async function submitFeatureRequest() {
+async function submitFeature(event) {
+  event.preventDefault();
   try {
-    const payload = {
-      title: document.getElementById("feature-title").value.trim(),
-      why: document.getElementById("feature-why").value.trim(),
-      details: document.getElementById("feature-message").value.trim(),
-      report_path: state.currentSearch?.report_paths?.json || "",
-      workspace_root: state.config?.paths?.workspace_root || "",
-    };
-    if (!payload.title || !payload.why || !payload.details) {
-      throw new Error("Add a feature title, why it matters, and the details.");
-    }
-    const response = await fetchJSON("/app/feature-request", {
+    await fetchJSON("/app/feature-request", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: {
+        title: document.getElementById("feature-title").value.trim(),
+        message: document.getElementById("feature-message").value.trim(),
+      },
     });
-    document.getElementById("feature-status").textContent = `Feature request saved to ${response.saved_to}`;
-    setStatus("Feature request saved.", "success", TAB_META.settings.description);
+    event.target.reset();
+    setStatus("Feature suggestion sent.", "success", "The request has been written to the app inbox.");
   } catch (error) {
-    document.getElementById("feature-status").textContent = error.message;
-    setStatus(error.message, "error", TAB_META.settings.description);
+    setStatus("Feature suggestion failed.", "danger", error.message);
   }
 }
 
 function saveSettings() {
-  const snapshot = buildSettingsSnapshot();
-  saveStoredSettings(snapshot);
-  applyTheme(snapshot.theme || "bright");
-  setStatus("Settings saved locally for this app.", "success", TAB_META.settings.description);
+  collectSettingsFromInputs();
+  applyTheme(state.settings.theme);
+  populateSettingsFields();
+  persistStoredState();
+  setStatus("Settings saved.", "success", "Theme, ranking preferences, and workspace paths have been updated for this browser.");
 }
 
 function resetSettings() {
-  clearStoredSettings();
-  applyDefaults(state.config);
-  setStatus("Settings reset to app defaults.", "success", TAB_META.settings.description);
-}
-
-function isOwnerSession() {
-  return ["127.0.0.1", "localhost"].includes(window.location.hostname);
+  state.settings = defaultSettingsFromConfig();
+  applyTheme(state.settings.theme);
+  populateSettingsFields();
+  renderProviderOptions();
+  persistStoredState();
+  setStatus("Settings reset.", "success", "Default theme, ranking preferences, and paths have been restored.");
 }
 
 function bindEvents() {
-  document.getElementById("menu-toggle").addEventListener("click", toggleNavDrawer);
-  document.getElementById("drawer-close").addEventListener("click", closeNavDrawer);
-  document.getElementById("nav-backdrop").addEventListener("click", closeNavDrawer);
-  document.getElementById("developer-close").addEventListener("click", closeDeveloperPanel);
-  document.getElementById("developer-backdrop").addEventListener("click", closeDeveloperPanel);
-  if (isOwnerSession()) {
-    const ownerFab = document.getElementById("owner-fab");
-    ownerFab.hidden = false;
-    ownerFab.addEventListener("click", toggleDeveloperPanel);
+  window.__HR_HUNTER_LOGIN_BOUND = true;
+  window.addEventListener("beforeunload", handleBeforeUnload);
+  const loginForm = document.getElementById("login-form");
+  if (loginForm && loginForm.dataset.inlineManaged !== "true") {
+    loginForm.addEventListener("submit", handleLogin);
   }
-  document.querySelectorAll(".nav-button").forEach((button) => {
-    button.addEventListener("click", () => switchTab(button.dataset.tab));
+  document.getElementById("nav-logout-button").addEventListener("click", logout);
+  document.getElementById("nav-settings-button").addEventListener("click", () => switchTab("settings"));
+  document.getElementById("menu-button").addEventListener("click", openNav);
+  document.getElementById("nav-close-button").addEventListener("click", closeNav);
+  document.getElementById("nav-backdrop").addEventListener("click", closeNav);
+  document.querySelectorAll("[data-tab-target]").forEach((button) => {
+    button.addEventListener("click", () => switchTab(button.dataset.tabTarget));
   });
-  document.getElementById("header-breakdown-button").addEventListener("click", runBreakdown);
-  document.getElementById("header-search-button").addEventListener("click", runSearch);
-  document.getElementById("load-example-button").addEventListener("click", () => {
-    fillFromPreset(state.config.presets?.senior_data_analyst_uae || {});
-    setStatus("UAE demo brief loaded. You can edit it before running.", "success", TAB_META.search.description);
+  document.getElementById("new-project-button").addEventListener("click", startNewProject);
+  document.getElementById("project-reset-button").addEventListener("click", startNewProject);
+  document.getElementById("refresh-projects-button").addEventListener("click", () => refreshProjects(document.getElementById("project-search-input").value.trim()));
+  document.getElementById("project-search-input").addEventListener("input", (event) => {
+    window.clearTimeout(document.getElementById("project-search-input")._timer);
+    document.getElementById("project-search-input")._timer = window.setTimeout(() => {
+      refreshProjects(event.target.value.trim());
+    }, 250);
   });
-  document.getElementById("reset-brief-button").addEventListener("click", () => {
-    resetBriefForm();
-    setStatus("Recruiter brief cleared.", "success", TAB_META.search.description);
+  document.getElementById("candidate-search-input").addEventListener("input", (event) => {
+    state.candidateSearchQuery = event.target.value.trim();
+    renderCandidates();
   });
+  document.getElementById("breakdown-button").addEventListener("click", runBreakdown);
+  document.getElementById("top-save-button").addEventListener("click", async () => {
+    try {
+      await saveProject();
+    } catch (error) {
+      setStatus("Project could not be saved.", "danger", error.message);
+    }
+  });
+  document.getElementById("top-delete-button").addEventListener("click", async () => {
+    try {
+      await deleteProject();
+    } catch (error) {
+      setStatus("Project could not be deleted.", "danger", error.message);
+    }
+  });
+  document.getElementById("top-run-button").addEventListener("click", runSearch);
+  document.getElementById("refresh-results-button").addEventListener("click", async () => {
+    if (!state.selectedProjectId) return;
+    await loadProjectRun(state.selectedProjectId);
+    setStatus("Results refreshed.", "success", "The latest saved run has been loaded.");
+  });
+  document.getElementById("refresh-feedback-button").addEventListener("click", async () => {
+    if (!state.selectedProjectId) return;
+    await loadProjectReviews(state.selectedProjectId);
+    setStatus("Feedback refreshed.", "success", "Recent recruiter actions are up to date.");
+  });
+  document.getElementById("refresh-history-button").addEventListener("click", async () => {
+    if (!state.selectedProjectId) return;
+    await loadProjectRuns(state.selectedProjectId);
+    setStatus("History refreshed.", "success", "Saved search runs are up to date.");
+  });
+  document.getElementById("settings-save-button").addEventListener("click", saveSettings);
+  document.getElementById("settings-reset-button").addEventListener("click", resetSettings);
+  document.getElementById("support-form").addEventListener("submit", submitSupport);
+  document.getElementById("feature-form").addEventListener("submit", submitFeature);
+  document.getElementById("owner-fab").addEventListener("click", openOwnerDrawer);
+  document.getElementById("owner-close-button").addEventListener("click", closeOwnerDrawer);
+  document.getElementById("owner-open-settings-button").addEventListener("click", () => switchTab("settings"));
+  document.getElementById("owner-logout-button").addEventListener("click", logout);
+  document.getElementById("owner-copy-secret-button").addEventListener("click", async () => {
+    const copied = await copyToClipboard(document.getElementById("owner-provision-secret").value);
+    setStatus(
+      copied ? "Manual key copied." : "Could not copy manual key.",
+      copied ? "success" : "warning",
+      copied ? "You can now paste it into an authenticator app." : "Copy the key manually from the Authenticator Setup card.",
+    );
+  });
+  document.getElementById("owner-copy-uri-button").addEventListener("click", async () => {
+    const copied = await copyToClipboard(document.getElementById("owner-provision-uri").value);
+    setStatus(
+      copied ? "Provisioning link copied." : "Could not copy provisioning link.",
+      copied ? "success" : "warning",
+      copied ? "You can share or open the provisioning link directly." : "Copy the provisioning link manually from the Authenticator Setup card.",
+    );
+  });
+  document.getElementById("create-recruiter-form").addEventListener("submit", handleCreateRecruiter);
+  document.getElementById("owner-user-list").addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const revealUserId = target.dataset.userShowTotp;
+    const rotateUserId = target.dataset.userRotateTotp;
+    if (revealUserId) {
+      handleRevealUserTotp(revealUserId, false);
+    }
+    if (rotateUserId) {
+      handleRevealUserTotp(rotateUserId, true);
+    }
+  });
+  document.getElementById("load-demo-button").addEventListener("click", loadDemoBrief);
+  document.getElementById("owner-train-ranker-button").addEventListener("click", trainRanker);
   document.getElementById("train-ranker-button").addEventListener("click", trainRanker);
-  document.getElementById("save-settings-button").addEventListener("click", saveSettings);
-  document.getElementById("reset-settings-button").addEventListener("click", resetSettings);
-  document.getElementById("support-submit-button").addEventListener("click", submitSupportRequest);
-  document.getElementById("feature-submit-button").addEventListener("click", submitFeatureRequest);
-  document.getElementById("job-description").addEventListener("input", () => {
-    state.currentBreakdown = null;
-    renderBreakdown(null);
-    renderDeveloperState(collectPayload(), state.currentSearch);
-  });
+  bindOwnerToggle("owner-semantic-enabled", "settings-semantic-enabled", "reranker_enabled", "HR Hunter AI Match Scoring is now updated.");
+  bindOwnerToggle("owner-feedback-model-enabled", "settings-feedback-model-enabled", "learned_ranker_enabled", "The feedback-trained model setting is now updated.");
+  bindOwnerToggle("owner-history-context-enabled", "settings-history-context-enabled", "include_history_slices", "Previous search context is now updated.");
+  bindOwnerToggle("owner-discovery-enabled", "", "include_discovery_slices", "Broader discovery search is now updated.");
+  bindOwnerToggle("owner-memory-enabled", "", "registry_memory_enabled", "Candidate memory reuse is now updated.");
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      closeNavDrawer();
-      closeDeveloperPanel();
-      return;
-    }
-    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "d") {
-      event.preventDefault();
-      toggleDeveloperPanel();
+      closeNav();
+      closeOwnerDrawer();
     }
   });
 }
 
-async function init() {
-  try {
-    setStatus("Loading recruiter workspace...", "default", TAB_META.search.description);
-    state.config = await fetchJSON("/app-config");
-    createTokenFields(state.config);
-    renderThemeOptions(state.config);
-    renderAnchors(state.config);
-    renderProviders(state.config);
-    applyDefaults(state.config);
-    renderSummary(null);
-    renderArtifacts(null);
-    renderBreakdown(null);
-    renderCandidates(null);
-    renderFeedbackSummary(null);
-    renderDeveloperState(null, null);
-    bindEvents();
-    switchTab("search");
-    setStatus("Workspace ready.", "success", TAB_META.search.description);
-  } catch (error) {
-    setStatus(`Failed to load app: ${error.message}`, "error", TAB_META.search.description);
-  }
+async function initialiseApp() {
+  bindEvents();
+  state.config = await fetchJSON("/app-config");
+  hydrateSettings();
+  initialiseTokenFields();
+  renderProjectStatuses();
+  renderThemeToggle();
+  renderProviderOptions();
+  renderAnchorGrid();
+  populateSettingsFields();
+  await restoreSession();
 }
 
-window.addEventListener("DOMContentLoaded", init);
+window.addEventListener("DOMContentLoaded", () => {
+  initialiseApp().catch((error) => {
+    showAuthShell();
+    const message = document.getElementById("login-message");
+    if (message) {
+      message.textContent = error.message || "The app could not be loaded.";
+    }
+  });
+});

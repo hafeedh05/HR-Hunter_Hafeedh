@@ -262,7 +262,7 @@ def test_scrapingbee_builds_history_query_plans() -> None:
                 "company_targets": ["Unilever"],
                 "geography": {"location_name": "Drogheda", "country": "Ireland"},
                 "provider_settings": {
-                    "pdl": {
+                    "retrieval": {
                         "include_strict_slice": False,
                         "include_broad_slice": False,
                         "include_discovery_slices": False,

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Tuple
 from hr_hunter.features import FeatureBuildResult
 from hr_hunter.config import resolve_ranker_model_dir
 from hr_hunter.models import CandidateProfile, SearchBrief
+from hr_hunter.state import record_model_version
 
 
 RANKING_MODEL_VERSION = "heuristic-anchor-ranker-v1"
@@ -18,7 +19,6 @@ LEARNED_RANKER_METADATA_FILENAME = "metadata.json"
 LEARNED_RANKER_FEATURES = [
     "title_similarity",
     "company_match",
-    "company_interest",
     "location_match",
     "skill_overlap",
     "industry_fit",
@@ -26,6 +26,7 @@ LEARNED_RANKER_FEATURES = [
     "current_function_fit",
     "parser_confidence",
     "evidence_quality",
+    "employment_status",
     "semantic_similarity",
     "source_quality_score",
     "reranker_score",
@@ -33,7 +34,6 @@ LEARNED_RANKER_FEATURES = [
     "years_experience_gap",
     "anchor_title_similarity",
     "anchor_company_match",
-    "anchor_company_interest",
     "anchor_location_match",
     "anchor_skill_overlap",
     "anchor_industry_fit",
@@ -119,10 +119,10 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
 
     location_weight = float(brief.anchor_weights.get("location_match", 0.0))
     company_weight = float(brief.anchor_weights.get("company_match", 0.0))
-    interest_weight = float(brief.anchor_weights.get("company_interest", 0.0))
     title_weight = float(brief.anchor_weights.get("title_similarity", 0.0))
     industry_weight = float(brief.anchor_weights.get("industry_fit", 0.0))
     company_mode = brief.company_match_mode
+    employment_mode = brief.employment_status_mode
 
     if brief.company_targets:
         if company_mode == "current_only":
@@ -156,20 +156,6 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
     elif brief.titles or brief.title_keywords:
         score -= min(16.0, title_weight * 16.0)
         notes.append("ranker_penalty: current_title_not_aligned")
-
-    company_interest_score = float(features.feature_scores.get("company_interest", 0.0))
-    if brief.hiring_company_name:
-        if company_interest_score >= 0.95:
-            score += 6.0
-            notes.append("ranker_bonus: explicit_company_interest")
-        elif company_interest_score >= 0.4:
-            score += 2.0
-            notes.append("ranker_bonus: company_interest_signal")
-        elif brief.candidate_interest_required:
-            score -= min(18.0, interest_weight * 18.0 or 14.0)
-            max_score = min(max_score, 69.0)
-            cap_reasons.append("company_interest_required")
-            notes.append("ranker_penalty: company_interest_missing")
 
     if features.location_bucket == "outside_target_area":
         score -= 25.0
@@ -214,6 +200,23 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
     if brief.industry_keywords and features.feature_scores.get("industry_fit", 0.0) <= 0.0:
         score -= min(14.0, industry_weight * 14.0 or 12.0)
         notes.append("ranker_penalty: industry_fit_missing")
+
+    if employment_mode != "any":
+        if features.employment_status_match:
+            if employment_mode == "open_to_work_signal":
+                score += 4.0
+                notes.append("ranker_bonus: open_to_work_signal")
+            elif employment_mode == "not_currently_employed":
+                score += 3.0
+                notes.append("ranker_bonus: not_currently_employed")
+            else:
+                score += 2.0
+                notes.append("ranker_bonus: employment_status_match")
+        else:
+            score -= 22.0
+            max_score = min(max_score, 35.0)
+            cap_reasons.append("employment_status_required")
+            notes.append("ranker_penalty: employment_status_missing")
 
     if brief.company_targets:
         if company_mode == "current_only" and not features.current_target_company_match and company_weight >= 0.75:
@@ -268,7 +271,6 @@ def build_learned_feature_map(candidate: CandidateProfile, brief: SearchBrief) -
     return {
         "title_similarity": float(feature_scores.get("title_similarity", candidate.title_similarity_score)),
         "company_match": float(feature_scores.get("company_match", candidate.company_match_score)),
-        "company_interest": float(feature_scores.get("company_interest", candidate.company_interest_score)),
         "location_match": float(feature_scores.get("location_match", candidate.location_match_score)),
         "skill_overlap": float(feature_scores.get("skill_overlap", candidate.skill_overlap_score)),
         "industry_fit": float(feature_scores.get("industry_fit", candidate.industry_fit_score)),
@@ -276,6 +278,7 @@ def build_learned_feature_map(candidate: CandidateProfile, brief: SearchBrief) -
         "current_function_fit": float(feature_scores.get("current_function_fit", candidate.current_function_fit)),
         "parser_confidence": float(feature_scores.get("parser_confidence", candidate.parser_confidence)),
         "evidence_quality": float(feature_scores.get("evidence_quality", candidate.evidence_quality_score)),
+        "employment_status": float(feature_scores.get("employment_status", 0.0)),
         "semantic_similarity": float(feature_scores.get("semantic_similarity", candidate.semantic_similarity_score)),
         "source_quality_score": float(candidate.source_quality_score),
         "reranker_score": float(candidate.reranker_score),
@@ -283,7 +286,6 @@ def build_learned_feature_map(candidate: CandidateProfile, brief: SearchBrief) -
         "years_experience_gap": abs(float(years_gap)) if years_gap is not None else 0.0,
         "anchor_title_similarity": float(anchor_weights.get("title_similarity", 0.0)),
         "anchor_company_match": float(anchor_weights.get("company_match", 0.0)),
-        "anchor_company_interest": float(anchor_weights.get("company_interest", 0.0)),
         "anchor_location_match": float(anchor_weights.get("location_match", 0.0)),
         "anchor_skill_overlap": float(anchor_weights.get("skill_overlap", 0.0)),
         "anchor_industry_fit": float(anchor_weights.get("industry_fit", 0.0)),
@@ -301,7 +303,7 @@ def _row_feature_vector(feature_map: Dict[str, Any]) -> List[float]:
 
 def cap_candidate_score(score: float, candidate: CandidateProfile) -> float:
     cap = 100.0
-    if "hard_exclude" in candidate.cap_reasons:
+    if {"hard_exclude", "employment_status_required"}.intersection(set(candidate.cap_reasons)):
         cap = min(cap, 35.0)
     if "outside_target_area" in candidate.cap_reasons:
         cap = min(cap, 45.0)
@@ -312,7 +314,6 @@ def cap_candidate_score(score: float, candidate: CandidateProfile) -> float:
         "current_function_review",
         "current_target_company_required",
         "target_company_history_required",
-        "company_interest_required",
         "title_alignment_required",
     }.intersection(set(candidate.cap_reasons)):
         cap = min(cap, 69.0)
@@ -382,6 +383,12 @@ def train_learned_ranker(
         "num_leaves": num_leaves,
     }
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    record_model_version(
+        model_type="learned_ranker",
+        model_version=str(metadata["model_version"]),
+        model_dir=str(resolved_model_dir),
+        metadata=metadata,
+    )
     return {
         "model_dir": str(resolved_model_dir),
         "model_path": str(model_path),

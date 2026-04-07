@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Set, Tuple
@@ -25,57 +26,27 @@ TITLE_FAMILY_KEYWORDS = (
 CSV_FIELDNAMES = [
     "identity_key",
     "full_name",
-    "current_title",
-    "current_company",
-    "location_name",
-    "distance_miles",
-    "current_target_company_match",
-    "target_company_history_match",
-    "current_title_match",
-    "industry_aligned",
-    "location_aligned",
-    "current_company_confirmed",
-    "current_title_confirmed",
-    "current_location_confirmed",
-    "precise_location_confirmed",
-    "current_employment_confirmed",
     "verification_status",
     "qualification_tier",
     "score",
+    "current_title",
+    "current_company",
+    "location_name",
+    "company_match_context",
+    "employment_signal",
     "title_similarity_score",
     "company_match_score",
-    "company_interest_score",
     "location_match_score",
     "skill_overlap_score",
     "industry_fit_score",
     "years_fit_score",
-    "years_experience_gap",
-    "parser_confidence",
-    "evidence_quality_score",
     "semantic_similarity_score",
-    "reranker_score",
-    "ranking_model_version",
-    "evidence_confidence",
-    "evidence_verdict",
-    "stale_data_risk",
-    "cap_reasons",
-    "disqualifier_reasons",
-    "matched_title_family",
-    "location_precision_bucket",
-    "current_role_proof_count",
-    "source_quality_score",
-    "evidence_freshness_year",
-    "current_function_fit",
-    "current_fmcg_fit",
-    "feature_scores",
-    "anchor_scores",
-    "search_strategies",
-    "source",
-    "linkedin_url",
-    "source_url",
     "matched_titles",
     "matched_companies",
-    "verification_notes",
+    "key_signals",
+    "linkedin_url",
+    "source_url",
+    "source",
 ]
 
 
@@ -97,10 +68,99 @@ def _serialize_multi_value(values: Iterable[str]) -> str:
     return "; ".join(_clean_reason_values(values))
 
 
-def _serialize_json_value(value: object) -> str:
-    if value in ({}, [], None, ""):
+def _repair_display_text(value: object) -> str:
+    text = str(value or "")
+    if not text.strip():
         return ""
-    return json.dumps(value, sort_keys=True)
+    cleaned = text.replace("\u200f", "").replace("\u200e", "").replace("\ufeff", "")
+    replacements = {
+        "â€¢": "•",
+        "â€“": "–",
+        "â€”": "—",
+        "â€™": "’",
+        "â€œ": '"',
+        "â€\x9d": '"',
+        "Â": "",
+    }
+    for source, target in replacements.items():
+        cleaned = cleaned.replace(source, target)
+    if any(token in cleaned for token in ("Ã", "Â", "â€", "â€¢")):
+        try:
+            repaired = cleaned.encode("latin1").decode("utf-8")
+            if repaired:
+                cleaned = repaired
+        except Exception:
+            pass
+    cleaned = cleaned.replace("•", " | ")
+    cleaned = re.sub(r"\s*\|\s*", " | ", cleaned)
+    cleaned = re.sub(r"(\s*\|\s*)+$", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" |")
+    return cleaned
+
+
+def _company_match_context(candidate: CandidateProfile) -> str:
+    if candidate.current_target_company_match and candidate.target_company_history_match:
+        return "Current and past target company"
+    if candidate.current_target_company_match:
+        return "Current target company"
+    if candidate.target_company_history_match:
+        return "Past target company"
+    return "No target company match"
+
+
+def _employment_signal(candidate: CandidateProfile) -> str:
+    notes_text = " ".join(_clean_reason_values(candidate.verification_notes)).lower()
+    if "open_to_work_signal" in notes_text:
+        return "Open to work signal"
+    if candidate.current_employment_confirmed:
+        return "Current role confirmed"
+    if candidate.current_company.strip():
+        return "Current company listed"
+    return "No current role signal"
+
+
+def _humanize_candidate_note(note: str) -> str:
+    text = str(note or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if lower.startswith(("reranker:", "learned_ranker:", "ranker_bonus:", "ranker_penalty:", "parser_confidence:", "evidence_quality:")):
+        return ""
+    label_map = {
+        "current_function_fit": "Function fit",
+        "location_match": "Location",
+        "skill_overlap": "Skills",
+        "industry_fit": "Industry",
+        "years_fit": "Experience",
+        "employment_status": "Employment",
+        "company_match": "Company",
+        "title_similarity": "Title",
+    }
+    if ":" not in text:
+        return ""
+    prefix, value = text.split(":", 1)
+    label = label_map.get(prefix.strip())
+    if not label:
+        return ""
+    detail = _repair_display_text(value.replace("_", " ").strip())
+    return f"{label}: {detail}" if detail else ""
+
+
+def _candidate_key_signals(candidate: CandidateProfile) -> str:
+    signals: List[str] = []
+    if candidate.current_title_match:
+        signals.append("Current title aligned")
+    if candidate.current_target_company_match:
+        signals.append("Current target company match")
+    elif candidate.target_company_history_match:
+        signals.append("Past target company match")
+    if candidate.location_aligned:
+        signals.append("Target location aligned")
+    for note in candidate.verification_notes:
+        formatted = _humanize_candidate_note(note)
+        if formatted:
+            signals.append(formatted)
+    return _serialize_multi_value(signals[:5])
 
 
 def _title_family_text(candidate: CandidateProfile) -> str:
@@ -154,9 +214,7 @@ def _infer_source_quality_score(candidate: CandidateProfile, proof_count: int) -
     source_url = (candidate.source_url or "").strip().lower()
     linkedin_url = (candidate.linkedin_url or "").strip().lower()
 
-    if source == "pdl":
-        score += 0.35
-    elif source:
+    if source:
         score += 0.2
 
     if "linkedin.com/in/" in linkedin_url or "linkedin.com/in/" in source_url:
@@ -232,14 +290,6 @@ def _infer_company_match_score(candidate: CandidateProfile) -> float:
         return 1.0
     if candidate.target_company_history_match:
         return 0.45
-    return 0.0
-
-
-def _infer_company_interest_score(candidate: CandidateProfile) -> float:
-    if candidate.company_interest_score > 0.0:
-        return candidate.company_interest_score
-    if candidate.feature_scores.get("company_interest", 0.0) > 0.0:
-        return float(candidate.feature_scores.get("company_interest", 0.0))
     return 0.0
 
 
@@ -387,7 +437,6 @@ def hydrate_candidate_reporting(candidate: CandidateProfile) -> CandidateProfile
     title_similarity_score = _infer_title_similarity_score(candidate, current_function_fit)
     company_match_score = _infer_company_match_score(candidate)
     location_match_score = _infer_location_match_score(candidate)
-    company_interest_score = _infer_company_interest_score(candidate)
     skill_overlap_score = _infer_skill_overlap_score(candidate, current_function_fit, industry_fit_score)
     years_fit_score = _infer_years_fit_score(candidate)
     parser_confidence = _infer_parser_confidence(candidate)
@@ -401,7 +450,6 @@ def hydrate_candidate_reporting(candidate: CandidateProfile) -> CandidateProfile
     candidate.evidence_freshness_year = evidence_freshness_year
     candidate.title_similarity_score = round(title_similarity_score, 3)
     candidate.company_match_score = round(company_match_score, 3)
-    candidate.company_interest_score = round(company_interest_score, 3)
     candidate.location_match_score = round(location_match_score, 3)
     candidate.skill_overlap_score = round(skill_overlap_score, 3)
     candidate.industry_fit_score = round(industry_fit_score, 3)
@@ -414,7 +462,6 @@ def hydrate_candidate_reporting(candidate: CandidateProfile) -> CandidateProfile
         candidate.feature_scores = {
             "title_similarity": candidate.title_similarity_score,
             "company_match": candidate.company_match_score,
-            "company_interest": candidate.company_interest_score,
             "location_match": candidate.location_match_score,
             "skill_overlap": candidate.skill_overlap_score,
             "industry_fit": candidate.industry_fit_score,
@@ -502,58 +549,28 @@ def candidate_to_row(candidate: CandidateProfile) -> Dict[str, object]:
     hydrated = hydrate_candidate_reporting(candidate)
     return {
         "identity_key": candidate_primary_key(hydrated),
-        "full_name": hydrated.full_name,
-        "current_title": hydrated.current_title,
-        "current_company": hydrated.current_company,
-        "location_name": hydrated.location_name,
-        "distance_miles": hydrated.distance_miles,
-        "current_target_company_match": hydrated.current_target_company_match,
-        "target_company_history_match": hydrated.target_company_history_match,
-        "current_title_match": hydrated.current_title_match,
-        "industry_aligned": hydrated.industry_aligned,
-        "location_aligned": hydrated.location_aligned,
-        "current_company_confirmed": hydrated.current_company_confirmed,
-        "current_title_confirmed": hydrated.current_title_confirmed,
-        "current_location_confirmed": hydrated.current_location_confirmed,
-        "precise_location_confirmed": hydrated.precise_location_confirmed,
-        "current_employment_confirmed": hydrated.current_employment_confirmed,
+        "full_name": _repair_display_text(hydrated.full_name),
         "verification_status": hydrated.verification_status,
         "qualification_tier": hydrated.qualification_tier,
         "score": hydrated.score,
-        "title_similarity_score": hydrated.title_similarity_score,
-        "company_match_score": hydrated.company_match_score,
-        "company_interest_score": hydrated.company_interest_score,
-        "location_match_score": hydrated.location_match_score,
-        "skill_overlap_score": hydrated.skill_overlap_score,
-        "industry_fit_score": hydrated.industry_fit_score,
-        "years_fit_score": hydrated.years_fit_score,
-        "years_experience_gap": hydrated.years_experience_gap,
-        "parser_confidence": hydrated.parser_confidence,
-        "evidence_quality_score": hydrated.evidence_quality_score,
-        "semantic_similarity_score": hydrated.semantic_similarity_score,
-        "reranker_score": hydrated.reranker_score,
-        "ranking_model_version": hydrated.ranking_model_version,
-        "evidence_confidence": hydrated.evidence_confidence,
-        "evidence_verdict": hydrated.evidence_verdict,
-        "stale_data_risk": hydrated.stale_data_risk,
-        "cap_reasons": _serialize_multi_value(hydrated.cap_reasons),
-        "disqualifier_reasons": _serialize_multi_value(hydrated.disqualifier_reasons),
-        "matched_title_family": hydrated.matched_title_family,
-        "location_precision_bucket": hydrated.location_precision_bucket,
-        "current_role_proof_count": hydrated.current_role_proof_count,
-        "source_quality_score": hydrated.source_quality_score,
-        "evidence_freshness_year": hydrated.evidence_freshness_year,
-        "current_function_fit": hydrated.current_function_fit,
-        "current_fmcg_fit": hydrated.current_fmcg_fit,
-        "feature_scores": _serialize_json_value(hydrated.feature_scores),
-        "anchor_scores": _serialize_json_value(hydrated.anchor_scores),
-        "search_strategies": _serialize_multi_value(hydrated.search_strategies),
-        "source": hydrated.source,
+        "current_title": _repair_display_text(hydrated.current_title),
+        "current_company": _repair_display_text(hydrated.current_company),
+        "location_name": _repair_display_text(hydrated.location_name),
+        "company_match_context": _company_match_context(hydrated),
+        "employment_signal": _employment_signal(hydrated),
+        "title_similarity_score": round(hydrated.title_similarity_score, 3),
+        "company_match_score": round(hydrated.company_match_score, 3),
+        "location_match_score": round(hydrated.location_match_score, 3),
+        "skill_overlap_score": round(hydrated.skill_overlap_score, 3),
+        "industry_fit_score": round(hydrated.industry_fit_score, 3),
+        "years_fit_score": round(hydrated.years_fit_score, 3),
+        "semantic_similarity_score": round(hydrated.semantic_similarity_score, 3),
+        "matched_titles": _serialize_multi_value([_repair_display_text(value) for value in hydrated.matched_titles]),
+        "matched_companies": _serialize_multi_value([_repair_display_text(value) for value in hydrated.matched_companies]),
+        "key_signals": _candidate_key_signals(hydrated),
         "linkedin_url": hydrated.linkedin_url,
         "source_url": hydrated.source_url,
-        "matched_titles": _serialize_multi_value(hydrated.matched_titles),
-        "matched_companies": _serialize_multi_value(hydrated.matched_companies),
-        "verification_notes": _serialize_multi_value(hydrated.verification_notes),
+        "source": hydrated.source,
     }
 
 
@@ -707,7 +724,6 @@ def build_candidate(payload: dict) -> CandidateProfile:
         evidence_quality_score=float(payload.get("evidence_quality_score", 0.0)),
         title_similarity_score=float(payload.get("title_similarity_score", 0.0)),
         company_match_score=float(payload.get("company_match_score", 0.0)),
-        company_interest_score=float(payload.get("company_interest_score", 0.0)),
         location_match_score=float(payload.get("location_match_score", 0.0)),
         skill_overlap_score=float(payload.get("skill_overlap_score", 0.0)),
         industry_fit_score=float(payload.get("industry_fit_score", 0.0)),

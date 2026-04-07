@@ -14,13 +14,13 @@ def chunked(values: Iterable[str], size: int) -> List[List[str]]:
 
 
 def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
-    pdl_settings = brief.provider_settings.get("pdl", {})
-    chunk_size = int(pdl_settings.get("company_chunk_size", 5))
-    slice_limit = int(pdl_settings.get("results_per_slice", 40))
-    include_strict_slice = bool(pdl_settings.get("include_strict_slice", True))
-    include_broad_slice = bool(pdl_settings.get("include_broad_slice", True))
-    include_history_slices = bool(pdl_settings.get("include_history_slices", False))
-    include_discovery_slices = bool(pdl_settings.get("include_discovery_slices", True))
+    retrieval_settings = brief.provider_settings.get("retrieval", {})
+    chunk_size = int(retrieval_settings.get("company_chunk_size", 5))
+    slice_limit = int(retrieval_settings.get("results_per_slice", 40))
+    include_strict_slice = bool(retrieval_settings.get("include_strict_slice", True))
+    include_broad_slice = bool(retrieval_settings.get("include_broad_slice", True))
+    include_history_slices = bool(retrieval_settings.get("include_history_slices", False))
+    include_discovery_slices = bool(retrieval_settings.get("include_discovery_slices", True))
     precision_keywords = unique_preserving_order(
         brief.industry_keywords
         + brief.required_keywords
@@ -28,10 +28,10 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
         + brief.commercial_keywords
         + brief.preferred_keywords
     )[:8]
-    discovery_keyword_chunk_size = int(pdl_settings.get("discovery_keyword_chunk_size", 6))
-    market_keyword_chunk_size = int(pdl_settings.get("market_keyword_chunk_size", 5))
+    discovery_keyword_chunk_size = int(retrieval_settings.get("discovery_keyword_chunk_size", 6))
+    market_keyword_chunk_size = int(retrieval_settings.get("market_keyword_chunk_size", 5))
     history_query_terms = unique_preserving_order(
-        pdl_settings.get(
+        retrieval_settings.get(
             "history_query_terms",
             ["formerly", "previously", "before joining", "prior to joining", "ex"],
         )

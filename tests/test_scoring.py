@@ -247,75 +247,41 @@ def test_score_candidate_demotes_low_seniority_specialist_role() -> None:
     assert scored.verification_status != "verified"
 
 
-def test_score_candidate_boosts_explicit_company_interest_signal() -> None:
+def test_score_candidate_can_require_not_currently_employed() -> None:
     brief = build_search_brief(
         {
-            "id": "score-company-interest-test",
+            "id": "score-employment-status-test",
             "role_title": "Senior Data Analyst",
             "titles": ["Senior Data Analyst", "Data Analyst"],
-            "geography": {
-                "location_name": "Dubai",
-                "country": "United Arab Emirates",
-            },
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+            "employment_status_mode": "not_currently_employed",
             "required_keywords": ["sql", "python"],
-            "hiring_company_name": "OpenAI",
-            "hiring_company_aliases": ["Open AI"],
-            "anchors": {
-                "title": "critical",
-                "skills": "critical",
-                "company_interest": "important",
-            },
         }
     )
 
-    candidate = CandidateProfile(
-        full_name="Interested Candidate",
+    employed_candidate = CandidateProfile(
+        full_name="Currently Employed Analyst",
         current_title="Senior Data Analyst",
-        current_company="Analytics Co",
+        current_company="noon",
         location_name="Dubai, United Arab Emirates",
-        summary="Senior data analyst interested in joining OpenAI and building analytics products.",
+        summary="SQL and Python analytics lead.",
     )
-
-    scored = score_candidate(candidate, brief)
-
-    assert scored.company_interest_score >= 0.95
-    assert scored.feature_scores["company_interest"] >= 0.95
-    assert "ranker_bonus: explicit_company_interest" in scored.verification_notes
-
-
-def test_score_candidate_caps_when_company_interest_is_required_but_missing() -> None:
-    brief = build_search_brief(
-        {
-            "id": "score-company-interest-required-test",
-            "role_title": "Senior Data Analyst",
-            "titles": ["Senior Data Analyst"],
-            "geography": {
-                "location_name": "Dubai",
-                "country": "United Arab Emirates",
-            },
-            "hiring_company_name": "OpenAI",
-            "candidate_interest_required": True,
-            "anchors": {
-                "title": "critical",
-                "company_interest": "critical",
-            },
-        }
-    )
-
-    candidate = CandidateProfile(
-        full_name="No Interest Signal",
+    not_currently_employed_candidate = CandidateProfile(
+        full_name="Available Analyst",
         current_title="Senior Data Analyst",
-        current_company="Analytics Co",
+        current_company="",
         location_name="Dubai, United Arab Emirates",
-        summary="Senior data analyst focused on dashboarding and experimentation.",
+        summary="Open to work senior data analyst with strong SQL and Python background.",
     )
 
-    scored = score_candidate(candidate, brief)
+    employed_scored = score_candidate(employed_candidate, brief)
+    available_scored = score_candidate(not_currently_employed_candidate, brief)
 
-    assert scored.company_interest_score == 0.0
-    assert "company_interest_required" in scored.cap_reasons
-    assert scored.score <= 69.0
-    assert scored.verification_status != "verified"
+    assert employed_scored.feature_scores["employment_status"] == 0.0
+    assert "employment_status_required" in employed_scored.cap_reasons
+    assert employed_scored.verification_status == "reject"
+    assert available_scored.feature_scores["employment_status"] > 0.8
+    assert available_scored.score > employed_scored.score
 
 
 def test_score_candidate_caps_off_function_current_role_even_with_relevant_history() -> None:

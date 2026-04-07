@@ -9,17 +9,16 @@ from hr_hunter.identity import candidate_identity_keys, candidate_primary_key
 from hr_hunter.models import CandidateProfile, ProviderRunResult, SearchBrief, SearchRunReport
 from hr_hunter.output import build_reporting_summary
 from hr_hunter.providers.mock import MockProvider
-from hr_hunter.providers.pdl import PDLProvider
 from hr_hunter.providers.scrapingbee import ScrapingBeeGoogleProvider
 from hr_hunter.query_planner import build_search_slices
 from hr_hunter.ranker import RANKING_MODEL_VERSION, apply_learned_ranker, parse_learned_ranker_settings
 from hr_hunter.reranker import DEFAULT_RERANKER_MODEL, parse_reranker_settings, rerank_candidates
 from hr_hunter.scoring import score_candidate, sort_candidates
+from hr_hunter.state import attach_registry_metadata, search_registry_memory
 
 
 PROVIDER_REGISTRY = {
     "mock": MockProvider,
-    "pdl": PDLProvider,
     "scrapingbee_google": ScrapingBeeGoogleProvider,
 }
 
@@ -66,6 +65,26 @@ class SearchEngine:
         exclude_candidate_keys = exclude_candidate_keys or set()
         exclude_provider_queries = exclude_provider_queries or {}
         excluded_seen_count = 0
+        memory_settings = brief.provider_settings.get("registry_memory", {})
+        if not dry_run and bool(memory_settings.get("enabled", False)):
+            memory_candidates = search_registry_memory(
+                brief,
+                limit=int(memory_settings.get("limit", limit) or limit),
+            )
+            if memory_candidates:
+                provider_results.append(
+                    ProviderRunResult(
+                        provider_name="registry_memory",
+                        executed=True,
+                        dry_run=False,
+                        request_count=0,
+                        candidate_count=len(memory_candidates),
+                        candidates=list(memory_candidates),
+                        diagnostics={"message": "Loaded candidates from cross-search registry memory."},
+                    )
+                )
+                candidate_pool.extend(memory_candidates)
+                candidate_pool = sort_candidates([score_candidate(candidate, brief) for candidate in dedupe_candidates(candidate_pool)])
 
         for provider_name in provider_names:
             provider_class = PROVIDER_REGISTRY.get(provider_name)
@@ -114,7 +133,7 @@ class SearchEngine:
                 if len(accepted) >= limit:
                     break
 
-        final_candidates = candidate_pool[:limit]
+        final_candidates = attach_registry_metadata(candidate_pool[:limit])
         summary = self._build_summary(
             brief,
             provider_results,
@@ -154,8 +173,6 @@ class SearchEngine:
             "excluded_seen_count": excluded_seen_count,
             "anchor_weights": brief.anchor_weights,
             "company_match_mode": brief.company_match_mode,
-            "hiring_company_name": brief.hiring_company_name,
-            "candidate_interest_required": brief.candidate_interest_required,
             "location_targets": brief.location_targets,
             "years_mode": brief.years_mode,
             "years_target": brief.years_target,

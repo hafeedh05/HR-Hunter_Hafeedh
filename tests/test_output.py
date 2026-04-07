@@ -188,7 +188,7 @@ def test_score_candidate_treats_country_only_ireland_as_imprecise_location() -> 
     assert scored.verification_status != "verified"
 
 
-def test_candidate_row_includes_structured_feature_and_anchor_scores() -> None:
+def test_candidate_row_uses_recruiter_friendly_export_fields() -> None:
     brief = build_search_brief(
         {
             "id": "score-row-shape-test",
@@ -219,14 +219,29 @@ def test_candidate_row_includes_structured_feature_and_anchor_scores() -> None:
     )
 
     row = candidate_to_row(scored)
-    feature_scores = json.loads(row["feature_scores"])
-    anchor_scores = json.loads(row["anchor_scores"])
+    assert row["company_match_context"] == "Current target company"
+    assert row["employment_signal"] == "Current company listed"
+    assert row["matched_titles"]
+    assert "Current title aligned" in row["key_signals"]
+    assert "feature_scores" not in row
 
-    assert "title_similarity" in feature_scores
-    assert "company_match" in feature_scores
-    assert "location_match" in feature_scores
-    assert "title_similarity" in anchor_scores
-    assert row["ranking_model_version"] == "heuristic-anchor-ranker-v1"
+
+def test_candidate_row_repairs_common_mojibake_for_csv_exports() -> None:
+    row = candidate_to_row(
+        CandidateProfile(
+            full_name="CondÃ© Candidate",
+            current_title="Power BI â€¢ Tableau â€¢ Python â€¢",
+            current_company="CondÃ© Nast",
+            location_name="Dubai",
+            verification_status="review",
+            qualification_tier="search_qualified",
+            score=54.0,
+        )
+    )
+
+    assert row["full_name"] == "Condé Candidate"
+    assert row["current_title"] == "Power BI | Tableau | Python"
+    assert row["current_company"] == "Condé Nast"
 
 
 def test_write_report_can_limit_csv_rows_without_truncating_json(tmp_path: Path) -> None:

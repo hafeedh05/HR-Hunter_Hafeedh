@@ -113,23 +113,19 @@ SEMANTIC_STOPWORDS = {
     "with",
 }
 YEAR_PATTERN = re.compile(r"(19|20)\d{2}")
-INTEREST_SIGNAL_PREFIXES = (
-    "interested in",
-    "interested to join",
-    "interested in joining",
-    "keen to join",
-    "looking to join",
-    "open to joining",
-    "wants to join",
-    "would love to join",
-    "would like to join",
-    "follow",
-    "follows",
-    "following",
-    "fan of",
-    "admire",
-    "admires",
-)
+OPEN_TO_WORK_PHRASES = [
+    "open to work",
+    "open for work",
+    "actively looking",
+    "actively seeking",
+    "available immediately",
+    "available for work",
+    "currently seeking",
+    "looking for opportunities",
+    "seeking opportunities",
+    "seeking new opportunities",
+    "between roles",
+]
 
 
 @dataclass
@@ -151,7 +147,8 @@ class FeatureBuildResult:
     low_seniority_hits: int = 0
     years_experience: Optional[float] = None
     years_experience_gap: Optional[float] = None
-    company_interest_signal: bool = False
+    employment_status_match: bool = True
+    employment_state: str = "unknown"
 
 
 def parse_year(value: object) -> Optional[int]:
@@ -225,27 +222,92 @@ def _flatten_text_values(value: object) -> List[str]:
     return parts
 
 
-def company_interest_text(candidate: CandidateProfile, text_parts: List[str]) -> str:
-    raw_parts = _flatten_text_values(candidate.raw)
-    evidence_parts: List[str] = []
-    for record in candidate.evidence_records:
-        evidence_parts.extend(
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "present", "current"}
+
+
+def candidate_text_parts(candidate: CandidateProfile) -> List[str]:
+    parts = experience_text_parts(candidate)
+    for evidence in candidate.evidence_records:
+        parts.extend(
             [
-                record.title,
-                record.snippet,
-                record.source_url,
-                record.source_domain,
-                record.location_match_text,
-                record.company_match,
-                *record.title_matches,
+                evidence.title,
+                evidence.snippet,
+                evidence.source_domain,
+                evidence.location_match_text,
             ]
         )
-    combined = [
-        *text_parts,
-        *raw_parts,
-        *evidence_parts,
-    ]
-    return normalize_text(" ".join(part for part in combined if part))
+        parts.extend(_flatten_text_values(evidence.raw))
+    parts.extend(_flatten_text_values(candidate.raw))
+    return [part for part in parts if str(part).strip()]
+
+
+def has_current_employment(candidate: CandidateProfile) -> bool:
+    if candidate.current_employment_confirmed:
+        return True
+    if candidate.current_company.strip():
+        return True
+    if any(record.current_employment_signal for record in candidate.evidence_records):
+        return True
+    for item in candidate.experience:
+        if _truthy(item.get("is_current")) or _truthy(item.get("current")):
+            return True
+        end_value = normalize_text(str(item.get("end_date") or item.get("end") or ""))
+        if end_value in {"present", "current", "now", "today"}:
+            return True
+    return False
+
+
+def has_open_to_work_signal(candidate: CandidateProfile, text_parts: List[str]) -> bool:
+    haystack = normalize_text(" ".join(text_parts))
+    return any(normalize_text(phrase) in haystack for phrase in OPEN_TO_WORK_PHRASES)
+
+
+def evaluate_employment_status(
+    candidate: CandidateProfile,
+    brief: SearchBrief,
+    text_parts: List[str],
+) -> tuple[float, bool, str, List[str]]:
+    notes: List[str] = []
+    mode = brief.employment_status_mode
+    current_employment = has_current_employment(candidate)
+    open_to_work = has_open_to_work_signal(candidate, text_parts)
+
+    if current_employment:
+        state = "currently_employed"
+    elif open_to_work:
+        state = "open_to_work_signal"
+    elif candidate.current_company.strip():
+        state = "currently_employed"
+    else:
+        state = "not_currently_employed"
+
+    if mode == "any":
+        return 0.0, True, state, notes
+    if mode == "currently_employed":
+        if current_employment:
+            notes.append("employment_status: currently_employed")
+            return 1.0, True, state, notes
+        notes.append("employment_status: current_employment_missing")
+        return 0.0, False, state, notes
+    if mode == "open_to_work_signal":
+        if open_to_work:
+            notes.append("employment_status: open_to_work_signal")
+            return 1.0, True, state, notes
+        notes.append("employment_status: open_to_work_missing")
+        return 0.0, False, state, notes
+    if not current_employment:
+        if open_to_work:
+            notes.append("employment_status: open_to_work_signal")
+            return 1.0, True, state, notes
+        notes.append("employment_status: inferred_not_currently_employed")
+        return 0.82, True, state, notes
+    notes.append("employment_status: currently_employed")
+    return 0.0, False, state, notes
 
 
 def title_families(value: str) -> set[str]:
@@ -665,36 +727,6 @@ def evaluate_evidence_quality(candidate: CandidateProfile) -> tuple[float, List[
     return score, notes
 
 
-def evaluate_company_interest(
-    candidate: CandidateProfile,
-    brief: SearchBrief,
-    text_parts: List[str],
-) -> tuple[float, bool, List[str]]:
-    notes: List[str] = []
-    aliases = unique_preserving_order([brief.hiring_company_name, *brief.hiring_company_aliases])
-    if not aliases:
-        return 0.0, False, notes
-
-    haystack = company_interest_text(candidate, text_parts)
-    if not haystack:
-        return 0.0, False, notes
-
-    for alias in aliases:
-        normalized_alias = normalize_text(alias)
-        if not normalized_alias:
-            continue
-        for prefix in INTEREST_SIGNAL_PREFIXES:
-            normalized_phrase = normalize_text(f"{prefix} {alias}")
-            if normalized_phrase and normalized_phrase in haystack:
-                notes.append(f"company_interest: explicit_interest ({alias})")
-                return 1.0, True, notes
-        if normalized_alias in haystack:
-            notes.append(f"company_interest: public_company_mention ({alias})")
-            return 0.45, True, notes
-
-    return 0.0, False, notes
-
-
 def build_candidate_features(candidate: CandidateProfile, brief: SearchBrief) -> FeatureBuildResult:
     notes: List[str] = []
     all_targets = unique_preserving_order([*brief.titles, *brief.title_keywords])
@@ -719,18 +751,13 @@ def build_candidate_features(candidate: CandidateProfile, brief: SearchBrief) ->
         match_mode=brief.company_match_mode,
     )
     text_parts = experience_text_parts(candidate)
+    employment_text_parts = candidate_text_parts(candidate)
     location_match_score, location_bucket, location_aligned, location_notes = evaluate_location_match(candidate, brief)
     notes.extend(location_notes)
     skill_overlap_score, skill_notes = evaluate_skill_overlap(candidate, brief, text_parts)
     notes.extend(skill_notes)
     industry_fit_score, industry_aligned, industry_notes = evaluate_industry_fit(candidate, brief, text_parts)
     notes.extend(industry_notes)
-    company_interest_score, company_interest_signal, company_interest_notes = evaluate_company_interest(
-        candidate,
-        brief,
-        text_parts,
-    )
-    notes.extend(company_interest_notes)
     if brief.industry_keywords and not industry_aligned:
         if company_match["current_match"]:
             industry_fit_score = max(industry_fit_score, 0.7)
@@ -746,6 +773,10 @@ def build_candidate_features(candidate: CandidateProfile, brief: SearchBrief) ->
     notes.extend(parser_notes)
     evidence_quality_score, evidence_notes = evaluate_evidence_quality(candidate)
     notes.extend(evidence_notes)
+    employment_status_score, employment_status_match, employment_state, employment_notes = (
+        evaluate_employment_status(candidate, brief, employment_text_parts)
+    )
+    notes.extend(employment_notes)
     semantic_similarity_score = lexical_similarity(brief, candidate, text_parts)
 
     exclude_hits = [
@@ -780,7 +811,6 @@ def build_candidate_features(candidate: CandidateProfile, brief: SearchBrief) ->
         feature_scores={
             "title_similarity": round(title_similarity_score, 3),
             "company_match": round(float(company_match["score"]), 3),
-            "company_interest": round(company_interest_score, 3),
             "location_match": round(location_match_score, 3),
             "skill_overlap": round(skill_overlap_score, 3),
             "industry_fit": round(industry_fit_score, 3),
@@ -788,6 +818,7 @@ def build_candidate_features(candidate: CandidateProfile, brief: SearchBrief) ->
             "current_function_fit": round(current_function_fit, 3),
             "parser_confidence": round(parser_confidence, 3),
             "evidence_quality": round(evidence_quality_score, 3),
+            "employment_status": round(employment_status_score, 3),
             "semantic_similarity": round(semantic_similarity_score, 3),
         },
         notes=unique_preserving_order(notes),
@@ -806,5 +837,6 @@ def build_candidate_features(candidate: CandidateProfile, brief: SearchBrief) ->
         low_seniority_hits=low_seniority_hits,
         years_experience=years_experience,
         years_experience_gap=years_gap,
-        company_interest_signal=company_interest_signal,
+        employment_status_match=employment_status_match,
+        employment_state=employment_state,
     )

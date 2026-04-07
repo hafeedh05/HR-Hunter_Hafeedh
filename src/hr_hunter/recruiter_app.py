@@ -200,6 +200,28 @@ THEME_OPTIONS = [
         "description": "Dark slate workspace with higher contrast for long sessions.",
     },
 ]
+EMPLOYMENT_STATUS_OPTIONS = [
+    {
+        "id": "any",
+        "label": "Any",
+        "description": "Do not filter candidates by current employment status.",
+    },
+    {
+        "id": "currently_employed",
+        "label": "Currently Employed",
+        "description": "Prefer candidates with public signals showing they are in a current role.",
+    },
+    {
+        "id": "not_currently_employed",
+        "label": "Not Currently Employed",
+        "description": "Prefer candidates with no current-company signal in the public profile.",
+    },
+    {
+        "id": "open_to_work_signal",
+        "label": "Open To Work Signal",
+        "description": "Prefer candidates with public open-to-work language or availability signals.",
+    },
+]
 FEEDBACK_ACTIONS = [
     "shortlist",
     "good_fit",
@@ -213,6 +235,7 @@ FEEDBACK_ACTIONS = [
     "hired",
 ]
 KEYWORD_PHRASES = [
+    "agency management",
     "a/b testing",
     "ab testing",
     "advanced excel",
@@ -223,9 +246,12 @@ KEYWORD_PHRASES = [
     "aws",
     "azure",
     "bigquery",
+    "brand strategy",
     "business intelligence",
+    "campaign management",
     "change management",
     "commercial analytics",
+    "consumer insights",
     "customer analytics",
     "dashboarding",
     "data analysis",
@@ -238,14 +264,19 @@ KEYWORD_PHRASES = [
     "experimentation",
     "forecasting",
     "ga4",
+    "go-to-market",
     "google analytics",
+    "innovation",
     "kpis",
     "leadership",
     "looker",
     "machine learning",
+    "market share",
     "mentoring",
+    "p&l",
     "power bi",
     "predictive modeling",
+    "pricing",
     "presentation skills",
     "pricing analytics",
     "product analytics",
@@ -268,6 +299,34 @@ KEYWORD_PHRASES = [
     "time series",
     "user research",
 ]
+
+
+def compute_internal_fetch_limit(requested_limit: int) -> int:
+    requested = max(1, int(requested_limit or 1))
+    if requested <= 25:
+        return requested
+
+    if requested <= 50:
+        scaled = requested * 3
+        buffered = requested + 90
+        return min(max(requested, scaled, buffered), 240)
+
+    scaled = requested * 4
+    buffered = requested + max(180, requested)
+    return min(max(requested, scaled, buffered), 1200)
+
+
+def compute_top_up_fetch_limit(requested_limit: int, current_fetch_limit: int) -> int:
+    requested = max(1, int(requested_limit or 1))
+    current = max(requested, int(current_fetch_limit or requested))
+    baseline = compute_internal_fetch_limit(requested)
+    stepped = max(
+        current + max(50, requested // 2),
+        int(round(current * 1.5)),
+        baseline,
+    )
+    ceiling = min(max(baseline, requested * 8), 2400)
+    return min(max(current, stepped), ceiling)
 INDUSTRY_PHRASES = [
     "adtech",
     "consumer",
@@ -348,6 +407,104 @@ def _sentence_candidates(text: str) -> List[str]:
     )
 
 
+def _normalize_jd_point(text: str) -> str:
+    cleaned = re.sub(r"[\u2022•]+", "; ", str(text or ""))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -;:,")
+    if not cleaned:
+        return ""
+    cleaned = re.sub(
+        r"^(the role requires|role requires|responsibilities include|responsible for|you should bring|you will|"
+        r"candidates should|candidate should|ideal candidates have|ideal candidate has|must have|required|"
+        r"preferred|bonus points for|experience with|experience in|strong)\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = cleaned.strip(" -;:,")
+    if not cleaned:
+        return ""
+    if len(cleaned) > 180:
+        cleaned = _truncate(cleaned, limit=180)
+    return cleaned[0].upper() + cleaned[1:]
+
+
+def _jd_point_fragments(text: str) -> List[str]:
+    fragments: List[str] = []
+    for chunk in re.split(r"(?<=[\.\!\?;])\s+", str(text or "")):
+        cleaned = chunk.strip()
+        if not cleaned:
+            continue
+        if len(cleaned) > 170 and ", and " in cleaned:
+            fragments.extend(part.strip() for part in cleaned.split(", and ") if part.strip())
+            continue
+        fragments.append(cleaned)
+    return fragments
+
+
+def _extract_key_experience_points(text: str, role_title: str = "") -> List[str]:
+    role_tokens = [
+        token
+        for token in re.split(r"[^a-z0-9]+", normalize_text(role_title))
+        if len(token) >= 4
+    ]
+    scored_points: List[tuple[int, int, str]] = []
+    for index, sentence in enumerate(_sentence_candidates(text)):
+        for fragment in _jd_point_fragments(sentence):
+            cleaned = _normalize_jd_point(fragment)
+            if len(cleaned) < 20:
+                continue
+            score = 0
+            if JD_SIGNAL_PATTERN.search(fragment):
+                score += 3
+            if any(token in normalize_text(fragment) for token in role_tokens):
+                score += 2
+            score += min(3, len(_match_phrases(fragment, KEYWORD_PHRASES)))
+            if _match_phrases(fragment, INDUSTRY_PHRASES):
+                score += 1
+            if YEARS_RANGE_PATTERN.search(fragment) or YEARS_PLUS_PATTERN.search(fragment):
+                score += 2
+            if score <= 0:
+                continue
+            scored_points.append((score, index, cleaned))
+
+    if not scored_points:
+        return []
+
+    ordered = [item[2] for item in sorted(scored_points, key=lambda item: (-item[0], item[1]))]
+    return unique_preserving_order(ordered)[:6]
+
+
+def _build_jd_summary(
+    *,
+    role_title: str,
+    years: Dict[str, Any],
+    required_keywords: List[str],
+    preferred_keywords: List[str],
+    industry_keywords: List[str],
+    key_points: List[str],
+) -> str:
+    parts: List[str] = []
+    if role_title:
+        parts.append(f"Target role: {role_title}.")
+    if years.get("min") is not None or years.get("max") is not None:
+        if years.get("min") is not None and years.get("max") is not None:
+            parts.append(f"Expected experience: {years['min']}-{years['max']} years.")
+        elif years.get("min") is not None:
+            parts.append(f"Expected experience: {years['min']}+ years.")
+        elif years.get("max") is not None:
+            parts.append(f"Expected experience: up to {years['max']} years.")
+    if required_keywords:
+        parts.append(f"Core skills: {', '.join(required_keywords[:5])}.")
+    elif key_points:
+        parts.append(f"Core focus: {key_points[0]}")
+    if preferred_keywords:
+        parts.append(f"Preferred extras: {', '.join(preferred_keywords[:4])}.")
+    if industry_keywords:
+        parts.append(f"Relevant industries: {', '.join(industry_keywords[:3])}.")
+    summary = " ".join(part.strip() for part in parts if part.strip())
+    return _truncate(summary or "Breakdown ready.", limit=320)
+
+
 def _match_phrases(text: str, phrases: Iterable[str]) -> List[str]:
     normalized = normalize_text(text)
     matches = [
@@ -411,14 +568,11 @@ def extract_job_description_breakdown(job_description: str, role_title: str = ""
         }
 
     sentence_candidates = _sentence_candidates(text)
-    key_points = [
-        sentence
-        for sentence in sentence_candidates
-        if JD_SIGNAL_PATTERN.search(sentence)
-    ]
-    if len(key_points) < 6:
-        key_points = unique_preserving_order([*key_points, *sentence_candidates])
-    key_points = key_points[:8]
+    key_points = _extract_key_experience_points(text, role_title=role_title)
+    if not key_points:
+        key_points = unique_preserving_order(
+            [_normalize_jd_point(sentence) for sentence in sentence_candidates if _normalize_jd_point(sentence)]
+        )[:5]
 
     required_lines = [
         sentence
@@ -446,9 +600,15 @@ def extract_job_description_breakdown(job_description: str, role_title: str = ""
     if industry_keywords:
         suggested_anchors["industry"] = "preferred"
 
-    summary_source = " ".join(key_points[:4]) or text
     return {
-        "summary": _truncate(summary_source, limit=420),
+        "summary": _build_jd_summary(
+            role_title=role_title,
+            years=years,
+            required_keywords=required_keywords,
+            preferred_keywords=preferred_keywords,
+            industry_keywords=industry_keywords,
+            key_points=key_points,
+        ),
         "key_experience_points": key_points,
         "required_keywords": required_keywords,
         "preferred_keywords": [value for value in preferred_keywords if value not in required_keywords],
@@ -558,15 +718,37 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     feedback_db = resolve_feedback_db_path(payload.get("feedback_db"))
     model_dir = resolve_ranker_model_dir(payload.get("model_dir"))
     limit = max(1, int(payload.get("limit", 20) or 20))
+    internal_fetch_override = _coerce_int(payload.get("internal_fetch_limit_override"))
+    internal_fetch_limit = max(
+        limit,
+        internal_fetch_override if internal_fetch_override is not None else compute_internal_fetch_limit(limit),
+    )
     csv_export_limit = max(1, int(payload.get("csv_export_limit", limit) or limit))
     reranker_enabled = bool(payload.get("reranker_enabled", True))
     learned_ranker_enabled = bool(payload.get("learned_ranker_enabled", False))
     country_code = _selected_country_code(countries)
     providers_settings = {
+        "retrieval": {
+            "company_chunk_size": int(payload.get("company_chunk_size", 5) or 5),
+            "results_per_slice": max(internal_fetch_limit, int(payload.get("results_per_slice", 40) or 40)),
+            "include_strict_slice": True,
+            "include_broad_slice": True,
+            "include_history_slices": bool(payload.get("include_history_slices", True)),
+            "include_discovery_slices": bool(payload.get("include_discovery_slices", True)),
+            "discovery_keyword_chunk_size": int(payload.get("discovery_keyword_chunk_size", 6) or 6),
+            "market_keyword_chunk_size": int(payload.get("market_keyword_chunk_size", 5) or 5),
+            "history_query_terms": unique_preserving_order(
+                [*breakdown.get("key_experience_points", [])[:3], "formerly", "previously", "before joining", "ex"]
+            ),
+        },
+        "registry_memory": {
+            "enabled": bool(payload.get("registry_memory_enabled", True)),
+            "limit": max(internal_fetch_limit, int(payload.get("registry_memory_limit", 20) or 20)),
+        },
         "reranker": {
             "enabled": reranker_enabled,
             "model_name": str(payload.get("reranker_model_name", "BAAI/bge-reranker-v2-m3")),
-            "top_n": max(limit, int(payload.get("reranker_top_n", 40) or 40)),
+            "top_n": max(internal_fetch_limit, int(payload.get("reranker_top_n", 40) or 40)),
             "weight": float(payload.get("reranker_weight", 0.35) or 0.35),
         },
         "learned_ranker": {
@@ -586,6 +768,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         summary_lines.append(f"- {point}")
 
     company_match_mode = str(payload.get("company_match_mode", "both") or "both")
+    employment_status_mode = str(payload.get("employment_status_mode", "any") or "any")
     brief_config = {
         "id": slugify(f"{role_title or 'search'} {countries[0] if countries else cities[0] if cities else ''}"),
         "role_title": role_title or (titles[0] if titles else "Untitled search"),
@@ -616,6 +799,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "years_target": years_value,
         "years_tolerance": years_tolerance,
         "company_match_mode": company_match_mode,
+        "employment_status_mode": employment_status_mode,
         "jd_breakdown": breakdown,
         "anchors": anchors,
         "result_target_min": max(5, min(limit, 20)),
@@ -628,6 +812,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "brief_config": brief_config,
         "providers": providers,
         "limit": limit,
+        "internal_fetch_limit": internal_fetch_limit,
         "csv_export_limit": csv_export_limit,
         "output_dir": str(output_dir),
         "feedback_db": str(feedback_db),
@@ -641,64 +826,101 @@ def build_app_bootstrap() -> Dict[str, Any]:
     default_model_dir = str(resolve_ranker_model_dir())
     default_output_dir = str(resolve_output_dir())
     return {
+        "auth": {
+            "mode": "totp",
+            "issuer": "HR Hunter",
+            "code_digits": 6,
+            "code_label": "Authenticator Code",
+        },
         "anchors": ANCHOR_OPTIONS,
         "feedback_actions": FEEDBACK_ACTIONS,
-        "providers": ["scrapingbee_google", "mock"],
+        "providers": ["scrapingbee_google"],
         "countries": COUNTRY_OPTIONS,
         "continents": CONTINENT_OPTIONS,
         "themes": THEME_OPTIONS,
+        "employment_status_options": EMPLOYMENT_STATUS_OPTIONS,
         "defaults": {
             "providers": ["scrapingbee_google"],
             "limit": 20,
             "csv_export_limit": 20,
             "radius_miles": 25,
             "company_match_mode": "both",
+            "employment_status_mode": "any",
             "theme": "bright",
+            "registry_memory_enabled": True,
+            "include_history_slices": True,
+            "include_discovery_slices": True,
             "reranker_enabled": True,
             "learned_ranker_enabled": False,
+            "reranker_model_name": "BAAI/bge-reranker-v2-m3",
             "feedback_db": default_feedback_db,
             "model_dir": default_model_dir,
             "output_dir": default_output_dir,
         },
         "presets": {
-            "senior_data_analyst_uae": {
-                "role_title": "Senior Data Analyst",
+            "supply_chain_manager_uae": {
+                "role_title": "Supply Chain Manager",
                 "titles": [
-                    "Senior Data Analyst",
-                    "Data Analyst",
-                    "Analytics Lead",
-                    "Business Intelligence Analyst",
+                    "Supply Chain Manager",
+                    "Supply Chain Planning Manager",
+                    "Planning Manager",
+                    "Demand Planning Manager",
+                    "Inventory Planning Manager",
+                    "Logistics Manager",
                 ],
                 "countries": ["United Arab Emirates"],
                 "continents": ["Middle East"],
-                "cities": ["Dubai", "Abu Dhabi"],
-                "company_targets": ["Careem", "talabat", "noon", "Property Finder", "Emirates"],
-                "company_match_mode": "both",
+                "cities": ["Dubai", "Abu Dhabi", "Sharjah"],
+                "company_targets": [
+                    "Majid Al Futtaim",
+                    "Landmark Group",
+                    "Alshaya Group",
+                    "Chalhoub Group",
+                    "noon",
+                    "DP World",
+                    "Emirates",
+                ],
+                "company_match_mode": "past_only",
+                "employment_status_mode": "not_currently_employed",
                 "years_mode": "plus_minus",
-                "years_value": 6,
+                "years_value": 7,
                 "years_tolerance": 2,
                 "must_have_keywords": [
-                    "SQL",
-                    "Python",
-                    "Power BI",
-                    "Tableau",
+                    "Supply Planning",
+                    "Demand Forecasting",
+                    "Inventory Management",
+                    "Logistics",
+                    "ERP",
+                    "SAP",
                     "Stakeholder management",
-                    "Dashboarding",
+                    "S&OP",
                 ],
                 "nice_to_have_keywords": [
-                    "A/B testing",
-                    "Forecasting",
-                    "dbt",
-                    "Snowflake",
+                    "Procurement",
+                    "Warehouse Operations",
+                    "Last Mile",
+                    "Retail",
+                    "Ecommerce",
                 ],
-                "industry_keywords": ["ecommerce", "marketplace", "consumer"],
+                "industry_keywords": ["retail", "ecommerce", "logistics", "consumer"],
                 "job_description": (
-                    "We are hiring a Senior Data Analyst based in the UAE to partner with product and commercial "
-                    "leaders. You should bring 5-8 years of analytics experience, strong SQL and Python skills, "
-                    "hands-on dashboarding in Power BI or Tableau, and the ability to turn complex data into clear "
-                    "business recommendations. Experience in ecommerce, marketplaces, mobility, or consumer internet "
-                    "is highly preferred. Bonus points for experimentation, forecasting, and working with modern data "
-                    "stacks such as dbt and Snowflake."
+                    "We are hiring a Supply Chain Manager based in the UAE to lead planning, inventory, and logistics "
+                    "operations across a regional distribution network. The role requires strong experience in demand "
+                    "forecasting, inventory optimization, supplier and warehouse coordination, and S&OP execution with "
+                    "cross-functional teams. Ideal candidates have worked in retail, ecommerce, logistics, aviation, or "
+                    "consumer distribution environments and are comfortable using ERP systems such as SAP to improve "
+                    "service levels, reduce stock issues, and support business growth across the Middle East."
+                ),
+                "jd_breakdown": extract_job_description_breakdown(
+                    (
+                        "We are hiring a Supply Chain Manager based in the UAE to lead planning, inventory, and logistics "
+                        "operations across a regional distribution network. The role requires strong experience in demand "
+                        "forecasting, inventory optimization, supplier and warehouse coordination, and S&OP execution with "
+                        "cross-functional teams. Ideal candidates have worked in retail, ecommerce, logistics, aviation, or "
+                        "consumer distribution environments and are comfortable using ERP systems such as SAP to improve "
+                        "service levels, reduce stock issues, and support business growth across the Middle East."
+                    ),
+                    role_title="Supply Chain Manager",
                 ),
                 "anchors": {
                     "title": "critical",
@@ -706,7 +928,7 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "location": "important",
                     "company": "important",
                     "years": "preferred",
-                    "industry": "preferred",
+                    "industry": "important",
                     "function": "important",
                     "semantic": "preferred",
                 },

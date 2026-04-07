@@ -26,10 +26,6 @@ ANCHOR_NAME_ALIASES = {
     "companies": "company_match",
     "target_company": "company_match",
     "target_companies": "company_match",
-    "company_interest": "company_interest",
-    "candidate_interest": "company_interest",
-    "interest": "company_interest",
-    "interest_in_our_company": "company_interest",
     "location": "location_match",
     "geography": "location_match",
     "years": "years_fit",
@@ -46,7 +42,6 @@ ANCHOR_NAME_ALIASES = {
 DEFAULT_ANCHOR_WEIGHTS = {
     "title_similarity": 1.0,
     "company_match": 0.95,
-    "company_interest": 0.0,
     "location_match": 0.9,
     "skill_overlap": 0.85,
     "industry_fit": 0.7,
@@ -176,6 +171,27 @@ def normalize_company_match_mode(value: Any) -> str:
     return aliases.get(lowered, "both")
 
 
+def normalize_employment_status_mode(value: Any) -> str:
+    lowered = normalize_text(str(value or "any")).replace(" ", "_")
+    aliases = {
+        "any": "any",
+        "all": "any",
+        "currently_employed": "currently_employed",
+        "current": "currently_employed",
+        "current_employment": "currently_employed",
+        "employed": "currently_employed",
+        "not_currently_employed": "not_currently_employed",
+        "not_employed": "not_currently_employed",
+        "jobless": "not_currently_employed",
+        "unemployed": "not_currently_employed",
+        "between_roles": "not_currently_employed",
+        "open_to_work_signal": "open_to_work_signal",
+        "open_to_work": "open_to_work_signal",
+        "actively_looking": "open_to_work_signal",
+    }
+    return aliases.get(lowered, "any")
+
+
 def normalize_years_mode(value: Any) -> str:
     lowered = normalize_text(str(value or "range")).replace(" ", "_")
     aliases = {
@@ -203,7 +219,6 @@ def _brief_anchor_defaults(config: Dict[str, Any]) -> Dict[str, float]:
     geography_config = config.get("geography", {})
     has_titles = bool(config.get("titles") or config.get("title_keywords"))
     has_companies = bool(config.get("company_targets"))
-    has_company_interest = bool(config.get("hiring_company_name") or config.get("hiring_company_aliases"))
     has_location = bool(geography_config.get("location_name") or geography_config.get("country"))
     has_years = any(
         config.get(key) is not None for key in ("minimum_years_experience", "maximum_years_experience")
@@ -224,8 +239,6 @@ def _brief_anchor_defaults(config: Dict[str, Any]) -> Dict[str, float]:
         defaults["current_function_fit"] = 0.0
     if not has_companies:
         defaults["company_match"] = 0.0
-    if not has_company_interest:
-        defaults["company_interest"] = 0.0
     if not has_location:
         defaults["location_match"] = 0.0
     if not has_years:
@@ -313,16 +326,6 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
         summary = "\n".join(document_text.splitlines()[:12])
 
     company_aliases = merge_company_aliases(company_targets, config.get("company_aliases", {}))
-    hiring_company_name = str(config.get("hiring_company_name", "")).strip()
-    configured_hiring_aliases = config.get("hiring_company_aliases", [])
-    if not isinstance(configured_hiring_aliases, list):
-        configured_hiring_aliases = []
-    hiring_company_aliases = unique_preserving_order(
-        [
-            *configured_hiring_aliases,
-            *(default_company_aliases(hiring_company_name) if hiring_company_name else []),
-        ]
-    )
 
     return SearchBrief(
         id=config.get("id", "unnamed-brief"),
@@ -352,10 +355,10 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
             config.get("exclude_company_keywords", []) + config.get("exclude_companies", [])
         ),
         location_targets=location_targets,
-        hiring_company_name=hiring_company_name,
-        hiring_company_aliases=hiring_company_aliases,
-        candidate_interest_required=bool(config.get("candidate_interest_required", False)),
         company_match_mode=normalize_company_match_mode(config.get("company_match_mode", "both")),
+        employment_status_mode=normalize_employment_status_mode(
+            config.get("employment_status_mode", "any")
+        ),
         years_mode=normalize_years_mode(config.get("years_mode", "range")),
         years_target=coerce_int(config.get("years_target")),
         years_tolerance=max(0, int(config.get("years_tolerance", 0) or 0)),

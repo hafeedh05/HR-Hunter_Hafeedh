@@ -1,271 +1,267 @@
 # HR Hunter
 
-PDL-first executive search retrieval with a scraper fallback and a hard QC pass.
+HR Hunter is a recruiter-focused search and ranking platform for building project-based candidate pipelines. It combines structured hunt briefs, public-web sourcing, semantic ranking, recruiter feedback, and a full local web app into one workflow.
 
-Internal team handoff: [TEAM_README.md](TEAM_README.md)
+This repository now includes:
 
-This project is built for one thing: finding candidate lists that are fast, explainable, and good enough for retained search workflows instead of dumping a pile of low-signal leads.
+- a FastAPI backend
+- a full recruiter UI
+- TOTP-based sign-in
+- project and run history
+- background search jobs
+- candidate review and feedback capture
+- optional semantic reranking
+- optional learned ranking from recruiter feedback
+- local SQLite support and a Postgres/Cloud SQL-ready database path
 
-## What It Does
+## Product Overview
 
-- Ingests a `.docx` brief plus structured overrides.
-- Compiles the mandate into search slices instead of firing one giant sloppy query.
-- Runs provider adapters in order of trust:
-  - `pdl`
-  - `scrapingbee_google`
-  - `mock`
-- Scores and verifies every profile against title, company, geography, sector, and seniority.
-- Runs a second-pass public-web verifier to corroborate title, company, and location with non-LinkedIn evidence.
-- Exports a ranked JSON report plus CSV.
-- Supports dry runs so query quality can be reviewed before spending credits.
+HR Hunter is built around a project-first workflow:
 
-## Current Status
+1. Sign in with a recruiter account using a 6-digit authenticator code.
+2. Create or open a project for a role or mandate.
+3. Build the hunt brief with titles, years, location, companies, employment status, JD, and anchors.
+4. Run search in the background without freezing the UI.
+5. Review candidates, feedback, and run history inside the same project.
+6. Log recruiter feedback and train a ranking model from it.
 
-Working now:
+The app supports multiple recruiters, admin-only controls, recruiter account provisioning, and project history across runs.
 
-- DOCX ingestion
-- Search-brief loading from YAML
-- PDL query planning and request execution
-- ScrapingBee Google result harvesting
-- Heuristic scoring and verification
-- Public evidence collection and corroboration
-- JSON and CSV exports
-- Dry-run mode with compiled queries
+## Core Features
 
-Assumed, not live-verified in this repo yet:
+- Project-based recruiter workspace
+- TOTP-only login flow
+- Admin-managed recruiter accounts
+- Hunt brief builder for:
+  - target titles
+  - years and tolerance
+  - countries, continents, cities, and radius
+  - target companies and company match mode
+  - employment status mode
+  - must-have and nice-to-have keywords
+  - job description and JD breakdown
+  - ranking anchors
+- Separate tabs for:
+  - Projects
+  - Hunt
+  - Results
+  - Candidates
+  - Feedback
+  - History
+  - Settings
+- Background search jobs with retry and failure handling
+- Candidate registry and cross-search memory
+- Recruiter feedback logging
+- Learned ranking with LightGBM
+- Semantic reranking support
+- CSV and JSON report exports
+- Optional remote sourcing bridge
+- Secret Manager-aware runtime configuration
 
-- `PDL_API_KEY` or `PEOPLEDATALABS_API_KEY`
-- `SCRAPINGBEE_API_KEY`
+## Ranking Model
 
-Blocked right now:
+HR Hunter keeps verification labels honest and score-based.
 
-- No provider credentials were present in the local environment, so live API execution could not be verified in this run.
+Score bands:
+
+- `70.00 - 100.00` = `Verified`
+- `50.00 - 69.99` = `Needs Review`
+- `0.00 - 49.99` = `Rejected`
+
+The stack can combine:
+
+- heuristic scoring
+- semantic reranking
+- learned ranking from recruiter feedback
+
+The semantic reranker is optional and currently uses:
+
+- `BAAI/bge-reranker-v2-m3`
+
+The learned ranker is optional and currently uses:
+
+- `LightGBM LambdaRank`
+
+## Tech Stack
+
+- Python 3.10+
+- FastAPI
+- Uvicorn
+- SQLite for local state and feedback by default
+- Postgres-compatible database layer for Cloud SQL readiness
+- Hugging Face Transformers for semantic reranking
+- LightGBM + scikit-learn for learned ranking
+- Google Cloud Secret Manager support
 
 ## Install
+
+Base install:
 
 ```bash
 uv sync --extra dev
 ```
 
-If you want the optional API surface:
+If you want the local web app and API:
 
 ```bash
 uv sync --extra dev --extra api
 ```
 
-If you want the local GCP deployment MCP:
+If you want semantic reranking:
 
 ```bash
-uv sync --extra mcp
+uv sync --extra reranker
 ```
 
-If you want Google Sheets append support:
+If you want learned ranking:
 
 ```bash
-uv sync --extra sheets
+uv sync --extra ranker
+```
+
+If you want all major runtime features:
+
+```bash
+uv sync --extra dev --extra api --extra reranker --extra ranker
+```
+
+## Run the App
+
+Start the local app:
+
+```bash
+uv run hr-hunter serve --host 127.0.0.1 --port 8765
+```
+
+Then open:
+
+- `http://127.0.0.1:8765`
+
+## CLI Commands
+
+Run a brief:
+
+```bash
+uv run hr-hunter search --brief examples/search_briefs/senior_data_analyst_uae.yaml --providers scrapingbee_google --limit 100
+```
+
+Verify an existing report:
+
+```bash
+uv run hr-hunter verify --brief examples/search_briefs/senior_data_analyst_uae.yaml --report output/search/<run_id>.json --limit 50
+```
+
+Run a search matrix:
+
+```bash
+uv run hr-hunter matrix-search --matrix examples/matrices/sr_product_lead_ai_jan26_ireland_fmcg.yaml --limit 180 --verify-top 80
+```
+
+Log recruiter feedback:
+
+```bash
+uv run hr-hunter feedback-log --report output/search/<run_id>.json --candidate "<candidate name>" --recruiter-id recruiter_1 --action shortlist
+```
+
+Export training rows:
+
+```bash
+uv run hr-hunter feedback-export --output output/feedback/training_rows.json
+```
+
+Train the learned ranker:
+
+```bash
+uv run hr-hunter train-ranker --feedback-db output/feedback/hr_hunter_feedback.db --model-dir output/models/ranker/latest
 ```
 
 ## Environment
 
-Create a local `.env` file from `.env.example`.
+Create a local `.env` file from `.env.example` if you want local secrets and overrides.
 
-```bash
-cp .env.example .env
-```
+Important runtime variables include:
 
-Supported variables:
-
-- `PDL_API_KEY`
-- `PEOPLEDATALABS_API_KEY`
 - `SCRAPINGBEE_API_KEY`
 - `HR_HUNTER_OUTPUT_DIR`
+- `HR_HUNTER_FEEDBACK_DB`
+- `HR_HUNTER_RANKER_MODEL_DIR`
+- `HR_HUNTER_STATE_DB`
+- `HR_HUNTER_DATABASE_URL`
 - `HR_HUNTER_SECRET_ENV_FILES`
+- `HR_HUNTER_USE_SECRET_MANAGER`
+- `HR_HUNTER_GCP_PROJECT`
+- `GOOGLE_CLOUD_PROJECT`
+- `SCRAPINGBEE_API_KEY_SECRET_NAME`
 
-If the key lives in a runtime env file on a VM instead of a local `.env`, set:
+## Secret Manager Support
 
-```bash
-export HR_HUNTER_SECRET_ENV_FILES=/etc/reap/reap.env
-```
+The runtime can load secrets from Google Cloud Secret Manager instead of hardcoding them into the repo or a local `.env`.
 
-The loader parses plain `KEY=value` files directly, so it can read runtime env files that are not shell-safe to `source`.
-
-## Run
-
-Dry run against the supplied brief:
+Example environment setup:
 
 ```bash
-uv run hr-hunter search \
-  --brief examples/search_briefs/sr_product_lead_ai_jan26.yaml \
-  --dry-run
+export HR_HUNTER_USE_SECRET_MANAGER=true
+export GOOGLE_CLOUD_PROJECT=<your-gcp-project>
+export SCRAPINGBEE_API_KEY_SECRET_NAME=hr-hunter-scrapingbee-api-key
 ```
 
-Live run with PDL first and ScrapingBee fallback:
+## Database Support
 
-```bash
-uv run hr-hunter search \
-  --brief examples/search_briefs/sr_product_lead_ai_jan26.yaml \
-  --providers pdl,scrapingbee_google \
-  --limit 150
-```
+Local development uses SQLite by default for:
 
-Live run with automated public-web verification of the top 50 candidates:
+- workspace state
+- project history
+- recruiter accounts
+- feedback storage
 
-```bash
-uv run hr-hunter search \
-  --brief examples/search_briefs/sr_product_lead_ai_jan26.yaml \
-  --providers scrapingbee_google \
-  --limit 150 \
-  --verify-top 50
-```
+The codebase now also supports a shared Postgres-compatible connection path through:
 
-Multi-strategy public-only run that shares dedupe state across search lanes:
+- `HR_HUNTER_DATABASE_URL`
 
-```bash
-uv run hr-hunter matrix-search \
-  --matrix examples/matrices/sr_product_lead_ai_jan26_ireland_fmcg.yaml \
-  --limit 180 \
-  --verify-top 80 \
-  --exclude-history-dir output/search
-```
+That makes the app ready for Cloud SQL-style deployments without forcing local development off SQLite.
 
-Run the same matrix and append only net-new candidates into a Google Sheet:
+## Remote Sourcing Support
 
-```bash
-uv run hr-hunter matrix-search \
-  --matrix examples/matrices/sr_product_lead_ai_jan26_ireland_fmcg.yaml \
-  --limit 180 \
-  --verify-top 80 \
-  --exclude-history-dir output/search \
-  --spreadsheet-id <GOOGLE_SHEET_ID> \
-  --worksheet Candidates \
-  --sheet-history-dir output/search \
-  --append-csv output/remote-sync/latest-append.csv
-```
+HR Hunter can also call a remote sourcing backend server-to-server when configured. The local app can still fall back to local ranking/report handling around that remote response.
 
-Verify an existing report after retrieval:
+Relevant runtime controls live in:
 
-```bash
-uv run hr-hunter verify \
-  --brief examples/search_briefs/sr_product_lead_ai_jan26.yaml \
-  --report output/search/<run_id>.json \
-  --limit 50
-```
+- `src/hr_hunter/remote.py`
+- `src/hr_hunter/api.py`
 
-Append an existing report into a Google Sheet without rerunning search:
+## Outputs
 
-```bash
-uv run hr-hunter sheet-sync \
-  --report output/search/<run_id>.json \
-  --spreadsheet-id <GOOGLE_SHEET_ID> \
-  --worksheet Candidates \
-  --history-dir output/search
-```
+Search runs write recruiter-facing artifacts under the output directory, including:
 
-The command writes:
+- JSON report
+- CSV export
+- feedback DB
+- state DB
+- learned-ranker model files
 
-- `output/search/<run_id>.json`
-- `output/search/<run_id>.csv`
+Typical output folders:
 
-## Search Strategy
+- `output/search`
+- `output/feedback`
+- `output/state`
+- `output/models/ranker`
 
-This is intentionally not a single-query toy.
+## Current Direction
 
-1. Parse the mandate.
-2. Break the target company list into slices.
-3. Run high-precision current-company queries first.
-4. Run broader title-family queries second.
-5. Merge and dedupe.
-6. Verify by title fit, company fit, distance to search center, sector keywords, and years of experience.
-7. Optionally run a public-evidence pass that searches non-LinkedIn web sources for corroboration.
-8. Label each profile:
-   - `verified`
-   - `review`
-   - `reject`
+This repository has moved well beyond the earlier retrieval-only workflow. It now behaves as a recruiter product with:
 
-Score bands are fixed:
+- project memory
+- candidate memory
+- admin-managed access
+- background jobs
+- recruiter review loops
+- learned ranking
 
-- `70.00-100.00` = `verified`
-- `50.00-69.99` = `review`
-- `0.00-49.99` = `reject`
-
-The matrix workflow adds a second reporting layer alongside those strict labels:
-
-- `strict_verified`
-- `search_qualified`
-- `weak`
-
-## Why This Shape
-
-PDL is the best structured retrieval layer in the stack you described, but it still needs discipline:
-
-- default rate limit is 10 requests per minute according to the official Person Search API reference
-- billing is per record returned
-- Preview Search exists, so you can inspect coverage before pulling full result sets
-
-ScrapingBee is useful as a fallback for public-web recovery because its Google API supports fast "light requests" that are cheaper and faster, but it is still web search, not a first-class people graph. It should fill gaps, not pretend to replace PDL.
-
-## Example Brief
-
-The included sample brief is based on:
-
-- role: Global Product Manager, Adult Incontinence
-- location: Ireland, within 60 miles of Drogheda
-- source companies: P&G, Unilever, J&J, Colgate-Palmolive, Beiersdorf, DCC, McBride, Trona, Kinvara, Voya, The Handmade Soap Company, Pestle & Mortar, Bellamianta, Human+Kind
-- target titles:
-  - Global Product Manager
-  - Senior Product Manager
-  - Product Marketing Director
-  - Head of Product Marketing
-  - Global Product Director
-  - Product Portfolio Manager
-  - Senior Product Marketing Manager
-  - Category Manager
+It is designed to keep getting better as recruiter feedback accumulates.
 
 ## Notes
 
-- This version is retrieval-first. It does not waste money on LLM adjudication in the hot path.
-- The second-pass verifier is code-first. If you add an LLM later, use it after evidence collection, not instead of evidence collection.
-- If you want a service wrapper, the engine is already structured for it. The CLI is just the fastest operational surface.
-
-## GCP MCP
-
-This repo includes a local MCP server for Google Cloud that uses your local `gcloud` auth to inspect Compute Engine VMs, SSH into them, copy files, and install local workspaces onto existing VMs.
-
-Files:
-
-- `src/hr_hunter/gcp_mcp.py`
-- `scripts/install_codex_global_mcp.sh`
-- `scripts/install_on_gcp_vm.sh`
-- `docs/gcp-mcp.md`
-
-Quick start:
-
-```bash
-gcloud auth login
-gcloud auth application-default login
-gcloud config set project <PROJECT_ID>
-python3 -m venv .mcp-venv
-.mcp-venv/bin/python -m pip install --upgrade pip setuptools wheel
-.mcp-venv/bin/python -m pip install -e ".[mcp]"
-.mcp-venv/bin/python -m hr_hunter.gcp_mcp
-```
-
-For a global Codex install that works across repos:
-
-```bash
-./scripts/install_codex_global_mcp.sh
-```
-
-Then add this to `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.hrHunterGcp]
-command = "/Users/ahmad/.codex/mcp/hr-hunter-gcp/.venv/bin/python"
-args = ["-m", "hr_hunter.gcp_mcp"]
-```
-
-For client installation with the official Python MCP SDK when `uv` is available:
-
-```bash
-uv run mcp install src/hr_hunter/gcp_mcp.py --with-editable .
-```
+- The UI and backend evolve together in this repo.
+- Verification labels are not faked to satisfy quotas.
+- Recruiter feedback improves ranking quality over time, especially once the learned ranker is trained.
+- Requested candidate counts are best-effort and depend on source coverage, dedupe, and quality filtering.

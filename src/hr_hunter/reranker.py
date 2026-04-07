@@ -69,8 +69,6 @@ def build_brief_text(brief: SearchBrief) -> str:
         "Titles: " + ", ".join(brief.titles) if brief.titles else "",
         "Target companies: " + ", ".join(brief.company_targets) if brief.company_targets else "",
         f"Company match mode: {brief.company_match_mode}" if brief.company_targets else "",
-        "Hiring company: " + brief.hiring_company_name if brief.hiring_company_name else "",
-        "Candidate interest required" if brief.candidate_interest_required else "",
         "Required skills: " + ", ".join(brief.required_keywords) if brief.required_keywords else "",
         "Preferred skills: " + ", ".join(brief.preferred_keywords) if brief.preferred_keywords else "",
         "Industry: " + ", ".join(brief.industry_keywords) if brief.industry_keywords else "",

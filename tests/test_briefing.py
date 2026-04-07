@@ -118,7 +118,7 @@ def test_build_search_brief_resolves_anchor_priorities_and_numeric_weights() -> 
     assert brief.anchor_weights["skill_overlap"] == 0.9
 
 
-def test_build_search_brief_includes_hiring_company_interest_fields() -> None:
+def test_build_search_brief_ignores_legacy_company_interest_fields() -> None:
     brief = build_search_brief(
         {
             "id": "test-brief-company-interest",
@@ -134,7 +134,5 @@ def test_build_search_brief_includes_hiring_company_interest_fields() -> None:
         }
     )
 
-    assert brief.hiring_company_name == "OpenAI"
-    assert "Open AI" in brief.hiring_company_aliases
-    assert brief.candidate_interest_required is True
-    assert brief.anchor_weights["company_interest"] == 0.75
+    assert brief.role_title == "Senior Data Analyst"
+    assert "company_interest" not in brief.anchor_weights

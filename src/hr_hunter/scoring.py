@@ -27,7 +27,6 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
     candidate.anchor_scores = dict(rank_result.anchor_scores)
     candidate.title_similarity_score = features.feature_scores.get("title_similarity", 0.0)
     candidate.company_match_score = features.feature_scores.get("company_match", 0.0)
-    candidate.company_interest_score = features.feature_scores.get("company_interest", 0.0)
     candidate.location_match_score = features.feature_scores.get("location_match", 0.0)
     candidate.skill_overlap_score = features.feature_scores.get("skill_overlap", 0.0)
     candidate.industry_fit_score = features.feature_scores.get("industry_fit", 0.0)

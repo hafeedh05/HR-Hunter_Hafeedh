@@ -41,10 +41,8 @@ class SearchBrief:
     exclude_title_keywords: List[str] = field(default_factory=list)
     exclude_company_keywords: List[str] = field(default_factory=list)
     location_targets: List[str] = field(default_factory=list)
-    hiring_company_name: str = ""
-    hiring_company_aliases: List[str] = field(default_factory=list)
-    candidate_interest_required: bool = False
     company_match_mode: str = "both"
+    employment_status_mode: str = "any"
     years_mode: str = "range"
     years_target: Optional[int] = None
     years_tolerance: int = 0
@@ -127,7 +125,6 @@ class CandidateProfile:
     current_fmcg_fit: float = 0.0
     parser_confidence: float = 0.0
     evidence_quality_score: float = 0.0
-    company_interest_score: float = 0.0
     title_similarity_score: float = 0.0
     company_match_score: float = 0.0
     location_match_score: float = 0.0

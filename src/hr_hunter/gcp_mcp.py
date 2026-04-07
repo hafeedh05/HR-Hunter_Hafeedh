@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import tempfile
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,9 @@ except ImportError as exc:  # pragma: no cover - optional dependency
 
 SERVER_ROOT = Path(__file__).resolve().parents[2]
 REMOTE_INSTALL_SCRIPT = SERVER_ROOT / "scripts" / "install_on_gcp_vm.sh"
+AUTH_SESSION_ROOT = Path(tempfile.gettempdir()) / "hr-hunter-gcp-auth"
+AUTH_SESSION_ROOT.mkdir(parents=True, exist_ok=True)
+AUTH_SESSIONS: dict[str, dict[str, Any]] = {}
 
 mcp = FastMCP(
     "HR Hunter GCP",
@@ -36,9 +41,24 @@ def _gcloud_binary() -> str:
     if binary:
         return binary
 
-    for candidate in ("/opt/homebrew/bin/gcloud", "/usr/local/bin/gcloud", "/usr/bin/gcloud"):
+    windows_local_app_data = os.environ.get("LOCALAPPDATA", "")
+    windows_candidates = []
+    if windows_local_app_data:
+        windows_candidates.extend(
+            [
+                Path(windows_local_app_data) / "Google" / "Cloud SDK" / "google-cloud-sdk" / "bin" / "gcloud.cmd",
+                Path(windows_local_app_data) / "Google" / "Cloud SDK" / "google-cloud-sdk" / "bin" / "gcloud.exe",
+            ]
+        )
+
+    for candidate in [
+        *windows_candidates,
+        Path("/opt/homebrew/bin/gcloud"),
+        Path("/usr/local/bin/gcloud"),
+        Path("/usr/bin/gcloud"),
+    ]:
         if Path(candidate).exists():
-            return candidate
+            return str(candidate)
 
     raise RuntimeError("gcloud is not installed or not on PATH.")
 
@@ -74,6 +94,40 @@ def _run(
         payload["stdout"] = completed.stdout.decode("utf-8", errors="replace")
         payload["stderr"] = completed.stderr.decode("utf-8", errors="replace")
     return payload
+
+
+def _auth_reader(session_id: str) -> None:
+    session = AUTH_SESSIONS.get(session_id)
+    if not session:
+        return
+    process: subprocess.Popen[str] = session["process"]
+    output_parts: list[str] = session["output_parts"]
+    try:
+        if process.stdout is None:
+            return
+        for line in process.stdout:
+            output_parts.append(line)
+            session["updated_at"] = time.time()
+    finally:
+        session["completed"] = process.poll() is not None
+        session["updated_at"] = time.time()
+
+
+def _auth_snapshot(session_id: str) -> dict[str, Any]:
+    session = AUTH_SESSIONS.get(session_id)
+    if not session:
+        raise ValueError(f"Unknown auth session: {session_id}")
+    process: subprocess.Popen[str] = session["process"]
+    running = process.poll() is None
+    return {
+        "session_id": session_id,
+        "mode": session["mode"],
+        "running": running,
+        "returncode": process.poll(),
+        "output": "".join(session["output_parts"]),
+        "created_at": session["created_at"],
+        "updated_at": session["updated_at"],
+    }
 
 
 def _slugify(value: str) -> str:
@@ -231,6 +285,85 @@ def gcloud_auth_status() -> dict[str, Any]:
         "adc_configured": adc_result["ok"],
         "adc_error": None if adc_result["ok"] else adc_result.get("stderr", "").strip(),
     }
+
+
+@mcp.tool()
+def gcloud_start_login(mode: str = "user") -> dict[str, Any]:
+    """Start a browserless gcloud auth flow and return the current prompt/output."""
+    normalized_mode = str(mode or "user").strip().lower()
+    if normalized_mode not in {"user", "adc"}:
+        raise ValueError("mode must be either `user` or `adc`.")
+    gcloud = _gcloud_binary()
+    args = [gcloud, "auth"]
+    if normalized_mode == "adc":
+        args.extend(["application-default", "login", "--no-launch-browser"])
+    else:
+        args.extend(["login", "--no-launch-browser"])
+    process = subprocess.Popen(
+        args,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    session_id = f"auth-{normalized_mode}-{int(time.time())}"
+    AUTH_SESSIONS[session_id] = {
+        "process": process,
+        "mode": normalized_mode,
+        "output_parts": [],
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "completed": False,
+    }
+    reader = threading.Thread(target=_auth_reader, args=(session_id,), daemon=True)
+    AUTH_SESSIONS[session_id]["reader"] = reader
+    reader.start()
+    time.sleep(2)
+    return _auth_snapshot(session_id)
+
+
+@mcp.tool()
+def gcloud_read_login(session_id: str) -> dict[str, Any]:
+    """Read the current output from an in-progress browserless gcloud auth flow."""
+    return _auth_snapshot(session_id)
+
+
+@mcp.tool()
+def gcloud_submit_verification_code(session_id: str, verification_code: str) -> dict[str, Any]:
+    """Submit a verification code to an in-progress browserless gcloud auth flow."""
+    session = AUTH_SESSIONS.get(session_id)
+    if not session:
+        raise ValueError(f"Unknown auth session: {session_id}")
+    process: subprocess.Popen[str] = session["process"]
+    if process.poll() is not None:
+        return _auth_snapshot(session_id)
+    if process.stdin is None:
+        raise RuntimeError("Auth session stdin is not available.")
+    process.stdin.write(str(verification_code or "").strip() + "\n")
+    process.stdin.flush()
+    try:
+        process.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        pass
+    time.sleep(1)
+    return _auth_snapshot(session_id)
+
+
+@mcp.tool()
+def gcloud_cancel_login(session_id: str) -> dict[str, Any]:
+    """Cancel an in-progress browserless gcloud auth flow."""
+    session = AUTH_SESSIONS.get(session_id)
+    if not session:
+        raise ValueError(f"Unknown auth session: {session_id}")
+    process: subprocess.Popen[str] = session["process"]
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    return _auth_snapshot(session_id)
 
 
 @mcp.tool()

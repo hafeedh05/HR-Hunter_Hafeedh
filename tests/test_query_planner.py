@@ -17,7 +17,7 @@ def test_query_planner_creates_strict_and_broad_slices() -> None:
                 "F",
             ],
             "geography": {"location_name": "Drogheda", "country": "Ireland"},
-            "provider_settings": {"pdl": {"company_chunk_size": 5, "results_per_slice": 40}},
+            "provider_settings": {"retrieval": {"company_chunk_size": 5, "results_per_slice": 40}},
         }
     )
 
@@ -42,7 +42,7 @@ def test_query_planner_adds_precision_keywords_to_broad_slices() -> None:
             "required_keywords": ["product portfolio"],
             "portfolio_keywords": ["category"],
             "commercial_keywords": ["commercial"],
-            "provider_settings": {"pdl": {"include_discovery_slices": False}},
+            "provider_settings": {"retrieval": {"include_discovery_slices": False}},
         }
     )
 
@@ -65,7 +65,7 @@ def test_query_planner_chunks_discovery_keywords() -> None:
             "required_keywords": ["portfolio", "commercial", "consumer goods", "brand", "category"],
             "preferred_keywords": ["innovation", "retail", "FMCG"],
             "provider_settings": {
-                "pdl": {
+                "retrieval": {
                     "company_chunk_size": 5,
                     "results_per_slice": 20,
                     "discovery_keyword_chunk_size": 3,
@@ -122,7 +122,7 @@ def test_query_planner_can_add_history_slices() -> None:
             "company_targets": ["Unilever", "Procter & Gamble"],
             "geography": {"location_name": "Drogheda", "country": "Ireland"},
             "provider_settings": {
-                "pdl": {
+                "retrieval": {
                     "include_strict_slice": False,
                     "include_broad_slice": False,
                     "include_discovery_slices": False,

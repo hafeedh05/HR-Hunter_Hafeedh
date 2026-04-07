@@ -26,6 +26,8 @@ def canonicalize_profile_url(url: str | None) -> str:
     parsed = urlparse(raw)
     if parsed.netloc:
         host = parsed.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
         path = re.sub(r"/+", "/", parsed.path or "").rstrip("/").lower()
         return f"{host}{path}"
 

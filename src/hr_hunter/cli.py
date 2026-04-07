@@ -20,12 +20,13 @@ from hr_hunter.output import (
 )
 from hr_hunter.ranker import train_learned_ranker
 from hr_hunter.sheets import append_report_to_sheet
+from hr_hunter.state import persist_search_run
 from hr_hunter.verifier import PublicEvidenceVerifier, refresh_report_summary
 
 
 def parse_provider_names(raw: str) -> List[str]:
     providers = [value.strip() for value in raw.split(",") if value.strip()]
-    return providers or ["pdl", "scrapingbee_google"]
+    return providers or ["scrapingbee_google"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--brief", required=True, help="Path to YAML brief.")
     search_parser.add_argument(
         "--providers",
-        default="pdl,scrapingbee_google",
+        default="scrapingbee_google",
         help="Comma-separated provider order.",
     )
     search_parser.add_argument("--limit", type=int, default=100, help="Maximum profiles to keep.")
@@ -231,6 +232,14 @@ async def run_search(args: argparse.Namespace) -> int:
 
     output_dir = resolve_output_dir(args.output_dir)
     json_path, csv_path = write_report(report, output_dir)
+    persist_search_run(
+        brief,
+        report,
+        provider_names=parse_provider_names(args.providers),
+        limit_requested=args.limit,
+        json_report_path=json_path,
+        csv_report_path=csv_path,
+    )
 
     result = {
         "run_id": report.run_id,
@@ -259,6 +268,15 @@ async def run_verify(args: argparse.Namespace) -> int:
 
     output_dir = resolve_output_dir(args.output_dir or str(Path(args.report).expanduser().resolve().parent))
     json_path, csv_path = write_report(report, output_dir)
+    persist_search_run(
+        brief,
+        report,
+        provider_names=[result.provider_name for result in report.provider_results],
+        limit_requested=args.limit,
+        json_report_path=json_path,
+        csv_report_path=csv_path,
+        execution_backend="local_verify",
+    )
 
     result = {
         "run_id": report.run_id,
@@ -286,6 +304,16 @@ async def run_matrix_search(args: argparse.Namespace) -> int:
 
     output_dir = resolve_output_dir(args.output_dir)
     json_path, csv_path = write_report(report, output_dir)
+    primary_brief = build_search_brief(load_yaml_file(matrix.primary_brief_path))
+    persist_search_run(
+        primary_brief,
+        report,
+        provider_names=[provider for strategy in matrix.strategies for provider in strategy.providers],
+        limit_requested=args.limit,
+        json_report_path=json_path,
+        csv_report_path=csv_path,
+        execution_backend="matrix_local_engine",
+    )
     sheet_sync = None
     if args.spreadsheet_id:
         history_paths = [

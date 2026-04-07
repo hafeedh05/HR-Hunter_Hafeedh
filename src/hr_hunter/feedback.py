@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from hr_hunter.config import resolve_feedback_db_path
+from hr_hunter.db import connect_database, resolve_database_target
 from hr_hunter.identity import canonicalize_profile_url, candidate_identity_keys, candidate_primary_key, normalize_identity_text
 from hr_hunter.models import CandidateProfile, GeoSpec, SearchBrief, SearchRunReport
 from hr_hunter.output import load_report
 from hr_hunter.ranker import build_learned_feature_map
+from hr_hunter.state import review_candidate
 
 
 FEEDBACK_ACTIONS = {
@@ -99,16 +99,21 @@ def training_pair_to_record(pair: TrainingPair) -> Dict[str, str]:
     }
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(str(db_path))
-    connection.row_factory = sqlite3.Row
-    return connection
+def _resolve_target(db_path: Path | str | None) -> Any:
+    return resolve_database_target(
+        db_path,
+        env_var="HR_HUNTER_FEEDBACK_DB",
+        default_path="output/feedback/hr_hunter_feedback.db",
+    )
 
 
-def init_feedback_db(db_path: Path | None = None) -> Path:
-    resolved = resolve_feedback_db_path(str(db_path) if db_path else None)
-    with _connect(resolved) as connection:
+def _connect(db_path: Path | str | None) -> Any:
+    return connect_database(_resolve_target(db_path))
+
+
+def init_feedback_db(db_path: Path | str | None = None) -> Path | str:
+    target = _resolve_target(db_path)
+    with connect_database(target) as connection:
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS recruiters (
@@ -196,7 +201,7 @@ def init_feedback_db(db_path: Path | None = None) -> Path:
             );
             """
         )
-    return resolved
+    return target.path if target.backend == "sqlite" else target.locator
 
 
 def _brief_to_record(brief: SearchBrief, created_by: str = "") -> Dict[str, Any]:
@@ -240,7 +245,7 @@ def _candidate_feature_payload(candidate: CandidateProfile, brief: SearchBrief) 
     }
 
 
-def _upsert_recruiter(connection: sqlite3.Connection, recruiter_id: str, recruiter_name: str = "", team_id: str = "") -> None:
+def _upsert_recruiter(connection: Any, recruiter_id: str, recruiter_name: str = "", team_id: str = "") -> None:
     connection.execute(
         """
         INSERT INTO recruiters (id, name, team_id, created_at)
@@ -253,7 +258,7 @@ def _upsert_recruiter(connection: sqlite3.Connection, recruiter_id: str, recruit
     )
 
 
-def _upsert_brief(connection: sqlite3.Connection, brief: SearchBrief, created_by: str = "") -> None:
+def _upsert_brief(connection: Any, brief: SearchBrief, created_by: str = "") -> None:
     record = _brief_to_record(brief, created_by=created_by)
     connection.execute(
         """
@@ -288,7 +293,7 @@ def _upsert_brief(connection: sqlite3.Connection, brief: SearchBrief, created_by
     )
 
 
-def _upsert_candidate(connection: sqlite3.Connection, candidate: CandidateProfile) -> str:
+def _upsert_candidate(connection: Any, candidate: CandidateProfile) -> str:
     candidate_id = candidate_primary_key(candidate)
     if not candidate_id:
         raise ValueError("Candidate must have a stable identity key before logging feedback.")
@@ -323,9 +328,10 @@ def _upsert_candidate(connection: sqlite3.Connection, candidate: CandidateProfil
     for record in candidate.evidence_records:
         connection.execute(
             """
-            INSERT OR IGNORE INTO candidate_evidence (
+            INSERT INTO candidate_evidence (
                 candidate_id, source_domain, source_url, snippet, evidence_type, confidence, raw_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(candidate_id, source_url, evidence_type, snippet) DO NOTHING
             """,
             (
                 candidate_id,
@@ -341,7 +347,7 @@ def _upsert_candidate(connection: sqlite3.Connection, candidate: CandidateProfil
 
 
 def _insert_candidate_score(
-    connection: sqlite3.Connection,
+    connection: Any,
     brief: SearchBrief,
     brief_id: str,
     candidate_id: str,
@@ -466,9 +472,10 @@ def refresh_training_pairs(db_path: Path | None = None) -> int:
             record = training_pair_to_record(pair)
             connection.execute(
                 """
-                INSERT OR IGNORE INTO training_pairs (
+                INSERT INTO training_pairs (
                     brief_id, preferred_candidate_id, other_candidate_id, recruiter_id, label, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(brief_id, preferred_candidate_id, other_candidate_id, recruiter_id, label) DO NOTHING
                 """,
                 (
                     record["brief_id"],
@@ -494,6 +501,7 @@ def log_feedback(
     team_id: str = "",
     db_path: Path | None = None,
     brief: SearchBrief | None = None,
+    mandate_id: str = "",
 ) -> Dict[str, Any]:
     resolved = init_feedback_db(db_path)
     report = load_report(report_path)
@@ -577,6 +585,18 @@ def log_feedback(
             ),
         )
     pair_count = refresh_training_pairs(resolved)
+    review_candidate(
+        mandate_id=str(mandate_id or "").strip() or f"mandate:local:{report.brief_id}",
+        run_id=report.run_id,
+        candidate_id=candidate_id,
+        reviewer_id=recruiter_id,
+        reviewer_name=recruiter_name,
+        owner_id=recruiter_id,
+        owner_name=recruiter_name,
+        action=action_name,
+        reason_code=reason_code,
+        note=note,
+    )
     return {
         "db_path": str(resolved),
         "brief_id": report.brief_id,
