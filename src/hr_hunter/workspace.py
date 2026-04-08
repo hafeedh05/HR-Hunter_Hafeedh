@@ -4,7 +4,9 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
+import threading
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -12,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 from urllib.parse import quote
 
+from hr_hunter.config import env_flag
 from hr_hunter.db import DbIntegrityError, connect_database, resolve_database_target
 from hr_hunter.output import load_report
 from hr_hunter.state import _run_summary_from_artifact, init_state_db, list_jobs, stop_job
@@ -30,6 +33,8 @@ PROJECT_STATUS_OPTIONS = [
     {"id": "on_hold", "label": "On Hold"},
     {"id": "closed", "label": "Closed"},
 ]
+_INITIALIZED_WORKSPACE_TARGETS: set[str] = set()
+_WORKSPACE_INIT_LOCK = threading.Lock()
 
 
 def _now() -> str:
@@ -225,10 +230,16 @@ def _ensure_user_totp_secret(
 def init_workspace_db(db_path: Path | str | None = None) -> Path | str:
     target = _resolve_target(db_path)
     resolved = target.path if target.backend == "sqlite" else target.locator
-    init_state_db(resolved)
-    with connect_database(target) as connection:
-        connection.executescript(
-            """
+    cache_key = target.locator
+    if cache_key in _INITIALIZED_WORKSPACE_TARGETS:
+        return resolved
+    with _WORKSPACE_INIT_LOCK:
+        if cache_key in _INITIALIZED_WORKSPACE_TARGETS:
+            return resolved
+        init_state_db(resolved)
+        with connect_database(target) as connection:
+            connection.executescript(
+                """
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
                 email TEXT NOT NULL UNIQUE,
@@ -283,13 +294,14 @@ def init_workspace_db(db_path: Path | str | None = None) -> Path | str:
 
             CREATE INDEX IF NOT EXISTS idx_project_members_user
                 ON project_members(user_id, project_id);
-            """
-        )
-        _ensure_user_columns(connection)
-        user_rows = connection.execute("SELECT id FROM users").fetchall()
-        for row in user_rows:
-            _ensure_user_totp_secret(connection, user_id=row["id"])
-    seed_default_admin_account(resolved)
+                """
+            )
+            _ensure_user_columns(connection)
+            user_rows = connection.execute("SELECT id FROM users").fetchall()
+            for row in user_rows:
+                _ensure_user_totp_secret(connection, user_id=row["id"])
+        seed_default_admin_account(resolved)
+        _INITIALIZED_WORKSPACE_TARGETS.add(cache_key)
     return resolved
 
 
@@ -341,6 +353,26 @@ def _session_expiry() -> str:
     return (datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)).isoformat()
 
 
+def _code_only_login_enabled() -> bool:
+    return env_flag("HR_HUNTER_CODE_ONLY_LOGIN")
+
+
+def _resolve_auth_email(email: str) -> str:
+    normalized_email = str(email or "").strip().lower()
+    if normalized_email:
+        return normalized_email
+    if _code_only_login_enabled():
+        configured = str(os.getenv("HR_HUNTER_LOGIN_EMAIL", "")).strip().lower()
+        return configured or DEFAULT_ADMIN_EMAIL
+    return ""
+
+
+def _invalid_login_message(email: str) -> str:
+    if _code_only_login_enabled() and not str(email or "").strip():
+        return "Invalid authenticator code."
+    return "Invalid email or verification code."
+
+
 def create_session_for_user(user_id: str, *, db_path: Path | None = None) -> Dict[str, Any]:
     resolved = init_workspace_db(db_path)
     session_token = secrets.token_urlsafe(32)
@@ -360,14 +392,18 @@ def create_session_for_user(user_id: str, *, db_path: Path | None = None) -> Dic
 
 def authenticate_user(email: str, otp_code: str, *, db_path: Path | None = None) -> Dict[str, Any]:
     resolved = init_workspace_db(db_path)
+    effective_email = _resolve_auth_email(email)
+    if not effective_email:
+        raise ValueError("Email is required.")
+    invalid_login_message = _invalid_login_message(email)
     with _connect(resolved) as connection:
-        row = _load_user_row(connection, email=str(email).strip())
+        row = _load_user_row(connection, email=effective_email)
         if row:
             row = _ensure_user_totp_secret(connection, user_id=row["id"])
     if not row or not bool(row["is_active"]):
-        raise ValueError("Invalid email or verification code.")
+        raise ValueError(invalid_login_message)
     if not bool(row["totp_enabled"]) or not _verify_totp_code(str(row["totp_secret"] or ""), otp_code):
-        raise ValueError("Invalid email or verification code.")
+        raise ValueError(invalid_login_message)
     session = create_session_for_user(str(row["id"]), db_path=resolved)
     return {
         "db_path": str(resolved),

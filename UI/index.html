@@ -14,11 +14,11 @@
           <div>
             <p class="eyebrow">HR Hunter</p>
             <h1>Sign In</h1>
-            <p class="muted">Use your recruiter email and 6-digit authenticator code to open projects, run searches, and review candidates.</p>
+            <p class="muted" id="login-help-text">Use your recruiter email and 6-digit authenticator code to open projects, run searches, and review candidates.</p>
           </div>
         </div>
         <form id="login-form" class="auth-form" data-inline-managed="true" onsubmit="return window.__hrHunterInlineLogin(event);">
-          <label>
+          <label id="login-email-group">
             <span>Email</span>
             <input id="login-email" type="text" autocomplete="username" placeholder="admin.hrhunter@hyve" required />
           </label>
@@ -868,11 +868,13 @@
         const message = document.getElementById("login-message");
         const emailInput = document.getElementById("login-email");
         const otpInput = document.getElementById("login-otp-code");
-        const email = emailInput ? emailInput.value.trim() : "";
+        const authConfig = window.__HR_HUNTER_AUTH_CONFIG || {};
+        const emailRequired = authConfig.email_required !== false;
+        const email = emailRequired && emailInput ? emailInput.value.trim() : "";
         const otpCode = otpInput ? otpInput.value.trim() : "";
-        if (!email || !otpCode) {
+        if ((!emailRequired && !otpCode) || (emailRequired && (!email || !otpCode))) {
           if (message) {
-            message.textContent = "Enter your email and authenticator code.";
+            message.textContent = emailRequired ? "Enter your email and authenticator code." : "Enter your authenticator code.";
           }
           return false;
         }
@@ -900,26 +902,32 @@
         return false;
       };
     </script>
-    <script src="/assets/app.js?v=20260407theme3" defer></script>
+    <script src="/assets/app.js?v=20260408auth1" defer></script>
     <script>
       window.setTimeout(() => {
         if (window.__HR_HUNTER_LOGIN_BOUND) {
           return;
         }
         const form = document.getElementById("login-form");
-        const message = document.getElementById("login-message");
-        if (!form || !message) {
-          return;
-        }
-        form.addEventListener("submit", async (event) => {
-          event.preventDefault();
-          const emailInput = document.getElementById("login-email");
-          const otpInput = document.getElementById("login-otp-code");
-          const email = emailInput ? emailInput.value.trim() : "";
-          const otpCode = otpInput ? otpInput.value.trim() : "";
-          message.textContent = "Signing in...";
-          try {
-            const response = await fetch("/app/auth/login", {
+          const message = document.getElementById("login-message");
+          if (!form || !message) {
+            return;
+          }
+          form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const authConfig = window.__HR_HUNTER_AUTH_CONFIG || {};
+            const emailRequired = authConfig.email_required !== false;
+            const emailInput = document.getElementById("login-email");
+            const otpInput = document.getElementById("login-otp-code");
+            const email = emailRequired && emailInput ? emailInput.value.trim() : "";
+            const otpCode = otpInput ? otpInput.value.trim() : "";
+            if ((!emailRequired && !otpCode) || (emailRequired && (!email || !otpCode))) {
+              message.textContent = emailRequired ? "Enter your email and authenticator code." : "Enter your authenticator code.";
+              return;
+            }
+            message.textContent = "Signing in...";
+            try {
+              const response = await fetch("/app/auth/login", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ email, otp_code: otpCode }),

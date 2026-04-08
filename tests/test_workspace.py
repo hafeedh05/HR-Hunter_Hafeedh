@@ -40,6 +40,23 @@ def test_workspace_seeds_admin_and_supports_login(tmp_path: Path):
     assert auth["session_token"]
 
 
+def test_workspace_supports_code_only_login_for_configured_account(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "workspace.db"
+    init_workspace_db(db_path)
+    monkeypatch.setenv("HR_HUNTER_CODE_ONLY_LOGIN", "true")
+    monkeypatch.setenv("HR_HUNTER_LOGIN_EMAIL", DEFAULT_ADMIN_EMAIL)
+
+    admin_setup = get_user_totp_setup(email=DEFAULT_ADMIN_EMAIL, db_path=db_path)
+    auth = authenticate_user(
+        "",
+        generate_totp_code(admin_setup["totp"]["secret"]),
+        db_path=db_path,
+    )
+
+    assert auth["user"]["email"] == DEFAULT_ADMIN_EMAIL
+    assert auth["session_token"]
+
+
 def test_admin_can_create_recruiter_and_assign_project(tmp_path: Path):
     db_path = tmp_path / "workspace.db"
     init_workspace_db(db_path)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,10 @@ from hr_hunter.db import connect_database, resolve_database_target
 from hr_hunter.identity import candidate_primary_key
 from hr_hunter.models import CandidateProfile, SearchBrief, SearchRunReport
 from hr_hunter.output import load_report
+
+
+_INITIALIZED_STATE_TARGETS: set[str] = set()
+_STATE_INIT_LOCK = threading.Lock()
 
 
 def _now() -> str:
@@ -37,6 +42,27 @@ def _parse_iso_timestamp(value: str) -> datetime | None:
         return datetime.fromisoformat(text)
     except ValueError:
         return None
+
+
+def _scalar_row_value(row: Any, *, key: str = "count") -> int:
+    if row is None:
+        return 0
+    if isinstance(row, dict):
+        if key in row:
+            return int(row[key] or 0)
+        values = list(row.values())
+        return int(values[0] or 0) if values else 0
+    keys = getattr(row, "keys", None)
+    if callable(keys):
+        row_keys = list(keys())
+        if key in row_keys:
+            return int(row[key] or 0)
+        if row_keys:
+            return int(row[row_keys[0]] or 0)
+    try:
+        return int(row[0] or 0)
+    except (KeyError, IndexError, TypeError):
+        return 0
 
 
 def _resolve_target(db_path: Path | str | None) -> Any:
@@ -77,9 +103,15 @@ def _run_summary_from_artifact(
 
 def init_state_db(db_path: Path | str | None = None) -> Path | str:
     target = _resolve_target(db_path)
-    with connect_database(target) as connection:
-        connection.executescript(
-            """
+    cache_key = target.locator
+    if cache_key in _INITIALIZED_STATE_TARGETS:
+        return target.path if target.backend == "sqlite" else target.locator
+    with _STATE_INIT_LOCK:
+        if cache_key in _INITIALIZED_STATE_TARGETS:
+            return target.path if target.backend == "sqlite" else target.locator
+        with connect_database(target) as connection:
+            connection.executescript(
+                """
             CREATE TABLE IF NOT EXISTS mandates (
                 id TEXT PRIMARY KEY,
                 org_id TEXT NOT NULL,
@@ -223,8 +255,9 @@ def init_state_db(db_path: Path | str | None = None) -> Path | str:
                 started_at TEXT DEFAULT '',
                 finished_at TEXT DEFAULT ''
             );
-            """
-        )
+                """
+            )
+        _INITIALIZED_STATE_TARGETS.add(cache_key)
     return target.path if target.backend == "sqlite" else target.locator
 
 
@@ -879,12 +912,14 @@ def summarize_system_state(*, db_path: Path | None = None) -> Dict[str, Any]:
     resolved = init_state_db(db_path)
     with _connect(resolved) as connection:
         counts = {
-            "mandates": connection.execute("SELECT COUNT(*) FROM mandates").fetchone()[0],
-            "search_runs": connection.execute("SELECT COUNT(*) FROM search_runs").fetchone()[0],
-            "candidate_registry": connection.execute("SELECT COUNT(*) FROM candidate_registry").fetchone()[0],
-            "review_actions": connection.execute("SELECT COUNT(*) FROM review_actions").fetchone()[0],
-            "model_versions": connection.execute("SELECT COUNT(*) FROM model_versions").fetchone()[0],
-            "jobs": connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0],
+            "mandates": _scalar_row_value(connection.execute("SELECT COUNT(*) AS count FROM mandates").fetchone()),
+            "search_runs": _scalar_row_value(connection.execute("SELECT COUNT(*) AS count FROM search_runs").fetchone()),
+            "candidate_registry": _scalar_row_value(
+                connection.execute("SELECT COUNT(*) AS count FROM candidate_registry").fetchone()
+            ),
+            "review_actions": _scalar_row_value(connection.execute("SELECT COUNT(*) AS count FROM review_actions").fetchone()),
+            "model_versions": _scalar_row_value(connection.execute("SELECT COUNT(*) AS count FROM model_versions").fetchone()),
+            "jobs": _scalar_row_value(connection.execute("SELECT COUNT(*) AS count FROM jobs").fetchone()),
         }
         latest_run = connection.execute(
             "SELECT id, created_at, execution_backend, candidate_count FROM search_runs ORDER BY created_at DESC LIMIT 1"

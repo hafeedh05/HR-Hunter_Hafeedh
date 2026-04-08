@@ -155,6 +155,44 @@ def test_review_and_similar_candidates_are_persisted(tmp_path: Path) -> None:
     assert ops["counts"]["review_actions"] == 1
 
 
+def test_summarize_system_state_supports_mapping_rows(monkeypatch) -> None:
+    class _FakeCursor:
+        def __init__(self, row):
+            self._row = row
+
+        def fetchone(self):
+            return self._row
+
+    class _FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            if "ORDER BY created_at DESC" in sql:
+                return _FakeCursor(
+                    {
+                        "id": "run-postgres",
+                        "created_at": "2026-04-08T00:00:00+00:00",
+                        "execution_backend": "local_engine",
+                        "candidate_count": 4,
+                    }
+                )
+            return _FakeCursor({"count": 2})
+
+    monkeypatch.setattr("hr_hunter.state.init_state_db", lambda db_path=None: "postgresql://fake/hr_hunter")
+    monkeypatch.setattr("hr_hunter.state._connect", lambda db_path=None: _FakeConnection())
+
+    ops = summarize_system_state()
+
+    assert ops["db_path"] == "postgresql://fake/hr_hunter"
+    assert ops["counts"]["mandates"] == 2
+    assert ops["counts"]["jobs"] == 2
+    assert ops["latest_run"]["id"] == "run-postgres"
+
+
 def test_project_run_persistence_allows_same_brief_id_across_project_and_local_mandates(tmp_path: Path) -> None:
     brief = _build_brief()
     candidate = score_candidate(

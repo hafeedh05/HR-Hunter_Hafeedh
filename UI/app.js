@@ -224,6 +224,45 @@ function sessionHeaders() {
   return state.sessionToken ? { "X-Session-Token": state.sessionToken } : {};
 }
 
+function authConfig() {
+  return state.config?.auth || window.__HR_HUNTER_AUTH_CONFIG || {};
+}
+
+function loginEmailRequired() {
+  return authConfig().email_required !== false;
+}
+
+function applyAuthConfig() {
+  const emailRequired = loginEmailRequired();
+  const emailGroup = document.getElementById("login-email-group");
+  const emailInput = document.getElementById("login-email");
+  const helpText = document.getElementById("login-help-text");
+  const loginMessage = document.getElementById("login-message");
+
+  window.__HR_HUNTER_AUTH_CONFIG = authConfig();
+
+  if (emailGroup) {
+    emailGroup.hidden = !emailRequired;
+  }
+  if (emailInput) {
+    emailInput.required = emailRequired;
+    emailInput.disabled = !emailRequired;
+    if (!emailRequired) {
+      emailInput.value = "";
+    }
+  }
+  if (helpText) {
+    helpText.textContent = emailRequired
+      ? "Use your recruiter email and 6-digit authenticator code to open projects, run searches, and review candidates."
+      : "Use the 6-digit code from Google Authenticator to open HR Hunter.";
+  }
+  if (loginMessage && loginMessage.textContent.includes("Only admin")) {
+    loginMessage.textContent = emailRequired
+      ? "Only admin can create recruiter accounts and issue authenticator setup keys."
+      : "Enter your authenticator code to sign in.";
+  }
+}
+
 async function fetchJSON(url, options = {}) {
   const headers = {
     ...(options.body ? { "Content-Type": "application/json" } : {}),
@@ -2361,9 +2400,15 @@ async function handleJdUpload(event) {
 
 async function handleLogin(event) {
   event.preventDefault();
-  const email = document.getElementById("login-email").value.trim();
+  const emailRequired = loginEmailRequired();
+  const emailInput = document.getElementById("login-email");
+  const email = emailRequired && emailInput ? emailInput.value.trim() : "";
   const otpCode = document.getElementById("login-otp-code").value.trim();
   const message = document.getElementById("login-message");
+  if ((!emailRequired && !otpCode) || (emailRequired && (!email || !otpCode))) {
+    message.textContent = emailRequired ? "Enter your email and authenticator code." : "Enter your authenticator code.";
+    return;
+  }
   message.textContent = "Signing in...";
   try {
     const payload = await fetchJSON("/app/auth/login", {
@@ -2769,6 +2814,7 @@ function bindEvents() {
 async function initialiseApp() {
   bindEvents();
   state.config = await fetchJSON("/app-config");
+  applyAuthConfig();
   hydrateSettings();
   initialiseTokenFields();
   renderProjectStatuses();

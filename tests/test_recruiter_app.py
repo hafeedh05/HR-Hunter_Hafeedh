@@ -84,6 +84,15 @@ def test_build_app_bootstrap_exposes_supported_ui_options():
     assert preset["jd_breakdown"]["key_experience_points"]
 
 
+def test_build_app_bootstrap_can_enable_code_only_login(monkeypatch):
+    monkeypatch.setenv("HR_HUNTER_CODE_ONLY_LOGIN", "true")
+
+    bootstrap = build_app_bootstrap()
+
+    assert bootstrap["auth"]["email_required"] is False
+    assert bootstrap["auth"]["code_only_login_enabled"] is True
+
+
 def test_internal_fetch_limit_overfetches_large_candidate_targets():
     assert compute_internal_fetch_limit(20) == 20
     assert compute_internal_fetch_limit(100) >= 400

@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, List
 
 from hr_hunter.briefing import normalize_text, unique_preserving_order
 from hr_hunter.config import (
+    env_flag,
     resolve_feedback_db_path,
     resolve_output_dir,
     resolve_ranker_model_dir,
@@ -999,12 +1000,15 @@ def build_app_bootstrap() -> Dict[str, Any]:
     default_feedback_db = str(resolve_feedback_db_path())
     default_model_dir = str(resolve_ranker_model_dir())
     default_output_dir = str(resolve_output_dir())
+    code_only_login_enabled = env_flag("HR_HUNTER_CODE_ONLY_LOGIN")
     return {
         "auth": {
             "mode": "totp",
             "issuer": "HR Hunter",
             "code_digits": 6,
             "code_label": "Authenticator Code",
+            "email_required": not code_only_login_enabled,
+            "code_only_login_enabled": code_only_login_enabled,
         },
         "anchors": ANCHOR_OPTIONS,
         "feedback_actions": FEEDBACK_ACTIONS,

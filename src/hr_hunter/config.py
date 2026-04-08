@@ -18,6 +18,7 @@ DEFAULT_SECRET_ENV_FILES = (
     "~/reap-bot/.env",
     "~/.env",
 )
+TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
 
 def parse_env_lines(lines: Iterable[str]) -> Dict[str, str]:
@@ -43,6 +44,13 @@ def load_env_values(path: Path) -> Dict[str, str]:
 def load_env_file(path: Path) -> None:
     for key, value in load_env_values(path).items():
         os.environ.setdefault(key, value)
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in TRUE_ENV_VALUES
 
 
 def iter_secret_env_files() -> Iterable[Path]:
