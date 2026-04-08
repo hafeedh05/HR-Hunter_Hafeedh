@@ -146,6 +146,10 @@ class TokenField {
     this.input.value = "";
   }
 
+  commitPending() {
+    this.addFromInput();
+  }
+
   setTokens(values) {
     this.tokens = [];
     this.add(Array.isArray(values) ? values.join(",") : values);
@@ -815,6 +819,7 @@ function startNewProject() {
 }
 
 function buildUiMeta() {
+  Object.values(state.tokenFields).forEach((field) => field?.commitPending?.());
   return {
     titles: state.tokenFields.titles.getTokens(),
     countries: state.tokenFields.countries.getTokens(),
@@ -894,10 +899,13 @@ function projectPayloadForSave() {
   const briefPayload = buildBriefPayload();
   const projectName = document.getElementById("project-name").value.trim();
   const roleTitle = document.getElementById("role-title").value.trim();
+  const countryTokens = state.tokenFields.countries.getTokens();
+  const continentTokens = state.tokenFields.continents.getTokens();
+  const cityTokens = state.tokenFields.cities.getTokens();
   const targetGeography = document.getElementById("target-geography").value.trim()
-    || state.tokenFields.cities.getTokens()[0]
-    || state.tokenFields.countries.getTokens()[0]
-    || state.tokenFields.continents.getTokens()[0]
+    || cityTokens[0]
+    || (countryTokens.length > 1 ? countryTokens.join(", ") : countryTokens[0])
+    || (continentTokens.length > 1 ? continentTokens.join(", ") : continentTokens[0])
     || "";
   return {
     name: projectName || `${roleTitle || "New Role"}${targetGeography ? ` - ${targetGeography}` : ""}`,
