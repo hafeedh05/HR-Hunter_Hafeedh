@@ -413,3 +413,23 @@ def test_expire_stale_jobs_marks_old_running_jobs_failed(tmp_path: Path) -> None
     assert job is not None
     assert job["status"] == "failed"
     assert "Please retry" in job["error"]
+
+
+def test_expire_stale_jobs_disabled_keeps_running_jobs(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.db"
+    queued = enqueue_job("search", {"project_id": "project_789", "role_title": "Operations Manager"}, db_path=db_path)
+    start_job(queued["job_id"], db_path=db_path)
+
+    target = db_path
+    with connect_database(resolve_database_target(target, env_var="HR_HUNTER_STATE_DB", default_path="output/state/hr_hunter_state.db")) as connection:
+        connection.execute(
+            "UPDATE jobs SET created_at = ?, started_at = ? WHERE id = ?",
+            ("2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00", queued["job_id"]),
+        )
+
+    expired = expire_stale_jobs(db_path=db_path, max_age_seconds=0)
+    job = load_job(queued["job_id"], db_path=db_path)
+
+    assert expired == []
+    assert job is not None
+    assert job["status"] == "running"

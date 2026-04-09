@@ -288,7 +288,11 @@ def create_app() -> "FastAPI":
     app = FastAPI(title="HR Hunter", version="0.1.0")
     engine = SearchEngine()
     remote_client = RemoteSourcingClient()
-    job_stale_seconds = max(300, int(os.getenv("HR_HUNTER_JOB_STALE_SECONDS", "1800") or 1800))
+    raw_job_stale_seconds = str(os.getenv("HR_HUNTER_JOB_STALE_SECONDS", "0") or "0").strip()
+    try:
+        job_stale_seconds = max(0, int(raw_job_stale_seconds))
+    except ValueError:
+        job_stale_seconds = 0
     workspace_root = Path(__file__).resolve().parents[2]
     ui_dir = workspace_root / "UI"
     if ui_dir.exists():

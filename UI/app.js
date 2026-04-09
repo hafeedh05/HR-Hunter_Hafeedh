@@ -73,6 +73,7 @@ const state = {
   ownerOpen: false,
   navOpen: false,
   activeJob: null,
+  polledJobId: "",
   jobPollHandle: null,
   tokenFields: {},
   projectSearchQuery: "",
@@ -1091,22 +1092,30 @@ function statusFromCandidate(candidate) {
   return { key: "reject", label: "Rejected" };
 }
 
+function jobProjectId(job) {
+  return String(job?.payload?.project_id || job?.result?.project?.id || "").trim();
+}
+
+function isActiveJobStatus(status) {
+  return ["queued", "running"].includes(String(status || "").toLowerCase());
+}
+
 function activeSearchJobForSelectedProject() {
   if (!state.activeJob || state.activeJob.job_type !== "search") {
     return null;
   }
-  const projectId = String(state.activeJob.payload?.project_id || state.activeJob.result?.project?.id || "").trim();
+  const projectId = jobProjectId(state.activeJob);
   if (!projectId || projectId !== state.selectedProjectId) {
     return null;
   }
-  return ["queued", "running"].includes(String(state.activeJob.status || "").toLowerCase()) ? state.activeJob : null;
+  return isActiveJobStatus(state.activeJob.status) ? state.activeJob : null;
 }
 
 function latestSearchJobForSelectedProject() {
   if (!state.activeJob || state.activeJob.job_type !== "search") {
     return null;
   }
-  const projectId = String(state.activeJob.payload?.project_id || state.activeJob.result?.project?.id || "").trim();
+  const projectId = jobProjectId(state.activeJob);
   if (!projectId || projectId !== state.selectedProjectId) {
     return null;
   }
@@ -1119,7 +1128,7 @@ function failedSearchJobForSelectedProject() {
 }
 
 function hasRunningBackgroundJob() {
-  return Boolean(state.activeJob) && ["queued", "running"].includes(String(state.activeJob.status || "").toLowerCase());
+  return Boolean(state.activeJob) && isActiveJobStatus(state.activeJob.status);
 }
 
 function backgroundJobExitMessage() {
@@ -2100,6 +2109,7 @@ async function loadProject(projectId) {
 async function loadLatestProjectJob(projectId) {
   if (!projectId) {
     state.activeJob = null;
+    state.polledJobId = "";
     renderOwnerJobs();
     renderResults();
     renderCandidates();
@@ -2107,7 +2117,18 @@ async function loadLatestProjectJob(projectId) {
     return;
   }
   const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}/latest-job`);
-  state.activeJob = payload?.job || null;
+  const incomingJob = payload?.job || null;
+  const polledJobActive =
+    Boolean(state.activeJob) &&
+    state.activeJob.job_type === "search" &&
+    state.activeJob.job_id === state.polledJobId &&
+    jobProjectId(state.activeJob) === projectId &&
+    isActiveJobStatus(state.activeJob.status);
+  if (!polledJobActive) {
+    state.activeJob = incomingJob;
+  } else if (incomingJob && incomingJob.job_id === state.polledJobId) {
+    state.activeJob = incomingJob;
+  }
   renderOwnerJobs();
   renderResults();
   renderCandidates();
@@ -2262,10 +2283,12 @@ function clearJobPolling() {
     window.clearTimeout(state.jobPollHandle);
     state.jobPollHandle = null;
   }
+  state.polledJobId = "";
 }
 
 function startJobPolling(jobId) {
   clearJobPolling();
+  state.polledJobId = String(jobId || "");
   const poll = async () => {
     try {
       const job = await fetchJSON(`/app/jobs/${encodeURIComponent(jobId)}`);

@@ -23,9 +23,9 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-DEFAULT_JOB_STALE_SECONDS = 1800
+DEFAULT_JOB_STALE_SECONDS = 0
 STALE_JOB_FAILURE_REASON = (
-    "This background job stopped before completion, likely because it timed out or the app restarted. "
+    "This background job stopped before completion, likely because the app restarted or the job was interrupted. "
     "Please retry."
 )
 
@@ -1076,8 +1076,14 @@ def expire_stale_jobs(
     max_age_seconds: int = DEFAULT_JOB_STALE_SECONDS,
     reason: str = STALE_JOB_FAILURE_REASON,
 ) -> List[str]:
+    try:
+        stale_seconds = int(max_age_seconds)
+    except (TypeError, ValueError):
+        stale_seconds = 0
+    if stale_seconds <= 0:
+        return []
     resolved = init_state_db(db_path)
-    threshold = datetime.now(timezone.utc) - timedelta(seconds=max(60, int(max_age_seconds)))
+    threshold = datetime.now(timezone.utc) - timedelta(seconds=max(60, stale_seconds))
     stale_job_ids: List[str] = []
     with _connect(resolved) as connection:
         rows = connection.execute(

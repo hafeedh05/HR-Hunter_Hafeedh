@@ -903,48 +903,6 @@
         return false;
       };
     </script>
-    <script src="/assets/app.js?v=20260408countries1" defer></script>
-    <script>
-      window.setTimeout(() => {
-        if (window.__HR_HUNTER_LOGIN_BOUND) {
-          return;
-        }
-        const form = document.getElementById("login-form");
-          const message = document.getElementById("login-message");
-          if (!form || !message) {
-            return;
-          }
-          form.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            const authConfig = window.__HR_HUNTER_AUTH_CONFIG || {};
-            const emailRequired = authConfig.email_required !== false;
-            const emailInput = document.getElementById("login-email");
-            const otpInput = document.getElementById("login-otp-code");
-            const email = emailRequired && emailInput ? emailInput.value.trim() : "";
-            const otpCode = otpInput ? otpInput.value.trim() : "";
-            if ((!emailRequired && !otpCode) || (emailRequired && (!email || !otpCode))) {
-              message.textContent = emailRequired ? "Enter your email and authenticator code." : "Enter your authenticator code.";
-              return;
-            }
-            message.textContent = "Signing in...";
-            try {
-              const response = await fetch("/app/auth/login", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ email, otp_code: otpCode }),
-            });
-            const payload = await response.json();
-            if (!response.ok) {
-              throw new Error(payload.detail || "Sign in failed.");
-            }
-            window.localStorage.setItem("hr-hunter-session-token", payload.session_token || "");
-            window.localStorage.setItem("hr-hunter-session-handoff", "1");
-            window.location.assign("/?session=fallback");
-          } catch (error) {
-            message.textContent = error.message || "Sign in failed.";
-          }
-        });
-      }, 800);
-    </script>
+    <script src="/assets/app.js?v=20260409jobs1" defer></script>
   </body>
 </html>
