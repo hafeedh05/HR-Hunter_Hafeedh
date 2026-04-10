@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -309,6 +310,41 @@ def _require_admin_user(request: "Request") -> Dict[str, Any]:
     return user
 
 
+def _summarize_target_geography(ui_payload: Dict[str, Any], brief: Any) -> str:
+    brief_config = ui_payload.get("brief_config", {}) if isinstance(ui_payload, dict) else {}
+    ui_meta = brief_config.get("ui_meta", {}) if isinstance(brief_config, dict) else {}
+    countries = [str(value).strip() for value in ui_meta.get("countries", []) if str(value).strip()]
+    continents = [str(value).strip() for value in ui_meta.get("continents", []) if str(value).strip()]
+    cities = [str(value).strip() for value in ui_meta.get("cities", []) if str(value).strip()]
+
+    def summarize(values: List[str], *, limit: int = 3) -> str:
+        picked = values[:limit]
+        remainder = max(0, len(values) - len(picked))
+        label = ", ".join(picked)
+        if remainder > 0:
+            label = f"{label} (+{remainder} more)"
+        return label
+
+    if len(countries) > 1:
+        return summarize(countries, limit=3)
+    if len(countries) == 1 and cities:
+        city_summary = summarize(cities, limit=2)
+        return ", ".join([value for value in [city_summary, countries[0]] if value]).strip(", ")
+    if countries:
+        return countries[0]
+    if continents:
+        return summarize(continents, limit=3)
+    if cities:
+        return summarize(cities, limit=3)
+
+    fallback_values = [
+        str(getattr(getattr(brief, "geography", None), "location_name", "") or "").strip(),
+        str(getattr(getattr(brief, "geography", None), "country", "") or "").strip(),
+        ", ".join(list(getattr(brief, "location_targets", []) or [])[:2]).strip(),
+    ]
+    return ", ".join([value for value in fallback_values if value][:2])
+
+
 def create_app() -> "FastAPI":
     if FastAPI is None:
         raise RuntimeError(
@@ -328,8 +364,31 @@ def create_app() -> "FastAPI":
         job_stale_seconds = 0
     workspace_root = Path(__file__).resolve().parents[2]
     ui_dir = workspace_root / "UI"
+    active_job_threads: Dict[str, threading.Thread] = {}
+    active_job_threads_lock = threading.Lock()
     if ui_dir.exists():
         app.mount("/assets", StaticFiles(directory=ui_dir), name="assets")
+
+    def _spawn_background_job(job_id: str, runner: Any) -> None:
+        with active_job_threads_lock:
+            existing = active_job_threads.get(job_id)
+            if existing and existing.is_alive():
+                return
+
+            def _thread_target() -> None:
+                try:
+                    asyncio.run(runner())
+                finally:
+                    with active_job_threads_lock:
+                        active_job_threads.pop(job_id, None)
+
+            thread = threading.Thread(
+                target=_thread_target,
+                name=f"hr-hunter-job-{job_id[:12]}",
+                daemon=True,
+            )
+            active_job_threads[job_id] = thread
+            thread.start()
 
     async def _run_local_search(
         brief: Any,
@@ -457,17 +516,7 @@ def create_app() -> "FastAPI":
             requested_limit = int(ui_payload["limit"])
             internal_fetch_limit = int(ui_payload.get("internal_fetch_limit", requested_limit))
             project_id = str(payload.get("project_id", "")).strip()
-            target_geography = ", ".join(
-                [
-                    value
-                    for value in [
-                        brief.geography.location_name,
-                        brief.geography.country,
-                        ", ".join(brief.location_targets[:2]) if brief.location_targets else "",
-                    ]
-                    if str(value).strip()
-                ][:2]
-                    )
+            target_geography = _summarize_target_geography(ui_payload, brief)
             actor = {
                 "id": str(payload.get("recruiter_id", "")).strip(),
                 "full_name": str(payload.get("recruiter_name", "")).strip(),
@@ -861,7 +910,7 @@ def create_app() -> "FastAPI":
                 },
                 checkpoint={"event": "resumed_after_restart"},
             )
-            asyncio.create_task(_search_job_runner(job_id, payload))
+            _spawn_background_job(job_id, lambda job_id=job_id, payload=payload: _search_job_runner(job_id, payload))
 
     @app.on_event("startup")
     async def _app_startup_resume_jobs() -> None:
@@ -1313,17 +1362,7 @@ def create_app() -> "FastAPI":
 
         if not brief.role_title.strip():
             raise HTTPException(status_code=400, detail="Role title is required.")
-        target_geography = ", ".join(
-            [
-                value
-                for value in [
-                    brief.geography.location_name,
-                    brief.geography.country,
-                    ", ".join(brief.location_targets[:2]) if brief.location_targets else "",
-                ]
-                if str(value).strip()
-            ][:2]
-        )
+        target_geography = _summarize_target_geography(ui_payload, brief)
         save_project_brief(
             user,
             project_id=project_id,
@@ -1544,14 +1583,14 @@ def create_app() -> "FastAPI":
         payload["recruiter_name"] = user["full_name"]
         payload["team_id"] = user.get("team_id", "")
         job = enqueue_job("search", payload)
-        background_tasks.add_task(_search_job_runner, job["job_id"], payload)
+        _spawn_background_job(job["job_id"], lambda job_id=job["job_id"], payload=payload: _search_job_runner(job_id, payload))
         return job
 
     @app.post("/app/train-ranker-jobs")
     async def app_train_ranker_jobs(request: Request, payload: Dict[str, Any], background_tasks: BackgroundTasks) -> Dict[str, Any]:
         _require_admin_user(request)
         job = enqueue_job("train_ranker", payload)
-        background_tasks.add_task(_train_ranker_job_runner, job["job_id"], payload)
+        _spawn_background_job(job["job_id"], lambda job_id=job["job_id"], payload=payload: _train_ranker_job_runner(job_id, payload))
         return job
 
     @app.get("/app/jobs/{job_id}")

@@ -995,6 +995,36 @@ function assessHuntReadiness(briefPayload) {
   return { ok, score, message };
 }
 
+function summarizeTargetGeographyFromTokens({ targetGeography = "", countries = [], continents = [], cities = [] } = {}) {
+  const explicit = String(targetGeography || "").trim();
+  if (explicit) return explicit;
+
+  const summarize = (values, limit = 3) => {
+    const picked = values.filter(Boolean).slice(0, limit);
+    const remainder = Math.max(0, values.filter(Boolean).length - picked.length);
+    const label = picked.join(", ");
+    return remainder > 0 ? `${label} (+${remainder} more)` : label;
+  };
+
+  if (countries.length > 1) {
+    return summarize(countries, 3);
+  }
+  if (countries.length === 1 && cities.length) {
+    const citySummary = summarize(cities, 2);
+    return [citySummary, countries[0]].filter(Boolean).join(", ");
+  }
+  if (countries.length === 1) {
+    return countries[0];
+  }
+  if (continents.length) {
+    return summarize(continents, 3);
+  }
+  if (cities.length) {
+    return summarize(cities, 3);
+  }
+  return "";
+}
+
 function projectPayloadForSave() {
   const briefPayload = buildBriefPayload();
   const projectName = document.getElementById("project-name").value.trim();
@@ -1002,11 +1032,12 @@ function projectPayloadForSave() {
   const countryTokens = state.tokenFields.countries.getTokens();
   const continentTokens = state.tokenFields.continents.getTokens();
   const cityTokens = state.tokenFields.cities.getTokens();
-  const targetGeography = document.getElementById("target-geography").value.trim()
-    || cityTokens[0]
-    || (countryTokens.length > 1 ? countryTokens.join(", ") : countryTokens[0])
-    || (continentTokens.length > 1 ? continentTokens.join(", ") : continentTokens[0])
-    || "";
+  const targetGeography = summarizeTargetGeographyFromTokens({
+    targetGeography: document.getElementById("target-geography").value.trim(),
+    countries: countryTokens,
+    continents: continentTokens,
+    cities: cityTokens,
+  });
   return {
     name: projectName || `${roleTitle || "New Role"}${targetGeography ? ` - ${targetGeography}` : ""}`,
     client_name: document.getElementById("client-name").value.trim(),
