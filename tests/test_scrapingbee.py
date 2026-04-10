@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.identity import canonical_query_fingerprint
@@ -279,3 +280,74 @@ def test_scrapingbee_builds_history_query_plans() -> None:
     assert plans
     assert any('"formerly"' in plan["search"] for plan in plans)
     assert any('"Unilever"' in plan["search"] for plan in plans)
+
+
+def test_scrapingbee_stops_waiting_on_hung_queries_once_limit_is_met(monkeypatch) -> None:
+    provider = ScrapingBeeGoogleProvider(
+        {
+            "parallel_requests": 2,
+            "max_queries": 2,
+        }
+    )
+    provider.client.api_key = "test-key"
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-stop-test",
+            "role_title": "Chief Executive Officer",
+            "titles": ["Chief Executive Officer", "CEO"],
+            "company_targets": ["Marina Home Interiors"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+        }
+    )
+    strict_slice = next(
+        slice_config for slice_config in build_search_slices(brief) if slice_config.search_mode == "strict"
+    )
+    second_call_started = asyncio.Event()
+    second_call_cancelled = False
+    call_count = 0
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.status_code = 200
+            self._payload = payload
+            self.text = json.dumps(payload)
+
+        def json(self):
+            return self._payload
+
+    async def fake_search(*args, **kwargs):
+        nonlocal call_count, second_call_cancelled
+        call_count += 1
+        if call_count == 1:
+            await asyncio.wait_for(second_call_started.wait(), timeout=0.2)
+            return FakeResponse(
+                {
+                    "organic_results": [
+                        {
+                            "title": "Jane Search - Chief Executive Officer - Marina Home Interiors",
+                            "description": "Chief Executive Officer at Marina Home Interiors in Dubai, United Arab Emirates.",
+                            "url": "https://www.linkedin.com/in/jane-search",
+                        }
+                    ]
+                }
+            )
+        second_call_started.set()
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            second_call_cancelled = True
+            raise
+        return FakeResponse({"organic_results": []})
+
+    monkeypatch.setattr(provider.client, "search", fake_search)
+
+    result = asyncio.run(
+        asyncio.wait_for(
+            provider.run(brief, [strict_slice], limit=1, dry_run=False),
+            timeout=1.5,
+        )
+    )
+
+    assert call_count == 2
+    assert second_call_cancelled is True
+    assert result.candidate_count == 1

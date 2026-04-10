@@ -1231,12 +1231,46 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                     await run_plan(plan)
 
             tasks = [asyncio.create_task(run_plan_with_limit(plan)) for plan in executable_plans]
+            stop_waiter: asyncio.Task | None = None
             if progress_callback and tasks:
                 heartbeat_task = asyncio.create_task(emit_progress_heartbeat())
             if tasks:
                 try:
-                    await asyncio.gather(*tasks)
+                    stop_waiter = asyncio.create_task(stop_event.wait())
+                    pending_tasks: set[asyncio.Task[None]] = set(tasks)
+                    while pending_tasks:
+                        watch_set = set(pending_tasks)
+                        if stop_waiter and not stop_waiter.done():
+                            watch_set.add(stop_waiter)
+                        done, pending = await asyncio.wait(
+                            watch_set,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if stop_waiter and stop_waiter in done:
+                            done.remove(stop_waiter)
+                            for task in pending_tasks:
+                                if task.done():
+                                    continue
+                                task.cancel()
+                            cancelled_results = await asyncio.gather(
+                                *pending_tasks,
+                                return_exceptions=True,
+                            )
+                            for result in cancelled_results:
+                                if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
+                                    raise result
+                            pending_tasks.clear()
+                            break
+                        for task in done:
+                            if task is stop_waiter:
+                                continue
+                            exception = task.exception()
+                            if exception:
+                                raise exception
+                        pending_tasks = {task for task in pending if task is not stop_waiter}
                 finally:
+                    if stop_waiter and not stop_waiter.done():
+                        stop_waiter.cancel()
                     telemetry_done.set()
                     if heartbeat_task:
                         try:
