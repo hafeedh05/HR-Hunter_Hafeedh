@@ -14,17 +14,17 @@
           <div>
             <p class="eyebrow">HR Hunter</p>
             <h1>Sign In</h1>
-            <p class="muted" id="login-help-text">Use your recruiter email and 6-digit authenticator code to open projects, run searches, and review candidates.</p>
+            <p class="muted" id="login-help-text">Use the 6-digit code from your authenticator app to open projects, run searches, and review candidates.</p>
           </div>
         </div>
-        <form id="login-form" class="auth-form" data-inline-managed="true" onsubmit="return window.__hrHunterInlineLogin(event);">
-          <label id="login-email-group">
+        <form id="login-form" class="auth-form" method="post" action="/app/auth/login-form">
+          <label id="login-email-group" hidden>
             <span>Email</span>
-            <input id="login-email" type="text" autocomplete="username" placeholder="admin.hrhunter@hyve" required />
+            <input id="login-email" name="email" type="text" autocomplete="username" placeholder="admin.hrhunter@hyve" />
           </label>
           <label>
             <span>Authenticator Code</span>
-            <input id="login-otp-code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="Enter your 6-digit code" required />
+            <input id="login-otp-code" name="otp_code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="Enter your 6-digit code" required />
           </label>
           <button type="submit" class="button button-primary button-block">Sign In</button>
           <p class="form-note" id="login-message">Only admin can create recruiter accounts and issue authenticator setup keys.</p>
@@ -441,6 +441,15 @@
                   <span>Search Candidates</span>
                   <input id="candidate-search-input" type="search" placeholder="Search by name, title, company, or location" />
                 </label>
+                <div class="span-2 candidate-location-row">
+                  <label>
+                    <span>Location</span>
+                    <select id="candidate-location-filter">
+                      <option value="all">All Locations</option>
+                    </select>
+                  </label>
+                  <p class="muted small" id="candidate-location-note">Filter by location from the latest candidate set.</p>
+                </div>
                 <div class="span-2">
                   <div class="inline-heading">
                     <span>Review Bucket</span>
@@ -862,7 +871,11 @@
     </div>
 
     <script>
+      window.__HR_HUNTER_AUTH_CONFIG = window.__HR_HUNTER_AUTH_CONFIG || { email_required: false, code_only_login_enabled: true };
       window.__hrHunterInlineLogin = async function (event) {
+        if (typeof window.__hrHunterHandleLogin === "function") {
+          return window.__hrHunterHandleLogin(event);
+        }
         if (event) {
           event.preventDefault();
         }
@@ -892,9 +905,14 @@
           if (!response.ok) {
             throw new Error(payload.detail || "Sign in failed.");
           }
-          window.localStorage.setItem("hr-hunter-session-token", payload.session_token || "");
+          if (typeof window.__hrHunterCompleteLogin === "function") {
+            await window.__hrHunterCompleteLogin(payload);
+            return false;
+          }
+          const sessionToken = String(payload.session_token || "").trim();
+          window.localStorage.setItem("hr-hunter-session-token", sessionToken);
           window.localStorage.setItem("hr-hunter-session-handoff", "1");
-          window.location.assign("/?session=ready");
+          window.location.assign(`/#session_token=${encodeURIComponent(sessionToken)}`);
         } catch (error) {
           if (message) {
             message.textContent = error.message || "Sign in failed.";
@@ -903,6 +921,16 @@
         return false;
       };
     </script>
-    <script src="/assets/app.js?v=20260409jobs1" defer></script>
+    <script src="/assets/app.js?v=20260410login7" defer></script>
+    <script>
+      // If the main bundle fails to load/parse, make that obvious instead of looking like "login is broken".
+      window.setTimeout(() => {
+        if (window.__HR_HUNTER_UI_READY) return;
+        const message = document.getElementById("login-message");
+        if (message) {
+          message.textContent = "App failed to load. Hard refresh (Ctrl+F5) and try again.";
+        }
+      }, 1500);
+    </script>
   </body>
 </html>

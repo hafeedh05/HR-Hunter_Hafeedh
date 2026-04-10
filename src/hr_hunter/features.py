@@ -126,6 +126,23 @@ OPEN_TO_WORK_PHRASES = [
     "seeking new opportunities",
     "between roles",
 ]
+COMPANY_TOKEN_STOPWORDS = {
+    "and",
+    "co",
+    "company",
+    "corp",
+    "corporation",
+    "group",
+    "holding",
+    "holdings",
+    "inc",
+    "limited",
+    "llc",
+    "ltd",
+    "plc",
+    "sa",
+    "the",
+}
 
 
 @dataclass
@@ -383,16 +400,28 @@ def company_text_matches(value: str, aliases: Iterable[str]) -> bool:
     normalized_value = normalize_text(value)
     if not normalized_value:
         return False
+    value_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", normalized_value)
+        if token and len(token) > 2 and token not in COMPANY_TOKEN_STOPWORDS
+    }
     for alias in aliases:
         normalized_alias = normalize_text(alias)
         if not normalized_alias:
             continue
-        if (
-            normalized_value == normalized_alias
-            or normalized_alias in normalized_value
-            or normalized_value in normalized_alias
-        ):
+        if normalized_value == normalized_alias:
             return True
+        alias_tokens = {
+            token
+            for token in re.split(r"[^a-z0-9]+", normalized_alias)
+            if token and len(token) > 2 and token not in COMPANY_TOKEN_STOPWORDS
+        }
+        if alias_tokens and alias_tokens.issubset(value_tokens):
+            return True
+        if len(alias_tokens) == 1:
+            token = next(iter(alias_tokens))
+            if token in value_tokens and len(token) >= 6:
+                return True
     return False
 
 

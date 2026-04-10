@@ -317,9 +317,24 @@ def compute_internal_fetch_limit(requested_limit: int) -> int:
         buffered = requested + 90
         return min(max(requested, scaled, buffered), 240)
 
-    scaled = requested * 4
-    buffered = requested + max(180, requested)
-    return min(max(requested, scaled, buffered), 1200)
+    if requested <= 140:
+        scaled = requested * 3
+        buffered = requested + 120
+        return min(max(requested, scaled, buffered), 420)
+
+    if requested <= 300:
+        scaled = int(round(requested * 2.8))
+        buffered = requested + 220
+        return min(max(requested, scaled, buffered), 900)
+
+    if requested <= 500:
+        scaled = int(round(requested * 2.6))
+        buffered = requested + 300
+        return min(max(requested, scaled, buffered), 1300)
+
+    scaled = int(round(requested * 2.3))
+    buffered = requested + max(360, int(requested * 0.8))
+    return min(max(requested, scaled, buffered), 1800)
 
 
 def compute_top_up_fetch_limit(requested_limit: int, current_fetch_limit: int) -> int:
@@ -327,12 +342,27 @@ def compute_top_up_fetch_limit(requested_limit: int, current_fetch_limit: int) -
     current = max(requested, int(current_fetch_limit or requested))
     baseline = compute_internal_fetch_limit(requested)
     stepped = max(
-        current + max(50, requested // 2),
-        int(round(current * 1.5)),
+        current + max(80, requested),
+        int(round(current * 1.75)),
         baseline,
     )
-    ceiling = min(max(baseline, requested * 8), 2400)
+    ceiling = min(max(baseline, requested * 10), 3600)
     return min(max(current, stepped), ceiling)
+
+
+def compute_provider_max_queries(requested_limit: int) -> int:
+    requested = max(1, int(requested_limit or 1))
+    if requested <= 50:
+        return 180
+    if requested <= 120:
+        return 300
+    if requested <= 220:
+        return 460
+    if requested <= 350:
+        return 420
+    if requested <= 500:
+        return 620
+    return min(1200, max(700, int(round(requested * 1.6))))
 INDUSTRY_PHRASES = [
     "adtech",
     "consumer",
@@ -374,10 +404,51 @@ YEARS_RANGE_PATTERN = re.compile(r"(?P<min>\d{1,2})\s*[-to]{1,3}\s*(?P<max>\d{1,
 YEARS_PLUS_PATTERN = re.compile(r"(?P<value>\d{1,2})\s*\+\s*years", re.IGNORECASE)
 YEARS_AT_LEAST_PATTERN = re.compile(r"(at least|minimum of|min\.)\s*(?P<value>\d{1,2})\s*years", re.IGNORECASE)
 YEARS_AT_MOST_PATTERN = re.compile(r"(up to|maximum of|max\.)\s*(?P<value>\d{1,2})\s*years", re.IGNORECASE)
+CLAUSE_LEAD_PATTERNS = {
+    "role": re.compile(r"\b(?:the role|this role)\s+leads?\s+(?P<content>[^\.]+)", re.IGNORECASE),
+    "required": re.compile(r"\brequired\s+experience\s+includes?\s+(?P<content>[^\.]+)", re.IGNORECASE),
+    "ideal": re.compile(r"\bideal\s+candidates?\s+have\s+(?P<content>[^\.]+)", re.IGNORECASE),
+}
+ACTION_SIGNAL_PATTERN = re.compile(
+    r"\b(lead|manage|own|drive|coordinate|optimiz|forecast|plan|logistics|inventory|supplier|warehouse|"
+    r"s&op|distribution|service levels?|stockouts?|fulfillment|erp|sap|cross-border|multi-country)\b",
+    re.IGNORECASE,
+)
 ROLE_HINT_PATTERNS = [
     re.compile(r"\b(?:we are hiring|hiring|seeking|looking for)\s+(?:an?\s+)?(?P<title>[A-Z][A-Za-z&/\-\s]{3,80})", re.IGNORECASE),
     re.compile(r"\b(?:role|position|job title)\s*:\s*(?P<title>[A-Z][A-Za-z&/\-\s]{3,80})", re.IGNORECASE),
 ]
+SECTION_HEADER_MAP = {
+    "key responsibilities": "responsibilities",
+    "responsibilities": "responsibilities",
+    "main responsibilities": "responsibilities",
+    "what you will do": "responsibilities",
+    "qualifications and experience": "qualifications",
+    "qualifications": "qualifications",
+    "requirements": "qualifications",
+    "required experience": "qualifications",
+    "position summary": "summary",
+    "role summary": "summary",
+    "job summary": "summary",
+}
+SECTION_BOOST = {
+    "responsibilities": 3,
+    "qualifications": 3,
+    "summary": 1,
+    "general": 0,
+}
+BULLET_PREFIX_PATTERN = re.compile(r"^\s*(?:[-*\u2022]|(?:\d{1,2}[\.\)]))\s*")
+OVERVIEW_FLUFF_PATTERN = re.compile(
+    r"\b(company overview|household name|synonymous with|aspirational value proposition|"
+    r"products are sourced|cross cultural influences|luxury living|design coexistence)\b",
+    re.IGNORECASE,
+)
+INTRO_FLUFF_PATTERN = re.compile(
+    r"^\s*(we are seeking|we are hiring|we seek|this role is|the role is|the incoming)\b",
+    re.IGNORECASE,
+)
+JD_MIN_KEY_POINTS = 8
+JD_MAX_KEY_POINTS = 12
 
 
 def slugify(value: str) -> str:
@@ -418,20 +489,44 @@ def _sentence_candidates(text: str) -> List[str]:
 
 
 def _normalize_jd_point(text: str) -> str:
-    cleaned = re.sub(r"[\u2022•]+", "; ", str(text or ""))
+    cleaned = re.sub(r"[\u2022•\u2023\u2043\u2219]+", "; ", str(text or ""))
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -;:,")
     if not cleaned:
         return ""
+    normalized_header = normalize_text(re.sub(r"[:\-\s]+$", "", cleaned))
+    if normalized_header in SECTION_HEADER_MAP or normalized_header in {
+        "company overview",
+        "overview",
+        "about the company",
+        "key experience points",
+    }:
+        return ""
     cleaned = re.sub(
-        r"^(the role requires|role requires|responsibilities include|responsible for|you should bring|you will|"
+        r"^(key responsibilities|responsibilities|qualifications and experience|qualifications|"
+        r"position summary|role summary|job summary|summary)\s*[:\-]\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"^(key responsibilities|responsibilities|qualifications and experience|qualifications|position summary|summary|"
+        r"the role requires|role requires|responsibilities include|responsible for|you should bring|you will|"
         r"candidates should|candidate should|ideal candidates have|ideal candidate has|must have|required|"
         r"preferred|bonus points for|experience with|experience in|strong)\s+",
         "",
         cleaned,
         flags=re.IGNORECASE,
     )
+    cleaned = re.sub(
+        r"^(we are seeking|we are hiring|we seek|this role is|the role is|the incoming)\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
     cleaned = cleaned.strip(" -;:,")
     if not cleaned:
+        return ""
+    if normalize_text(cleaned) in {"key responsibilities", "responsibilities", "qualifications", "summary"}:
         return ""
     if len(cleaned) > 180:
         cleaned = _truncate(cleaned, limit=180)
@@ -451,6 +546,88 @@ def _jd_point_fragments(text: str) -> List[str]:
     return fragments
 
 
+def _split_clause_items(text: str) -> List[str]:
+    if not text:
+        return []
+    parts = re.split(r",\s+|\s+\band\b\s+", str(text or "").strip())
+    return unique_preserving_order([part.strip(" -;:.") for part in parts if part.strip(" -;:.")])
+
+
+def _extract_dense_clause_points(text: str) -> List[str]:
+    points: List[str] = []
+    normalized_text = str(text or "")
+
+    role_match = CLAUSE_LEAD_PATTERNS["role"].search(normalized_text)
+    if role_match:
+        scope = _normalize_jd_point(role_match.group("content"))
+        if scope:
+            points.append(f"Leads {scope}.")
+
+    required_match = CLAUSE_LEAD_PATTERNS["required"].search(normalized_text)
+    if required_match:
+        for item in _split_clause_items(required_match.group("content")):
+            if len(item) < 12:
+                continue
+            cleaned_item = _normalize_jd_point(item)
+            if not cleaned_item:
+                continue
+            points.append(f"Required experience in {cleaned_item[0].lower() + cleaned_item[1:]}.")
+
+    ideal_match = CLAUSE_LEAD_PATTERNS["ideal"].search(normalized_text)
+    if ideal_match:
+        for item in _split_clause_items(ideal_match.group("content")):
+            if len(item) < 12:
+                continue
+            cleaned_item = _normalize_jd_point(item)
+            if not cleaned_item:
+                continue
+            points.append(f"Ideal background includes {cleaned_item[0].lower() + cleaned_item[1:]}.")
+
+    for sentence in _sentence_candidates(normalized_text):
+        cleaned_sentence = _normalize_jd_point(sentence)
+        if len(cleaned_sentence) < 24:
+            continue
+        if not ACTION_SIGNAL_PATTERN.search(cleaned_sentence):
+            continue
+        points.append(cleaned_sentence)
+
+    return unique_preserving_order(points)
+
+
+def _section_from_heading(line: str) -> str:
+    normalized = normalize_text(re.sub(r"[:\-\s]+$", "", str(line or "")))
+    return SECTION_HEADER_MAP.get(normalized, "")
+
+
+def _section_candidates(text: str) -> List[tuple[int, str, str]]:
+    rows: List[tuple[int, str, str]] = []
+    current_section = "general"
+    for index, raw_line in enumerate(str(text or "").splitlines()):
+        raw = str(raw_line or "").strip()
+        if not raw:
+            continue
+        cleaned = BULLET_PREFIX_PATTERN.sub("", raw).strip()
+        if not cleaned:
+            continue
+
+        split = re.split(r"\s*[:\-]\s*", cleaned, maxsplit=1)
+        heading = _section_from_heading(split[0])
+        if heading:
+            current_section = heading
+            if len(split) > 1 and split[1].strip():
+                rows.append((index, split[1].strip(), heading))
+            continue
+
+        is_bullet = bool(BULLET_PREFIX_PATTERN.match(raw))
+        if current_section != "general":
+            if is_bullet or ":" in cleaned or len(cleaned.split()) >= 6:
+                rows.append((index, cleaned, current_section))
+                continue
+        if is_bullet:
+            rows.append((index, cleaned, "general"))
+    return rows
+
+
 def _extract_key_experience_points(text: str, role_title: str = "") -> List[str]:
     role_tokens = [
         token
@@ -458,12 +635,17 @@ def _extract_key_experience_points(text: str, role_title: str = "") -> List[str]
         if len(token) >= 4
     ]
     scored_points: List[tuple[int, int, str]] = []
-    for index, sentence in enumerate(_sentence_candidates(text)):
+    section_rows = _section_candidates(text)
+    candidate_rows: List[tuple[int, str, str]] = [
+        *section_rows,
+        *[(index + 1000, sentence, "general") for index, sentence in enumerate(_sentence_candidates(text))],
+    ]
+    for index, sentence, section in candidate_rows:
         for fragment in _jd_point_fragments(sentence):
             cleaned = _normalize_jd_point(fragment)
             if len(cleaned) < 20:
                 continue
-            score = 0
+            score = SECTION_BOOST.get(section, 0)
             if JD_SIGNAL_PATTERN.search(fragment):
                 score += 3
             if any(token in normalize_text(fragment) for token in role_tokens):
@@ -473,7 +655,21 @@ def _extract_key_experience_points(text: str, role_title: str = "") -> List[str]
                 score += 1
             if YEARS_RANGE_PATTERN.search(fragment) or YEARS_PLUS_PATTERN.search(fragment):
                 score += 2
+            is_overview_fluff = bool(OVERVIEW_FLUFF_PATTERN.search(fragment))
+            is_intro_fluff = bool(INTRO_FLUFF_PATTERN.search(fragment))
+            if is_overview_fluff:
+                score -= 2
+            if is_intro_fluff:
+                score -= 1
             if score <= 0:
+                continue
+            if section == "general" and score < 3:
+                continue
+            if is_overview_fluff and section in {"general", "summary"}:
+                continue
+            if is_intro_fluff and section == "summary":
+                continue
+            if score < 4 and is_overview_fluff:
                 continue
             scored_points.append((score, index, cleaned))
 
@@ -481,7 +677,7 @@ def _extract_key_experience_points(text: str, role_title: str = "") -> List[str]
         return []
 
     ordered = [item[2] for item in sorted(scored_points, key=lambda item: (-item[0], item[1]))]
-    return unique_preserving_order(ordered)[:6]
+    return unique_preserving_order(ordered)[:JD_MAX_KEY_POINTS]
 
 
 def _build_jd_summary(
@@ -645,7 +841,7 @@ def extract_job_description_breakdown(job_description: str, role_title: str = ""
     if not key_points:
         key_points = unique_preserving_order(
             [_normalize_jd_point(sentence) for sentence in sentence_candidates if _normalize_jd_point(sentence)]
-        )[:5]
+        )[:JD_MAX_KEY_POINTS]
 
     required_lines = [
         sentence
@@ -658,10 +854,21 @@ def extract_job_description_breakdown(job_description: str, role_title: str = ""
         if re.search(r"\b(preferred|bonus|nice to have|plus)\b", sentence, re.IGNORECASE)
     ]
     required_keywords = _match_phrases(" ".join(required_lines or key_points), KEYWORD_PHRASES)
+    if len(required_keywords) < 4:
+        required_keywords = unique_preserving_order(
+            [
+                *required_keywords,
+                *_match_phrases(" ".join([*required_lines, *key_points, text]), KEYWORD_PHRASES),
+            ]
+        )[:10]
     preferred_keywords = _match_phrases(" ".join(preferred_lines), KEYWORD_PHRASES)
     industry_keywords = _match_phrases(text, INDUSTRY_PHRASES)
     seniority = _match_phrases(" ".join([resolved_role_title, text]), SENIORITY_LEVELS)
     years = _extract_years_signal(text)
+
+    if len(key_points) < JD_MIN_KEY_POINTS:
+        dense_points = _extract_dense_clause_points(text)
+        key_points = unique_preserving_order([*key_points, *dense_points])[:JD_MAX_KEY_POINTS]
 
     suggested_anchors: Dict[str, str] = {
         "title": "critical",
@@ -720,6 +927,17 @@ def ensure_structured_jd_breakdown(
         if _missing_list(key):
             merged[key] = local_breakdown.get(key, [])
 
+    existing_points = unique_preserving_order(
+        [str(value).strip() for value in merged.get("key_experience_points", []) if str(value).strip()]
+    )
+    local_points = unique_preserving_order(
+        [str(value).strip() for value in local_breakdown.get("key_experience_points", []) if str(value).strip()]
+    )
+    if len(existing_points) < JD_MIN_KEY_POINTS:
+        merged["key_experience_points"] = unique_preserving_order([*existing_points, *local_points])[:JD_MAX_KEY_POINTS]
+    else:
+        merged["key_experience_points"] = existing_points[:JD_MAX_KEY_POINTS]
+
     years = merged.get("years")
     local_years = local_breakdown.get("years", {})
     if (
@@ -770,9 +988,11 @@ def _coerce_int(value: Any) -> int | None:
 
 
 def _selected_country_code(countries: List[str]) -> str:
-    if len(countries) != 1:
-        return ""
-    return COUNTRY_TO_ALPHA2.get(normalize_text(countries[0]), "")
+    for country in countries:
+        code = COUNTRY_TO_ALPHA2.get(normalize_text(country), "")
+        if code:
+            return code
+    return ""
 
 
 def _resolve_year_bounds(
@@ -797,6 +1017,119 @@ def _resolve_year_bounds(
     if resolved_min is None and years_value is not None:
         resolved_min = years_value
     return resolved_min, resolved_max
+
+
+def assess_ui_brief_quality(brief_config: Dict[str, Any]) -> Dict[str, Any]:
+    role_title = str(brief_config.get("role_title", "")).strip()
+    geography = brief_config.get("geography", {})
+    if not isinstance(geography, dict):
+        geography = {}
+    location_targets = [
+        str(value).strip()
+        for value in brief_config.get("location_targets", [])
+        if str(value).strip()
+    ]
+    titles = [
+        str(value).strip()
+        for value in brief_config.get("titles", [])
+        if str(value).strip()
+    ]
+    required_keywords = [
+        str(value).strip()
+        for value in brief_config.get("required_keywords", [])
+        if str(value).strip()
+    ]
+    preferred_keywords = [
+        str(value).strip()
+        for value in brief_config.get("preferred_keywords", [])
+        if str(value).strip()
+    ]
+    industry_keywords = [
+        str(value).strip()
+        for value in brief_config.get("industry_keywords", [])
+        if str(value).strip()
+    ]
+    company_targets = [
+        str(value).strip()
+        for value in brief_config.get("company_targets", [])
+        if str(value).strip()
+    ]
+    document_text = str(brief_config.get("document_text", "")).strip()
+    min_years = _coerce_int(brief_config.get("minimum_years_experience"))
+    max_years = _coerce_int(brief_config.get("maximum_years_experience"))
+
+    score = 0
+    issues: List[str] = []
+    suggestions: List[str] = []
+    detail_signals = 0
+
+    if role_title:
+        score += 2
+    else:
+        issues.append("Role title is missing.")
+        suggestions.append("Add a clear role title before running search.")
+
+    geo_present = bool(
+        location_targets
+        or str(geography.get("location_name", "")).strip()
+        or str(geography.get("country", "")).strip()
+    )
+    if geo_present:
+        score += 2
+        detail_signals += 1
+    else:
+        issues.append("Target geography is missing.")
+        suggestions.append("Add at least one country, city, or continent.")
+
+    if len(required_keywords) >= 2:
+        score += 3
+        detail_signals += 1
+    elif required_keywords:
+        score += 2
+        detail_signals += 1
+
+    if len(titles) >= 2:
+        score += 1
+        detail_signals += 1
+
+    if industry_keywords:
+        score += 1
+        detail_signals += 1
+
+    if len(company_targets) >= 2:
+        score += 1
+        detail_signals += 1
+
+    if len(document_text) >= 220:
+        score += 2
+        detail_signals += 1
+    elif len(document_text) >= 100:
+        score += 1
+        detail_signals += 1
+
+    if min_years is not None or max_years is not None:
+        score += 1
+
+    if detail_signals < 2:
+        issues.append("Hunt brief is too thin for reliable ranking.")
+        suggestions.append("Add at least two detail sections: JD text, must-have skills, titles, companies, or industries.")
+
+    ok = bool(role_title and geo_present and detail_signals >= 2 and score >= 5)
+    if ok:
+        message = "Brief details look sufficient for search."
+    else:
+        message = (
+            "Hunt details are not enough yet. Add role title, geography, and at least two detail sections "
+            "(for example JD text + must-have skills) before running search."
+        )
+
+    return {
+        "ok": ok,
+        "score": int(score),
+        "issues": unique_preserving_order(issues),
+        "suggestions": unique_preserving_order(suggestions),
+        "message": message,
+    }
 
 
 def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -874,7 +1207,40 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     csv_export_limit = max(1, int(payload.get("csv_export_limit", limit) or limit))
     reranker_enabled = bool(payload.get("reranker_enabled", True))
     learned_ranker_enabled = bool(payload.get("learned_ranker_enabled", False))
+    top_up_round = max(0, _coerce_int(payload.get("top_up_round")) or 0)
     country_code = _selected_country_code(countries)
+    reranker_requested_top_n = _coerce_int(payload.get("reranker_top_n"))
+    if reranker_requested_top_n is None:
+        if limit >= 400:
+            reranker_requested_top_n = max(220, int(round(limit * 0.6)))
+        elif limit >= 300:
+            reranker_requested_top_n = max(180, int(round(limit * 0.6)))
+        elif limit >= 180:
+            reranker_requested_top_n = limit + 60
+        else:
+            reranker_requested_top_n = max(limit * 2, 220)
+    reranker_floor = max(120, int(round(limit * 0.55))) if limit >= 220 else limit
+    reranker_top_n = min(
+        max(reranker_floor, int(reranker_requested_top_n or reranker_floor)),
+        min(internal_fetch_limit, max(limit, 320)),
+    )
+    scrapingbee_parallel_requests = max(
+        4,
+        _coerce_int(payload.get("provider_parallel_requests"))
+        or (16 if limit >= 220 else (12 if limit >= 120 else 8)),
+    )
+    scrapingbee_pages_per_query = max(
+        1,
+        min(
+            5,
+            (_coerce_int(payload.get("scrapingbee_pages_per_query")) or 1),
+        ),
+    )
+    scrapingbee_max_queries = max(
+        120,
+        _coerce_int(payload.get("scrapingbee_max_queries")) or compute_provider_max_queries(limit),
+    )
+    default_geo_groups = 8 if limit >= 220 else (6 if limit >= 120 else 8)
     providers_settings = {
         "retrieval": {
             "company_chunk_size": int(payload.get("company_chunk_size", 5) or 5),
@@ -883,6 +1249,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "include_broad_slice": True,
             "include_history_slices": bool(payload.get("include_history_slices", True)),
             "include_discovery_slices": bool(payload.get("include_discovery_slices", True)),
+            "geo_fanout_enabled": bool(payload.get("geo_fanout_enabled", True)),
+            "max_geo_groups": max(3, _coerce_int(payload.get("max_geo_groups")) or default_geo_groups),
             "discovery_keyword_chunk_size": int(payload.get("discovery_keyword_chunk_size", 6) or 6),
             "market_keyword_chunk_size": int(payload.get("market_keyword_chunk_size", 5) or 5),
             "history_query_terms": unique_preserving_order(
@@ -896,7 +1264,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "reranker": {
             "enabled": reranker_enabled,
             "model_name": str(payload.get("reranker_model_name", "BAAI/bge-reranker-v2-m3")),
-            "top_n": max(internal_fetch_limit, int(payload.get("reranker_top_n", 40) or 40)),
+            "top_n": reranker_top_n,
             "weight": float(payload.get("reranker_weight", 0.35) or 0.35),
         },
         "learned_ranker": {
@@ -906,6 +1274,12 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         },
         "scrapingbee_google": {
             "country_code": str(payload.get("scrapingbee_country_code", "") or country_code or "us"),
+            "parallel_requests": scrapingbee_parallel_requests,
+            "pages_per_query": scrapingbee_pages_per_query,
+            "max_queries": scrapingbee_max_queries,
+            "max_company_terms_per_query": max(6, _coerce_int(payload.get("max_company_terms_per_query")) or 12),
+            "geo_fanout_enabled": bool(payload.get("geo_fanout_enabled", True)),
+            "max_geo_groups": max(3, _coerce_int(payload.get("max_geo_groups")) or default_geo_groups),
         },
     }
 
@@ -1001,7 +1375,7 @@ def build_app_bootstrap() -> Dict[str, Any]:
     default_model_dir = str(resolve_ranker_model_dir())
     default_output_dir = str(resolve_output_dir())
     code_only_login_enabled = env_flag("HR_HUNTER_CODE_ONLY_LOGIN")
-    return {
+    bootstrap = {
         "auth": {
             "mode": "totp",
             "issuer": "HR Hunter",
@@ -1036,85 +1410,155 @@ def build_app_bootstrap() -> Dict[str, Any]:
             "output_dir": default_output_dir,
         },
         "presets": {
-            "supply_chain_manager_uae": {
-                "project_name": "Supply Chain Manager - UAE",
-                "client_name": "Demo Client",
-                "role_title": "Supply Chain Manager",
+            "ceo_marina_home_emea": {
+                "project_name": "Marina Home - CEO Leadership Search",
+                "client_name": "Marina Home Interiors",
+                "role_title": "Chief Executive Officer (CEO)",
                 "titles": [
-                    "Supply Chain Manager",
-                    "Supply Chain Planning Manager",
-                    "Planning Manager",
-                    "Demand Planning Manager",
-                    "Inventory Planning Manager",
-                    "Logistics Manager",
+                    "Chief Executive Officer",
+                    "CEO",
+                    "Group CEO",
+                    "Managing Director",
+                    "President",
+                    "Chief Operating Officer",
+                    "General Manager",
+                    "Country Manager",
+                    "Business Director",
                 ],
-                "countries": ["United Arab Emirates"],
-                "continents": ["Middle East"],
-                "cities": ["Dubai", "Abu Dhabi", "Sharjah"],
+                "countries": [
+                    "United Arab Emirates",
+                    "Saudi Arabia",
+                    "Qatar",
+                    "Oman",
+                    "Kuwait",
+                    "Bahrain",
+                    "Egypt",
+                    "United Kingdom",
+                    "Germany",
+                    "France",
+                    "Italy",
+                    "Spain",
+                    "Netherlands",
+                    "Poland",
+                    "India",
+                ],
+                "continents": ["Middle East", "Africa", "Europe", "Asia"],
+                "cities": [
+                    "Dubai",
+                    "Abu Dhabi",
+                    "Riyadh",
+                    "Jeddah",
+                    "Doha",
+                    "Muscat",
+                    "Kuwait City",
+                    "Manama",
+                    "Cairo",
+                    "Alexandria",
+                    "London",
+                    "Manchester",
+                    "Berlin",
+                    "Munich",
+                    "Paris",
+                    "Milan",
+                    "Madrid",
+                    "Amsterdam",
+                    "Warsaw",
+                    "Mumbai",
+                    "New Delhi",
+                    "Bengaluru",
+                    "Chennai",
+                ],
                 "company_targets": [
-                    "Majid Al Futtaim",
-                    "Landmark Group",
-                    "Alshaya Group",
-                    "Chalhoub Group",
-                    "noon",
-                    "DP World",
-                    "Emirates",
+                    "Marina Home Interiors",
+                    "Home Centre",
+                    "Pan Emirates",
+                    "The One",
+                    "Al Huzaifa",
+                    "IDdesign",
+                    "IKEA",
+                    "Pottery Barn",
+                    "West Elm",
+                    "Crate & Barrel",
+                    "Williams-Sonoma",
+                    "RH",
+                    "Ethan Allen",
+                    "Roche Bobois",
+                    "BoConcept",
+                    "Kartell",
+                    "CB2",
+                    "Maisons du Monde",
+                    "Zara Home",
+                    "Home Box",
+                    "Harrods Home",
+                    "Selfridges Home",
                 ],
-                "company_match_mode": "past_only",
-                "employment_status_mode": "not_currently_employed",
-                "years_mode": "plus_minus",
-                "years_value": 7,
-                "years_tolerance": 2,
+                "company_match_mode": "both",
+                "employment_status_mode": "any",
+                "years_mode": "at_least",
+                "years_value": 5,
+                "years_tolerance": 0,
+                "max_profiles": 300,
                 "must_have_keywords": [
-                    "Supply Planning",
-                    "Demand Forecasting",
-                    "Inventory Management",
-                    "Logistics",
-                    "ERP",
-                    "SAP",
-                    "Stakeholder management",
-                    "S&OP",
+                    "General Management",
+                    "P&L",
+                    "Business Scaling",
                 ],
                 "nice_to_have_keywords": [
-                    "Procurement",
-                    "Warehouse Operations",
-                    "Last Mile",
-                    "Retail",
-                    "Ecommerce",
+                    "Operational Excellence",
+                    "Team Leadership",
+                    "Brand Development",
+                    "Market Expansion",
+                    "Stakeholder Management",
+                    "Family-Owned Business",
+                    "Founder-Led Transition",
+                    "Board Governance",
+                    "Arabic",
+                    "MBA",
+                    "Home Interiors",
+                    "Omnichannel",
                 ],
-                "industry_keywords": ["retail", "ecommerce", "logistics", "consumer"],
+                "industry_keywords": ["luxury retail", "home furnishings", "interior design", "consumer"],
                 "job_description": (
-                    "We are hiring a Supply Chain Manager based in the UAE to lead planning, inventory, and logistics "
-                    "operations across a regional distribution network. The role requires strong experience in demand "
-                    "forecasting, inventory optimization, supplier and warehouse coordination, and S&OP execution with "
-                    "cross-functional teams. Ideal candidates have worked in retail, ecommerce, logistics, aviation, or "
-                    "consumer distribution environments and are comfortable using ERP systems such as SAP to improve "
-                    "service levels, reduce stock issues, and support business growth across the Middle East."
+                    "Marina Home Interiors is a Dubai-based premium home furnishings brand with operations across the "
+                    "Arabian Gulf region, Egypt, and the Indian subcontinent. We are hiring a visionary CEO to lead "
+                    "the business into its next growth phase as the founder transitions to a formal board role. The "
+                    "role requires strategic leadership, operational excellence, financial stewardship, innovation, and "
+                    "strong stakeholder engagement while preserving the brand's creative identity. Candidates should "
+                    "bring CEO or senior executive leadership experience, ideally in luxury home interiors, premium "
+                    "retail, or design-led consumer businesses, with proven capability in profitability management, "
+                    "international expansion, and leading high-performing executive teams. Experience in family-owned "
+                    "or founder-led environments is advantageous. Fluent English is required and Arabic is an advantage."
                 ),
                 "jd_breakdown": extract_job_description_breakdown(
                     (
-                        "We are hiring a Supply Chain Manager based in the UAE to lead planning, inventory, and logistics "
-                        "operations across a regional distribution network. The role requires strong experience in demand "
-                        "forecasting, inventory optimization, supplier and warehouse coordination, and S&OP execution with "
-                        "cross-functional teams. Ideal candidates have worked in retail, ecommerce, logistics, aviation, or "
-                        "consumer distribution environments and are comfortable using ERP systems such as SAP to improve "
-                        "service levels, reduce stock issues, and support business growth across the Middle East."
+                        "Marina Home Interiors is a Dubai-based premium home furnishings brand with operations across the "
+                        "Arabian Gulf region, Egypt, and the Indian subcontinent. We are hiring a visionary CEO to lead "
+                        "the business into its next growth phase as the founder transitions to a formal board role. The "
+                        "role requires strategic leadership, operational excellence, financial stewardship, innovation, and "
+                        "strong stakeholder engagement while preserving the brand's creative identity. Candidates should "
+                        "bring CEO or senior executive leadership experience, ideally in luxury home interiors, premium "
+                        "retail, or design-led consumer businesses, with proven capability in profitability management, "
+                        "international expansion, and leading high-performing executive teams. Experience in family-owned "
+                        "or founder-led environments is advantageous. Fluent English is required and Arabic is an advantage."
                     ),
-                    role_title="Supply Chain Manager",
+                    role_title="Chief Executive Officer (CEO)",
                 ),
                 "anchors": {
-                    "title": "critical",
-                    "skills": "critical",
-                    "location": "important",
-                    "company": "important",
+                    "title": "preferred",
+                    "skills": "preferred",
+                    "location": "preferred",
+                    "company": "preferred",
                     "years": "preferred",
-                    "industry": "important",
-                    "function": "important",
+                    "industry": "preferred",
+                    "function": "preferred",
                     "semantic": "preferred",
                 },
-            }
+            },
         },
     }
+    # Backward-compat alias for older UI keys.
+    bootstrap["presets"]["supply_chain_manager_uae"] = dict(bootstrap["presets"]["ceo_marina_home_emea"])
+    return bootstrap
 
 
 def safe_artifact_path(raw_path: str, *, workspace_root: Path) -> Path:

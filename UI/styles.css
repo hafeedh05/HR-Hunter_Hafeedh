@@ -465,6 +465,11 @@ select:focus {
   grid-column: span 2;
 }
 
+.candidate-location-row {
+  display: grid;
+  gap: 0.35rem;
+}
+
 .form-split {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -680,7 +685,45 @@ select:focus {
   font-size: 0.92rem;
 }
 
+.job-progress-timing {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.55rem;
+}
+
+.job-progress-timing span {
+  display: grid;
+  gap: 0.12rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--surface-border);
+  background: var(--surface-strong);
+}
+
+.job-progress-timing small {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.job-progress-timing strong {
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
 .job-progress-meta strong {
+  color: var(--text);
+  margin-right: 0.25rem;
+}
+
+.job-progress-counters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.55rem 0.85rem;
+  font-size: 0.88rem;
+  color: var(--text-soft);
+}
+
+.job-progress-counters strong {
   color: var(--text);
   margin-right: 0.25rem;
 }
@@ -701,6 +744,32 @@ select:focus {
 
 .summary-card strong {
   font-size: 1.6rem;
+}
+
+.summary-timing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.55rem;
+  margin: 0 0 0.65rem;
+}
+
+.summary-timing-card {
+  display: grid;
+  gap: 0.16rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--surface-border);
+  background: var(--surface-strong);
+}
+
+.summary-timing-card span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.summary-timing-card strong {
+  font-size: 1.05rem;
 }
 
 .candidate-card {

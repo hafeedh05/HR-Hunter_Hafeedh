@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 from hr_hunter.models import ProviderRunResult, SearchBrief, SearchSlice
 
@@ -21,5 +21,6 @@ class SearchProvider:
         limit: int,
         dry_run: bool,
         exclude_queries: set[str] | None = None,
+        progress_callback: Callable[[Dict[str, Any]], None] | None = None,
     ) -> ProviderRunResult:
         raise NotImplementedError

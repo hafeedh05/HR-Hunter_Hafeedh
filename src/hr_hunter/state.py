@@ -34,6 +34,75 @@ def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
+def _json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except Exception:
+        parsed = {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _default_job_progress(*, target: int = 0, stage: str = "queued", status: str = "queued") -> Dict[str, Any]:
+    normalized_stage = str(stage or "queued").strip().lower() or "queued"
+    normalized_status = str(status or "queued").strip().lower() or "queued"
+    stage_label_map = {
+        "queued": "Queued",
+        "running": "Running",
+        "retrieval": "Retrieval",
+        "dedupe": "Dedupe",
+        "rerank": "Rerank",
+        "finalizing": "Finalizing",
+        "completed": "Completed",
+        "failed": "Failed",
+    }
+    return {
+        "stage": normalized_stage,
+        "stage_label": stage_label_map.get(normalized_stage, normalized_stage.title()),
+        "status": normalized_status,
+        "percent": 0 if normalized_stage not in {"completed"} else 100,
+        "queries_completed": 0,
+        "queries_total": 0,
+        "raw_found": 0,
+        "unique_after_dedupe": 0,
+        "reranked_count": 0,
+        "finalized_count": 0,
+        "target": max(0, int(target or 0)),
+        "round": 0,
+        "message": "",
+        "updated_at": _now(),
+    }
+
+
+def _ensure_jobs_columns(connection: Any) -> None:
+    existing_columns: set[str] = set()
+    try:
+        rows = connection.execute("PRAGMA table_info(jobs)").fetchall()
+    except Exception:
+        rows = []
+    for row in rows:
+        try:
+            name = str(row["name"]).strip()
+        except Exception:
+            name = str(getattr(row, "name", "")).strip()
+        if name:
+            existing_columns.add(name)
+    additions = [
+        ("progress_json", "TEXT DEFAULT '{}'"),
+        ("checkpoint_json", "TEXT DEFAULT '{}'"),
+        ("heartbeat_at", "TEXT DEFAULT ''"),
+    ]
+    for column_name, definition in additions:
+        if column_name in existing_columns:
+            continue
+        try:
+            connection.execute(f"ALTER TABLE jobs ADD COLUMN {column_name} {definition}")
+        except Exception:
+            # Column may already exist on non-SQLite backends or race conditions.
+            pass
+
+
 def _parse_iso_timestamp(value: str) -> datetime | None:
     text = str(value or "").strip()
     if not text:
@@ -250,13 +319,17 @@ def init_state_db(db_path: Path | str | None = None) -> Path | str:
                 status TEXT NOT NULL,
                 payload_json TEXT DEFAULT '{}',
                 result_json TEXT DEFAULT '{}',
+                progress_json TEXT DEFAULT '{}',
+                checkpoint_json TEXT DEFAULT '{}',
                 error_text TEXT DEFAULT '',
                 created_at TEXT NOT NULL,
                 started_at TEXT DEFAULT '',
-                finished_at TEXT DEFAULT ''
+                finished_at TEXT DEFAULT '',
+                heartbeat_at TEXT DEFAULT ''
             );
                 """
             )
+            _ensure_jobs_columns(connection)
         _INITIALIZED_STATE_TARGETS.add(cache_key)
     return target.path if target.backend == "sqlite" else target.locator
 
@@ -542,9 +615,6 @@ def attach_registry_metadata(
         }
         candidate.raw = dict(candidate.raw or {})
         candidate.raw["registry"] = registry_payload
-        candidate.search_strategies = list(
-            dict.fromkeys([*candidate.search_strategies, f"registry_seen:{registry_payload['search_count']}"])
-        )
     return list(candidates)
 
 
@@ -934,49 +1004,214 @@ def summarize_system_state(*, db_path: Path | None = None) -> Dict[str, Any]:
 def enqueue_job(job_type: str, payload: Dict[str, Any], *, db_path: Path | None = None) -> Dict[str, Any]:
     resolved = init_state_db(db_path)
     job_id = f"job_{uuid.uuid4().hex[:12]}"
+    target = 0
+    try:
+        target = int(payload.get("limit", 0) or payload.get("csv_export_limit", 0) or 0)
+    except Exception:
+        target = 0
+    initial_progress = _default_job_progress(target=target, stage="queued", status="queued")
+    now = _now()
     with _connect(resolved) as connection:
         connection.execute(
             """
-            INSERT INTO jobs (id, job_type, status, payload_json, result_json, error_text, created_at, started_at, finished_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO jobs (
+                id, job_type, status, payload_json, result_json, progress_json, checkpoint_json,
+                error_text, created_at, started_at, finished_at, heartbeat_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (job_id, job_type, "queued", _json(payload), "{}", "", _now(), "", ""),
+            (
+                job_id,
+                job_type,
+                "queued",
+                _json(payload),
+                "{}",
+                _json(initial_progress),
+                "{}",
+                "",
+                now,
+                "",
+                "",
+                now,
+            ),
         )
-    return {"db_path": str(resolved), "job_id": job_id, "status": "queued"}
+    return {"db_path": str(resolved), "job_id": job_id, "status": "queued", "progress": initial_progress, "checkpoint": {}}
 
 
 def start_job(job_id: str, *, db_path: Path | None = None) -> None:
     resolved = init_state_db(db_path)
+    existing = load_job(job_id, db_path=resolved) or {}
+    progress = _json_object(existing.get("progress"))
+    if not progress:
+        payload = _json_object(existing.get("payload"))
+        target = int(payload.get("limit", payload.get("csv_export_limit", 0)) or 0)
+        progress = _default_job_progress(target=target, stage="running", status="running")
+    else:
+        progress.update(
+            {
+                "stage": "running",
+                "stage_label": "Running",
+                "status": "running",
+                "message": progress.get("message") or "Search job started.",
+                "updated_at": _now(),
+            }
+        )
+    now = _now()
     with _connect(resolved) as connection:
         connection.execute(
-            "UPDATE jobs SET status = ?, started_at = ? WHERE id = ?",
-            ("running", _now(), job_id),
+            "UPDATE jobs SET status = ?, started_at = ?, progress_json = ?, heartbeat_at = ? WHERE id = ?",
+            ("running", now, _json(progress), now, job_id),
         )
 
 
 def complete_job(job_id: str, result: Dict[str, Any], *, db_path: Path | None = None) -> None:
     resolved = init_state_db(db_path)
+    existing = load_job(job_id, db_path=resolved) or {}
+    progress = _json_object(existing.get("progress"))
+    summary = _json_object(result.get("summary", {}))
+    pipeline_metrics = _json_object(summary.get("pipeline_metrics", {}))
+    finalized_count = int(
+        summary.get(
+            "candidate_count",
+            pipeline_metrics.get("finalized_count", progress.get("finalized_count", 0)),
+        )
+        or 0
+    )
+    elapsed_seconds = int(progress.get("elapsed_seconds", 0) or 0)
+    if elapsed_seconds <= 0:
+        started_at = _parse_iso_timestamp(str(existing.get("started_at", "")).strip())
+        if started_at:
+            elapsed_seconds = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds()))
+    estimated_total_seconds = int(progress.get("estimated_total_seconds", 0) or 0)
+    if estimated_total_seconds <= 0:
+        estimated_total_seconds = elapsed_seconds
+    reranked_count = int(
+        pipeline_metrics.get(
+            "reranked_count",
+            progress.get("reranked_count", 0),
+        )
+        or 0
+    )
+    rerank_target = int(
+        pipeline_metrics.get(
+            "rerank_target",
+            progress.get("rerank_target", reranked_count),
+        )
+        or 0
+    )
+    progress.update(
+        {
+            "stage": "completed",
+            "stage_label": "Completed",
+            "status": "completed",
+            "percent": 100,
+            "queries_completed": int(
+                pipeline_metrics.get("queries_completed", progress.get("queries_completed", 0))
+                or progress.get("queries_completed", 0)
+            ),
+            "queries_total": int(
+                pipeline_metrics.get("queries_total", progress.get("queries_total", 0))
+                or progress.get("queries_total", 0)
+            ),
+            "queries_in_flight": 0,
+            "raw_found": int(
+                pipeline_metrics.get("raw_found", progress.get("raw_found", 0))
+                or progress.get("raw_found", 0)
+            ),
+            "unique_after_dedupe": int(
+                pipeline_metrics.get("unique_after_dedupe", progress.get("unique_after_dedupe", finalized_count))
+                or progress.get("unique_after_dedupe", finalized_count)
+            ),
+            "reranked_count": reranked_count,
+            "rerank_target": max(rerank_target, reranked_count),
+            "finalized_count": finalized_count,
+            "elapsed_seconds": elapsed_seconds,
+            "stage_elapsed_seconds": 0,
+            "estimated_total_seconds": elapsed_seconds,
+            "message": "Search job completed.",
+            "updated_at": _now(),
+        }
+    )
+    now = _now()
     with _connect(resolved) as connection:
         connection.execute(
-            "UPDATE jobs SET status = ?, result_json = ?, finished_at = ? WHERE id = ?",
-            ("completed", _json(result), _now(), job_id),
+            "UPDATE jobs SET status = ?, result_json = ?, progress_json = ?, finished_at = ?, heartbeat_at = ? WHERE id = ?",
+            ("completed", _json(result), _json(progress), now, now, job_id),
         )
 
 
 def fail_job(job_id: str, error_text: str, *, db_path: Path | None = None) -> None:
     resolved = init_state_db(db_path)
+    existing = load_job(job_id, db_path=resolved) or {}
+    progress = _json_object(existing.get("progress"))
+    elapsed_seconds = int(progress.get("elapsed_seconds", 0) or 0)
+    if elapsed_seconds <= 0:
+        started_at = _parse_iso_timestamp(str(existing.get("started_at", "")).strip())
+        if started_at:
+            elapsed_seconds = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds()))
+    estimated_total_seconds = int(progress.get("estimated_total_seconds", 0) or 0)
+    if estimated_total_seconds <= 0:
+        estimated_total_seconds = elapsed_seconds
+    progress.update(
+        {
+            "stage": "failed",
+            "stage_label": "Failed",
+            "status": "failed",
+            "queries_in_flight": 0,
+            "elapsed_seconds": elapsed_seconds,
+            "estimated_total_seconds": elapsed_seconds,
+            "message": str(error_text or STALE_JOB_FAILURE_REASON).strip(),
+            "updated_at": _now(),
+        }
+    )
+    now = _now()
     with _connect(resolved) as connection:
         connection.execute(
-            "UPDATE jobs SET status = ?, error_text = ?, finished_at = ? WHERE id = ?",
-            ("failed", error_text, _now(), job_id),
+            "UPDATE jobs SET status = ?, error_text = ?, progress_json = ?, finished_at = ?, heartbeat_at = ? WHERE id = ?",
+            ("failed", error_text, _json(progress), now, now, job_id),
         )
+
+
+def update_job_progress(
+    job_id: str,
+    progress_patch: Dict[str, Any],
+    *,
+    checkpoint: Dict[str, Any] | None = None,
+    db_path: Path | None = None,
+) -> Dict[str, Any] | None:
+    resolved = init_state_db(db_path)
+    current = load_job(job_id, db_path=resolved)
+    if not current:
+        return None
+    progress = _json_object(current.get("progress"))
+    patch = {key: value for key, value in dict(progress_patch or {}).items() if key}
+    stage_value = str(patch.get("stage", progress.get("stage", ""))).strip().lower()
+    if stage_value and not str(patch.get("stage_label", "")).strip():
+        patch["stage_label"] = stage_value.replace("_", " ").title()
+    progress.update(patch)
+    progress["updated_at"] = _now()
+    checkpoint_payload = _json_object(current.get("checkpoint"))
+    if checkpoint is not None:
+        checkpoint_payload.update({key: value for key, value in dict(checkpoint).items() if key})
+    heartbeat_at = _now()
+    with _connect(resolved) as connection:
+        connection.execute(
+            "UPDATE jobs SET progress_json = ?, checkpoint_json = ?, heartbeat_at = ? WHERE id = ?",
+            (_json(progress), _json(checkpoint_payload), heartbeat_at, job_id),
+        )
+    return load_job(job_id, db_path=resolved)
 
 
 def load_job(job_id: str, *, db_path: Path | None = None) -> Dict[str, Any] | None:
     resolved = init_state_db(db_path)
     with _connect(resolved) as connection:
         row = connection.execute(
-            "SELECT id, job_type, status, payload_json, result_json, error_text, created_at, started_at, finished_at FROM jobs WHERE id = ?",
+            """
+            SELECT id, job_type, status, payload_json, result_json, progress_json, checkpoint_json,
+                   error_text, created_at, started_at, finished_at, heartbeat_at
+            FROM jobs
+            WHERE id = ?
+            """,
             (job_id,),
         ).fetchone()
     if not row:
@@ -987,10 +1222,13 @@ def load_job(job_id: str, *, db_path: Path | None = None) -> Dict[str, Any] | No
         "status": row["status"],
         "payload": json.loads(row["payload_json"] or "{}"),
         "result": json.loads(row["result_json"] or "{}"),
+        "progress": _json_object(row["progress_json"]),
+        "checkpoint": _json_object(row["checkpoint_json"]),
         "error": row["error_text"],
         "created_at": row["created_at"],
         "started_at": row["started_at"],
         "finished_at": row["finished_at"],
+        "heartbeat_at": row["heartbeat_at"],
     }
 
 
@@ -1007,7 +1245,8 @@ def list_jobs(
     with _connect(resolved) as connection:
         rows = connection.execute(
             """
-            SELECT id, job_type, status, payload_json, result_json, error_text, created_at, started_at, finished_at
+            SELECT id, job_type, status, payload_json, result_json, progress_json, checkpoint_json,
+                   error_text, created_at, started_at, finished_at, heartbeat_at
             FROM jobs
             ORDER BY created_at DESC
             LIMIT ?
@@ -1025,10 +1264,13 @@ def list_jobs(
             "status": row["status"],
             "payload": json.loads(row["payload_json"] or "{}"),
             "result": json.loads(row["result_json"] or "{}"),
+            "progress": _json_object(row["progress_json"]),
+            "checkpoint": _json_object(row["checkpoint_json"]),
             "error": row["error_text"],
             "created_at": row["created_at"],
             "started_at": row["started_at"],
             "finished_at": row["finished_at"],
+            "heartbeat_at": row["heartbeat_at"],
         }
         if expected_type and str(job["job_type"]).strip().lower() != expected_type:
             continue
@@ -1062,10 +1304,32 @@ def stop_job(job_id: str, *, reason: str = "", db_path: Path | None = None) -> D
         return existing
     error_text = str(reason or "").strip() or STALE_JOB_FAILURE_REASON
     resolved = init_state_db(db_path)
+    progress = _json_object(existing.get("progress"))
+    elapsed_seconds = int(progress.get("elapsed_seconds", 0) or 0)
+    if elapsed_seconds <= 0:
+        started_at = _parse_iso_timestamp(str(existing.get("started_at", "")).strip())
+        if started_at:
+            elapsed_seconds = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds()))
+    estimated_total_seconds = int(progress.get("estimated_total_seconds", 0) or 0)
+    if estimated_total_seconds <= 0:
+        estimated_total_seconds = elapsed_seconds
+    progress.update(
+        {
+            "stage": "failed",
+            "stage_label": "Failed",
+            "status": "failed",
+            "queries_in_flight": 0,
+            "elapsed_seconds": elapsed_seconds,
+            "estimated_total_seconds": elapsed_seconds,
+            "message": error_text,
+            "updated_at": _now(),
+        }
+    )
+    now = _now()
     with _connect(resolved) as connection:
         connection.execute(
-            "UPDATE jobs SET status = ?, error_text = ?, finished_at = ? WHERE id = ?",
-            ("failed", error_text, _now(), job_id),
+            "UPDATE jobs SET status = ?, error_text = ?, progress_json = ?, finished_at = ?, heartbeat_at = ? WHERE id = ?",
+            ("failed", error_text, _json(progress), now, now, job_id),
         )
     return load_job(job_id, db_path=db_path)
 
@@ -1088,19 +1352,41 @@ def expire_stale_jobs(
     with _connect(resolved) as connection:
         rows = connection.execute(
             """
-            SELECT id, status, created_at, started_at
+            SELECT id, status, created_at, started_at, heartbeat_at, progress_json
             FROM jobs
             WHERE status IN ('queued', 'running')
             ORDER BY created_at ASC
             """
         ).fetchall()
         for row in rows:
-            reference = _parse_iso_timestamp(str(row["started_at"] or "")) or _parse_iso_timestamp(str(row["created_at"] or ""))
+            progress = _json_object(row["progress_json"]) if "progress_json" in row.keys() else {}
+            heartbeat_value = ""
+            if "heartbeat_at" in row.keys():
+                heartbeat_value = str(row["heartbeat_at"] or "")
+            reference = (
+                _parse_iso_timestamp(heartbeat_value)
+                or _parse_iso_timestamp(str(progress.get("updated_at", "") or ""))
+                or _parse_iso_timestamp(str(row["started_at"] or ""))
+                or _parse_iso_timestamp(str(row["created_at"] or ""))
+            )
             if not reference or reference > threshold:
                 continue
+            progress.update(
+                {
+                    "stage": "failed",
+                    "stage_label": "Failed",
+                    "status": "failed",
+                    "message": str(reason).strip() or STALE_JOB_FAILURE_REASON,
+                    "updated_at": _now(),
+                }
+            )
             connection.execute(
-                "UPDATE jobs SET status = ?, error_text = ?, finished_at = ? WHERE id = ? AND status IN ('queued', 'running')",
-                ("failed", str(reason).strip() or STALE_JOB_FAILURE_REASON, _now(), row["id"]),
+                """
+                UPDATE jobs
+                SET status = ?, error_text = ?, progress_json = ?, finished_at = ?, heartbeat_at = ?
+                WHERE id = ? AND status IN ('queued', 'running')
+                """,
+                ("failed", str(reason).strip() or STALE_JOB_FAILURE_REASON, _json(progress), _now(), _now(), row["id"]),
             )
             stale_job_ids.append(str(row["id"]))
     return stale_job_ids

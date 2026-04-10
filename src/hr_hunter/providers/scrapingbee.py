@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from typing import Any, Dict, List
+import time
+from typing import Any, Callable, Dict, List
 from urllib.parse import urlparse
 
 import httpx
@@ -196,10 +197,15 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         self.request_timeout_seconds = float(settings.get("request_timeout_seconds", 30.0))
         self.max_retries = int(settings.get("max_retries", 2))
         self.retry_backoff_seconds = float(settings.get("retry_backoff_seconds", 2.0))
+        self.parallel_requests = max(1, int(settings.get("parallel_requests", 8) or 8))
         self.include_country_only_queries = bool(settings.get("include_country_only_queries", True))
         self.include_relaxed_queries = bool(settings.get("include_relaxed_queries", True))
         self.max_company_aliases_per_query = int(settings.get("max_company_aliases_per_query", 3))
+        self.max_company_terms_per_query = max(1, int(settings.get("max_company_terms_per_query", 12) or 12))
         self.company_slice_location_group_limit = int(settings.get("company_slice_location_group_limit", 0))
+        self.geo_fanout_enabled = bool(settings.get("geo_fanout_enabled", True))
+        self.max_geo_groups = max(1, int(settings.get("max_geo_groups", 10) or 10))
+        self.geo_group_size = max(1, int(settings.get("geo_group_size", 2) or 2))
         self.max_queries = int(settings.get("max_queries", 0))
         self.include_query_terms = list(settings.get("include_query_terms", []))
         self.exclude_query_terms = list(settings.get("exclude_query_terms", []))
@@ -286,20 +292,42 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         return self._chunked(title_values, chunk_size)
 
     def _location_groups(self, brief: SearchBrief) -> List[List[str]]:
-        local_terms = self._unique(
+        canonical_targets = self._unique(
             [
                 brief.geography.location_name,
-                *brief.geography.location_hints[:5],
-            ]
-        )
-        regional_terms = self._unique(
-            [
                 brief.geography.country,
-                *brief.geography.location_hints[5:],
+                *brief.location_targets,
+                *brief.geography.location_hints,
             ]
         )
-        groups = [group for group in [local_terms, regional_terms] if group]
-        return groups or [[brief.geography.location_name, brief.geography.country]]
+        canonical_targets = [value for value in canonical_targets if value]
+        if not canonical_targets:
+            return [[brief.geography.location_name, brief.geography.country]]
+
+        if not self.geo_fanout_enabled:
+            local_terms = self._unique(
+                [
+                    brief.geography.location_name,
+                    *canonical_targets[:5],
+                ]
+            )
+            regional_terms = self._unique(
+                [
+                    brief.geography.country,
+                    *canonical_targets[5:],
+                ]
+            )
+            groups = [group for group in [local_terms, regional_terms] if group]
+            return groups or [canonical_targets]
+
+        fanout_groups: List[List[str]] = [[target] for target in canonical_targets[: self.max_geo_groups]]
+        combined_groups = self._chunked(canonical_targets, self.geo_group_size)
+        for group in combined_groups:
+            if len(fanout_groups) >= self.max_geo_groups:
+                break
+            if group and group not in fanout_groups:
+                fanout_groups.append(group)
+        return fanout_groups[: self.max_geo_groups]
 
     def _site_filters(self) -> str:
         include_terms = [term.strip() for term in self.include_site_terms if str(term).strip()]
@@ -504,6 +532,7 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         query_filters = self._query_filters()
         country_terms = f'"{brief.geography.country}"' if brief.geography.country else ""
         query_terms = self._adjacent_query_terms(slice_config)
+        combined_company_terms = self._build_company_terms(brief, company_targets)
 
         for title_group in title_groups:
             title_terms = " OR ".join(f'"{title}"' for title in title_group if title)
@@ -530,34 +559,25 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                     family_clause = f"({' OR '.join(family_terms)})"
                     if slice_config.search_mode == "history":
                         history_terms = self._adjacent_query_terms(slice_config)
-                        if not history_terms:
+                        if not history_terms or not combined_company_terms:
                             continue
-                        for company in company_targets:
-                            company_aliases = brief.company_aliases.get(company, [company])
-                            company_terms = " OR ".join(
-                                f'"{alias}"'
-                                for alias in company_aliases[: self.max_company_aliases_per_query]
-                                if alias
+                        for variant, location_clause in family_location_terms:
+                            self._append_query_plan(
+                                plans,
+                                seen_fingerprints,
+                                slice_config,
+                                family,
+                                variant,
+                                self._combine_query_parts(
+                                    f"({title_terms})",
+                                    f"({combined_company_terms})",
+                                    f"({history_terms})",
+                                    location_clause,
+                                    family_clause,
+                                    query_filters,
+                                    site_filters,
+                                ),
                             )
-                            if not company_terms:
-                                continue
-                            for variant, location_clause in family_location_terms:
-                                self._append_query_plan(
-                                    plans,
-                                    seen_fingerprints,
-                                    slice_config,
-                                    family,
-                                    variant,
-                                    self._combine_query_parts(
-                                        f"({title_terms})",
-                                        f"({company_terms})",
-                                        f"({history_terms})",
-                                        location_clause,
-                                        family_clause,
-                                        query_filters,
-                                        site_filters,
-                                    ),
-                                )
                         continue
                     for variant, location_clause in family_location_terms:
                         if slice_config.search_mode in {"discovery", "market"}:
@@ -578,32 +598,46 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                             )
                             continue
 
-                        for company in company_targets:
-                            company_aliases = brief.company_aliases.get(company, [company])
-                            company_terms = " OR ".join(
-                                f'"{alias}"'
-                                for alias in company_aliases[: self.max_company_aliases_per_query]
-                                if alias
-                            )
-                            if not company_terms:
-                                continue
-                            self._append_query_plan(
-                                plans,
-                                seen_fingerprints,
-                                slice_config,
-                                family,
-                                variant,
-                                self._combine_query_parts(
-                                    f"({title_terms})",
-                                    f"({company_terms})",
-                                    f"({query_terms})" if query_terms else "",
-                                    location_clause,
-                                    family_clause,
-                                    query_filters,
-                                    site_filters,
-                                ),
-                            )
+                        if not combined_company_terms:
+                            continue
+                        self._append_query_plan(
+                            plans,
+                            seen_fingerprints,
+                            slice_config,
+                            family,
+                            variant,
+                            self._combine_query_parts(
+                                f"({title_terms})",
+                                f"({combined_company_terms})",
+                                f"({query_terms})" if query_terms else "",
+                                location_clause,
+                                family_clause,
+                                query_filters,
+                                site_filters,
+                            ),
+                        )
         return plans
+
+    def _build_company_terms(self, brief: SearchBrief, company_targets: List[str]) -> str:
+        company_terms: List[str] = []
+        seen_terms: set[str] = set()
+        max_terms = max(1, self.max_company_terms_per_query)
+        aliases_per_company = max(1, self.max_company_aliases_per_query)
+
+        for company in company_targets:
+            aliases = brief.company_aliases.get(company, [company])[:aliases_per_company]
+            for alias in aliases:
+                cleaned = str(alias or "").strip()
+                if not cleaned:
+                    continue
+                normalized = normalize_text(cleaned)
+                if not normalized or normalized in seen_terms:
+                    continue
+                seen_terms.add(normalized)
+                company_terms.append(f'"{cleaned}"')
+                if len(company_terms) >= max_terms:
+                    return " OR ".join(company_terms)
+        return " OR ".join(company_terms)
 
     def build_search_queries(self, brief: SearchBrief, slice_config: SearchSlice) -> List[str]:
         return [plan["search"] for plan in self._build_query_plans(brief, slice_config)]
@@ -888,6 +922,7 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         limit: int,
         dry_run: bool,
         exclude_queries: set[str] | None = None,
+        progress_callback: Callable[[Dict[str, Any]], None] | None = None,
     ) -> ProviderRunResult:
         excluded_queries = {value.strip() for value in (exclude_queries or set()) if value and value.strip()}
         excluded_fingerprints = {
@@ -971,75 +1006,103 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                 errors=["Missing SCRAPINGBEE_API_KEY."],
             )
 
+        executable_plans: List[Dict[str, str]] = []
+        executed_queries = 0
+        for slice_config in slices:
+            for plan in self._build_query_plans(brief, slice_config):
+                search_query = plan["search"]
+                family = plan["family"]
+                if self.max_queries > 0 and executed_queries >= self.max_queries:
+                    diagnostics["query_budget_exhausted"] = True
+                    record_query_entry(plan, skipped=True, skip_reason="run_budget")
+                    continue
+                if not self._family_budget_remaining(family, family_query_counts, self.query_family_budgets):
+                    if family not in diagnostics["query_budget"]["family_budget_exhausted"]:
+                        diagnostics["query_budget"]["family_budget_exhausted"].append(family)
+                    record_query_entry(plan, skipped=True, skip_reason="family_budget")
+                    continue
+                if search_query in excluded_queries or plan["fingerprint"] in excluded_fingerprints:
+                    record_query_entry(plan, skipped=True, skip_reason="exclude_query")
+                    continue
+                family_query_counts[family] = family_query_counts.get(family, 0) + 1
+                record_query_entry(plan, skipped=False)
+                executable_plans.append(plan)
+                executed_queries += 1
+
         candidates: List[CandidateProfile] = []
         request_count = 0
         errors: List[str] = []
-        executed_queries = 0
+        queries_completed = 0
+        raw_found = 0
+        queries_in_flight = 0
+        last_completion_monotonic = time.monotonic()
+        total_query_pages = len(executable_plans) * max(1, self.pages_per_query)
+        lock = asyncio.Lock()
+        stop_event = asyncio.Event()
+        telemetry_done = asyncio.Event()
 
-        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
-            for slice_config in slices:
-                if len(candidates) >= limit:
-                    break
+        if progress_callback:
+            progress_callback(
+                {
+                    "provider": self.name,
+                    "stage": "retrieval",
+                    "queries_total": total_query_pages,
+                    "queries_completed": 0,
+                    "raw_found": 0,
+                    "queries_in_flight": 0,
+                    "message": f"Running {len(executable_plans)} query slices across geographies.",
+                }
+            )
 
-                for plan in self._build_query_plans(brief, slice_config):
-                    search_query = plan["search"]
-                    family = plan["family"]
-                    if self.max_queries > 0 and executed_queries >= self.max_queries:
-                        diagnostics["query_budget_exhausted"] = True
-                        break
-                    if not self._family_budget_remaining(family, family_query_counts, self.query_family_budgets):
-                        if family not in diagnostics["query_budget"]["family_budget_exhausted"]:
-                            diagnostics["query_budget"]["family_budget_exhausted"].append(family)
-                        record_query_entry(plan, skipped=True, skip_reason="family_budget")
-                        continue
-                    if search_query in excluded_queries or plan["fingerprint"] in excluded_fingerprints:
-                        record_query_entry(plan, skipped=True, skip_reason="exclude_query")
-                        continue
-
-                    family_query_counts[family] = family_query_counts.get(family, 0) + 1
-                    record_query_entry(plan, skipped=False)
-                    executed_queries += 1
-                    for page in range(1, self.pages_per_query + 1):
-                        response = None
-                        for attempt in range(self.max_retries + 1):
-                            try:
-                                response = await self.client.search(
-                                    client,
-                                    search_query,
-                                    page=page,
-                                    country_code=self.country_code,
-                                    language=self.language,
-                                    light_request=self.light_request,
-                                )
+        async def run_plan(plan: Dict[str, str]) -> None:
+            nonlocal request_count, queries_completed, raw_found, queries_in_flight, last_completion_monotonic
+            if stop_event.is_set():
+                return
+            search_query = plan["search"]
+            family = plan["family"]
+            for page in range(1, self.pages_per_query + 1):
+                if stop_event.is_set():
+                    return
+                async with lock:
+                    queries_in_flight += 1
+                response = None
+                try:
+                    for attempt in range(self.max_retries + 1):
+                        try:
+                            response = await self.client.search(
+                                client,
+                                search_query,
+                                page=page,
+                                country_code=self.country_code,
+                                language=self.language,
+                                light_request=self.light_request,
+                            )
+                            async with lock:
                                 request_count += 1
-                            except httpx.HTTPError as exc:
-                                if attempt < self.max_retries:
-                                    await asyncio.sleep(self.retry_backoff_seconds * (attempt + 1))
-                                    continue
-                                errors.append(f"{slice_config.id}: {type(exc).__name__} {exc}")
-                                response = None
-                                break
-
-                            if response.status_code < 400:
-                                break
-
-                            if (
-                                response.status_code in {429, 500, 502, 503, 504}
-                                and attempt < self.max_retries
-                            ):
+                        except httpx.HTTPError as exc:
+                            if attempt < self.max_retries:
                                 await asyncio.sleep(self.retry_backoff_seconds * (attempt + 1))
                                 continue
-
-                            errors.append(
-                                f"{slice_config.id}: HTTP {response.status_code} {response.text[:240]}"
-                            )
+                            async with lock:
+                                errors.append(f"{plan['slice_id']}: {type(exc).__name__} {exc}")
                             response = None
                             break
 
-                        if response is None:
+                        if response.status_code < 400:
                             break
 
+                        if response.status_code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
+                            await asyncio.sleep(self.retry_backoff_seconds * (attempt + 1))
+                            continue
+
+                        async with lock:
+                            errors.append(f"{plan['slice_id']}: HTTP {response.status_code} {response.text[:240]}")
+                        response = None
+                        break
+
+                    if response is not None:
                         payload = response.json()
+                        fresh_candidates: List[CandidateProfile] = []
                         for result in payload.get("organic_results", []):
                             url = result.get("url") or result.get("link") or ""
                             if not self._is_profile_url(url):
@@ -1055,18 +1118,108 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                                 "query_fingerprint": plan["fingerprint"],
                                 "search_query": search_query,
                             }
-                            candidates.append(candidate)
-                            if len(candidates) >= limit:
-                                break
-                        if len(candidates) >= limit:
-                            break
-                    if len(candidates) >= limit:
-                        break
-                if diagnostics.get("query_budget_exhausted"):
+                            fresh_candidates.append(candidate)
+
+                        async with lock:
+                            if fresh_candidates:
+                                candidates.extend(fresh_candidates)
+                                raw_found = len(candidates)
+                                if len(candidates) >= limit:
+                                    stop_event.set()
+
+                    async with lock:
+                        queries_completed += 1
+                        last_completion_monotonic = time.monotonic()
+                finally:
+                    async with lock:
+                        queries_in_flight = max(0, queries_in_flight - 1)
+                        telemetry = {
+                            "provider": self.name,
+                            "stage": "retrieval",
+                            "queries_total": total_query_pages,
+                            "queries_completed": queries_completed,
+                            "raw_found": raw_found,
+                            "queries_in_flight": queries_in_flight,
+                            "message": f"Query {queries_completed}/{max(1, total_query_pages)} completed.",
+                        }
+                    if progress_callback:
+                        progress_callback(telemetry)
+
+                if response is None and stop_event.is_set():
+                    return
+
+        async def emit_progress_heartbeat() -> None:
+            while not telemetry_done.is_set():
+                await asyncio.sleep(3.0)
+                if telemetry_done.is_set():
                     break
+                async with lock:
+                    completed = int(queries_completed)
+                    total = int(total_query_pages)
+                    found = int(raw_found)
+                    in_flight = int(queries_in_flight)
+                stalled_for = max(0, int(time.monotonic() - last_completion_monotonic))
+                pending = max(0, total - completed)
+                if progress_callback:
+                    progress_callback(
+                        {
+                            "provider": self.name,
+                            "stage": "retrieval",
+                            "queries_total": total,
+                            "queries_completed": completed,
+                            "raw_found": found,
+                            "queries_in_flight": in_flight,
+                            "queries_pending": pending,
+                            "stalled_for_seconds": stalled_for,
+                            "heartbeat": True,
+                            "message": (
+                                f"Waiting on {in_flight} in-flight query pages; "
+                                f"{completed}/{max(1, total)} completed."
+                                if in_flight > 0
+                                else f"Retrieval active: {completed}/{max(1, total)} completed."
+                            ),
+                        }
+                    )
+
+        async with httpx.AsyncClient(timeout=self.request_timeout_seconds) as client:
+            semaphore = asyncio.Semaphore(self.parallel_requests)
+            heartbeat_task: asyncio.Task | None = None
+
+            async def run_plan_with_limit(plan: Dict[str, str]) -> None:
+                async with semaphore:
+                    await run_plan(plan)
+
+            tasks = [asyncio.create_task(run_plan_with_limit(plan)) for plan in executable_plans]
+            if progress_callback and tasks:
+                heartbeat_task = asyncio.create_task(emit_progress_heartbeat())
+            if tasks:
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    telemetry_done.set()
+                    if heartbeat_task:
+                        try:
+                            await heartbeat_task
+                        except asyncio.CancelledError:
+                            pass
+            if progress_callback:
+                progress_callback(
+                    {
+                        "provider": self.name,
+                        "stage": "retrieval",
+                        "queries_total": int(total_query_pages),
+                        "queries_completed": int(queries_completed),
+                        "raw_found": int(raw_found),
+                        "queries_in_flight": 0,
+                        "message": f"Retrieval complete: {queries_completed}/{max(1, total_query_pages)} query pages finished.",
+                    }
+                )
 
         diagnostics["query_budget"]["executed_per_family"] = family_query_counts
         diagnostics["query_budget"]["skipped_per_family"] = skipped_per_family
+        diagnostics["query_budget"]["executed_query_count"] = len(executable_plans)
+        diagnostics["query_budget"]["query_page_total"] = total_query_pages
+        diagnostics["query_budget"]["query_page_completed"] = queries_completed
 
         return ProviderRunResult(
             provider_name=self.name,

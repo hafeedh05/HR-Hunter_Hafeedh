@@ -26,7 +26,8 @@ DEFAULT_ADMIN_NAME = "HR Hunter Admin"
 DEFAULT_TOTP_ISSUER = "HR Hunter"
 TOTP_DIGITS = 6
 TOTP_PERIOD_SECONDS = 30
-TOTP_VALID_WINDOW = 1
+TOTP_VALID_WINDOW = 2
+FIXED_SECRET_TOTP_VALID_WINDOW = 10
 SESSION_TTL_DAYS = 30
 PROJECT_STATUS_OPTIONS = [
     {"id": "active", "label": "Active"},
@@ -81,6 +82,22 @@ def _normalize_otp_code(code: str) -> str:
     return "".join(character for character in str(code or "") if character.isdigit())
 
 
+def _fixed_totp_secret() -> str:
+    return _normalize_totp_secret(str(os.getenv("HR_HUNTER_FIXED_TOTP_SECRET", "")))
+
+
+def _fixed_totp_email() -> str:
+    configured = str(os.getenv("HR_HUNTER_LOGIN_EMAIL", "")).strip().lower()
+    return configured or DEFAULT_ADMIN_EMAIL
+
+
+def _configured_totp_account_name(email: str) -> str:
+    configured = str(os.getenv("HR_HUNTER_TOTP_ACCOUNT_NAME", "")).strip()
+    if configured:
+        return configured
+    return str(email or "").strip().lower()
+
+
 def _totp_secret_bytes(secret: str) -> bytes:
     normalized = _normalize_totp_secret(secret)
     if not normalized:
@@ -107,7 +124,13 @@ def _verify_totp_code(secret: str, code: str, *, at_time: datetime | None = None
     if len(normalized_code) != TOTP_DIGITS:
         return False
     timestamp = at_time or datetime.now(timezone.utc)
-    for offset in range(-TOTP_VALID_WINDOW, TOTP_VALID_WINDOW + 1):
+    fixed_secret = _fixed_totp_secret()
+    valid_window = (
+        FIXED_SECRET_TOTP_VALID_WINDOW
+        if fixed_secret and secrets.compare_digest(_normalize_totp_secret(secret), fixed_secret)
+        else TOTP_VALID_WINDOW
+    )
+    for offset in range(-valid_window, valid_window + 1):
         candidate_time = timestamp + timedelta(seconds=offset * TOTP_PERIOD_SECONDS)
         if secrets.compare_digest(generate_totp_code(secret, at_time=candidate_time), normalized_code):
             return True
@@ -115,7 +138,8 @@ def _verify_totp_code(secret: str, code: str, *, at_time: datetime | None = None
 
 
 def _build_totp_provisioning_uri(*, email: str, secret: str) -> str:
-    label = quote(f"{DEFAULT_TOTP_ISSUER}:{str(email or '').strip().lower()}")
+    account_name = _configured_totp_account_name(email)
+    label = quote(f"{DEFAULT_TOTP_ISSUER}:{account_name}")
     issuer = quote(DEFAULT_TOTP_ISSUER)
     return (
         f"otpauth://totp/{label}"
@@ -129,13 +153,14 @@ def _build_totp_provisioning_uri(*, email: str, secret: str) -> str:
 
 def _serialize_totp_setup(row: Any) -> Dict[str, Any]:
     secret = _normalize_totp_secret(row["totp_secret"])
+    account_name = _configured_totp_account_name(str(row["email"]))
     return {
         "issuer": DEFAULT_TOTP_ISSUER,
-        "account_name": str(row["email"]).strip().lower(),
+        "account_name": account_name,
         "secret": secret,
         "period_seconds": TOTP_PERIOD_SECONDS,
         "digits": TOTP_DIGITS,
-        "provisioning_uri": _build_totp_provisioning_uri(email=row["email"], secret=secret),
+        "provisioning_uri": _build_totp_provisioning_uri(email=account_name, secret=secret),
     }
 
 
@@ -214,7 +239,48 @@ def _ensure_user_totp_secret(
     if not row:
         raise ValueError("Recruiter account not found.")
     existing_secret = _normalize_totp_secret(row["totp_secret"]) if "totp_secret" in set(row.keys()) else ""
-    if rotate or not existing_secret:
+    fixed_secret = _fixed_totp_secret()
+    user_email = str(row["email"]).strip().lower()
+    fixed_email = _fixed_totp_email()
+
+    # Explicit rotate must always rotate to a new key.
+    if rotate:
+        connection.execute(
+            """
+            UPDATE users
+            SET totp_secret = ?, totp_enabled = 1, updated_at = ?
+            WHERE id = ?
+            """,
+            (_generate_totp_secret(), _now(), row["id"]),
+        )
+        row = _load_user_row(connection, user_id=row["id"])
+        return row
+
+    # Fixed secret is a bootstrap/default only; it should not override an already-rotated key.
+    if fixed_secret and user_email == fixed_email:
+        force_fixed = env_flag("HR_HUNTER_FIXED_TOTP_FORCE") or _code_only_login_enabled()
+        if force_fixed and existing_secret and existing_secret != fixed_secret:
+            connection.execute(
+                """
+                UPDATE users
+                SET totp_secret = ?, totp_enabled = 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (fixed_secret, _now(), row["id"]),
+            )
+            row = _load_user_row(connection, user_id=row["id"])
+        elif (not existing_secret) or (not bool(row["totp_enabled"])):
+            connection.execute(
+                """
+                UPDATE users
+                SET totp_secret = ?, totp_enabled = 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (fixed_secret, _now(), row["id"]),
+            )
+            row = _load_user_row(connection, user_id=row["id"])
+        return row
+    if not existing_secret:
         connection.execute(
             """
             UPDATE users
@@ -369,7 +435,7 @@ def _resolve_auth_email(email: str) -> str:
 
 def _invalid_login_message(email: str) -> str:
     if _code_only_login_enabled() and not str(email or "").strip():
-        return "Invalid authenticator code."
+        return "Invalid authenticator code. Check the current code in your authenticator app and make sure the device time is synced."
     return "Invalid email or verification code."
 
 

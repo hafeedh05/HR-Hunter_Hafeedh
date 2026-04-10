@@ -1,6 +1,7 @@
 const STORAGE_KEY = "hr-hunter-ui-v3";
 const SESSION_KEY = "hr-hunter-session-token";
 const SESSION_HANDOFF_KEY = "hr-hunter-session-handoff";
+const SESSION_HASH_KEY = "session_token";
 window.__HR_HUNTER_UI_READY = true;
 const TAB_META = {
   projects: {
@@ -75,10 +76,12 @@ const state = {
   activeJob: null,
   polledJobId: "",
   jobPollHandle: null,
+  liveProgressHandle: null,
   tokenFields: {},
   projectSearchQuery: "",
   candidateSearchQuery: "",
   candidateStatusFilter: "all",
+  candidateLocationFilter: "all",
   selectedCandidateRef: "",
   settings: {},
 };
@@ -274,11 +277,25 @@ async function fetchJSON(url, options = {}) {
     ...sessionHeaders(),
     ...(options.headers || {}),
   };
-  const response = await fetch(url, {
-    method: options.method || "GET",
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  let timeoutHandle = null;
+  const timeoutMs = Math.max(0, safeNumber(options.timeoutMs, 0));
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  if (controller) {
+    timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
+  }
+  let response;
+  try {
+    response = await fetch(url, {
+      method: options.method || "GET",
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+  } finally {
+    if (timeoutHandle) {
+      window.clearTimeout(timeoutHandle);
+    }
+  }
   const contentType = response.headers.get("content-type") || "";
   const payload = contentType.includes("application/json") ? await response.json() : await response.text();
   if (!response.ok) {
@@ -327,17 +344,25 @@ function readStoredState() {
 }
 
 function persistStoredState() {
-  window.localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      settings: state.settings,
-      selectedProjectId: state.selectedProjectId,
-    }),
-  );
+  try {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        settings: state.settings,
+        selectedProjectId: state.selectedProjectId,
+      }),
+    );
+  } catch {
+    // Non-fatal: browser may block storage in managed profiles.
+  }
 }
 
 function clearStoredState() {
-  window.localStorage.removeItem(STORAGE_KEY);
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Non-fatal.
+  }
 }
 
 function setStatus(message, tone = "default", detail = "") {
@@ -625,7 +650,7 @@ function renderBreakdown() {
     root.innerHTML = `<p class="muted">No breakdown yet. Upload a JD file or paste a JD and click Break Down JD.</p>`;
     return;
   }
-  const keyPoints = Array.isArray(breakdown.key_experience_points) ? breakdown.key_experience_points.slice(0, 5) : [];
+  const keyPoints = Array.isArray(breakdown.key_experience_points) ? breakdown.key_experience_points.slice(0, 10) : [];
   const required = Array.isArray(breakdown.required_keywords) ? breakdown.required_keywords : [];
   const preferred = Array.isArray(breakdown.preferred_keywords) ? breakdown.preferred_keywords : [];
   const industries = Array.isArray(breakdown.industry_keywords) ? breakdown.industry_keywords : [];
@@ -805,6 +830,7 @@ function startNewProject() {
   state.activeJob = null;
   state.candidateSearchQuery = "";
   state.candidateStatusFilter = "all";
+  state.candidateLocationFilter = "all";
   state.selectedCandidateRef = "";
   resetProjectForm();
   renderProjectList();
@@ -894,6 +920,75 @@ function buildBriefPayload() {
     reranker_model_name: state.settings.reranker_model_name,
     ui_meta: uiMeta,
   };
+}
+
+function assessHuntReadiness(briefPayload) {
+  const roleTitle = String(briefPayload?.role_title || "").trim();
+  const countries = Array.isArray(briefPayload?.countries) ? briefPayload.countries.filter(Boolean) : [];
+  const continents = Array.isArray(briefPayload?.continents) ? briefPayload.continents.filter(Boolean) : [];
+  const cities = Array.isArray(briefPayload?.cities) ? briefPayload.cities.filter(Boolean) : [];
+  const titles = Array.isArray(briefPayload?.titles) ? briefPayload.titles.filter(Boolean) : [];
+  const mustHave = Array.isArray(briefPayload?.must_have_keywords) ? briefPayload.must_have_keywords.filter(Boolean) : [];
+  const industry = Array.isArray(briefPayload?.industry_keywords) ? briefPayload.industry_keywords.filter(Boolean) : [];
+  const companies = Array.isArray(briefPayload?.company_targets) ? briefPayload.company_targets.filter(Boolean) : [];
+  const typedJD = String(briefPayload?.job_description || "").trim();
+  const uploadedJD = String(briefPayload?.uploaded_job_description_text || "").trim();
+  const jdText = uploadedJD || typedJD;
+
+  let score = 0;
+  let detailSignals = 0;
+  const missing = [];
+
+  if (roleTitle) {
+    score += 2;
+  } else {
+    missing.push("role title");
+  }
+
+  const hasGeo = (countries.length + continents.length + cities.length) > 0;
+  if (hasGeo) {
+    score += 2;
+    detailSignals += 1;
+  } else {
+    missing.push("target geography (country/city/continent)");
+  }
+
+  if (mustHave.length >= 2) {
+    score += 3;
+    detailSignals += 1;
+  } else if (mustHave.length === 1) {
+    score += 2;
+    detailSignals += 1;
+  }
+
+  if (titles.length >= 2) {
+    score += 1;
+    detailSignals += 1;
+  }
+
+  if (industry.length > 0) {
+    score += 1;
+    detailSignals += 1;
+  }
+
+  if (companies.length >= 2) {
+    score += 1;
+    detailSignals += 1;
+  }
+
+  if (jdText.length >= 220) {
+    score += 2;
+    detailSignals += 1;
+  } else if (jdText.length >= 100) {
+    score += 1;
+    detailSignals += 1;
+  }
+
+  const ok = Boolean(roleTitle && hasGeo && detailSignals >= 2 && score >= 5);
+  const message = ok
+    ? "Brief details look sufficient for search."
+    : `Hunt details are not enough yet. Missing: ${missing.join(", ") || "more role detail"}. Add at least two detail sections (for example JD text + must-have skills).`;
+  return { ok, score, message };
 }
 
 function projectPayloadForSave() {
@@ -1158,6 +1253,13 @@ function parseTimestamp(value) {
   return Number.isNaN(timestamp.getTime()) ? null : timestamp;
 }
 
+function durationSecondsBetween(startValue, endValue) {
+  const start = parseTimestamp(startValue);
+  const end = parseTimestamp(endValue);
+  if (!start || !end) return 0;
+  return Math.max(0, (end.getTime() - start.getTime()) / 1000);
+}
+
 function formatDuration(seconds) {
   const totalSeconds = Math.max(0, Math.round(safeNumber(seconds, 0)));
   const hours = Math.floor(totalSeconds / 3600);
@@ -1172,35 +1274,239 @@ function formatDuration(seconds) {
   return `${remainder}s`;
 }
 
-function estimatedJobDurationSeconds(job) {
+function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds = 0) {
   const requested = jobRequestedLimit(job);
+  const stage = String(backendProgress.stage || job?.status || "").toLowerCase();
   if (job?.job_type === "train_ranker") {
     return Math.max(90, 45 + requested);
   }
-  let estimate = 90 + requested * 3.4;
-  if (job?.payload?.include_discovery_slices) estimate += 150;
-  if (job?.payload?.include_history_slices) estimate += 90;
-  if (job?.payload?.registry_memory_enabled) estimate += 45;
-  if (job?.payload?.reranker_enabled) estimate += 210;
-  if (job?.payload?.learned_ranker_enabled) estimate += 75;
-  return Math.max(120, Math.round(estimate));
+  const backendEstimatedTotal = safeNumber(backendProgress.estimated_total_seconds, 0);
+  if (backendEstimatedTotal > 0) {
+    return Math.max(elapsedSeconds + (stage === "completed" ? 0 : 1), Math.round(backendEstimatedTotal));
+  }
+  const queriesTotal = safeNumber(backendProgress.queries_total, 0);
+  const queriesCompleted = safeNumber(backendProgress.queries_completed, 0);
+  const rawFound = safeNumber(backendProgress.raw_found, 0);
+  const uniqueAfterDedupe = safeNumber(backendProgress.unique_after_dedupe, 0);
+  const rerankedCount = safeNumber(backendProgress.reranked_count, 0);
+  const rerankTarget = safeNumber(backendProgress.rerank_target, 0);
+  const finalizedCount = safeNumber(backendProgress.finalized_count, 0);
+  const explicitPercent = safeNumber(backendProgress.percent, NaN);
+  if (stage === "completed") {
+    return Math.max(1, Math.round(elapsedSeconds));
+  }
+  if (stage === "rerank") {
+    if (elapsedSeconds > 5 && rerankTarget > 0 && rerankedCount > 0) {
+      const rerankCoverage = Math.max(0.01, Math.min(0.995, rerankedCount / Math.max(1, rerankTarget)));
+      const projectedTotal = elapsedSeconds / rerankCoverage;
+      return Math.max(elapsedSeconds + 12, Math.min(4 * 3600, Math.round(projectedTotal)));
+    }
+    if (elapsedSeconds > 20 && rerankTarget > 0 && rerankedCount <= 0) {
+      return Math.max(
+        elapsedSeconds + 30,
+        Math.max(
+          240,
+          Math.round(Math.min(4 * 3600, (rerankTarget * 1.25) + 120)),
+        ),
+      );
+    }
+  }
+  if (stage === "finalizing" && elapsedSeconds > 5 && requested > 0 && finalizedCount > 0) {
+    const finalCoverage = Math.max(0.01, Math.min(0.995, finalizedCount / Math.max(1, requested)));
+    const projectedTotal = elapsedSeconds / finalCoverage;
+    return Math.max(elapsedSeconds + 8, Math.min(4 * 3600, Math.round(projectedTotal)));
+  }
+  if (stage === "retrieval" && requested > 0 && elapsedSeconds > 5) {
+    const queryCoverage = queriesTotal > 0 ? queriesCompleted / Math.max(1, queriesTotal) : 0;
+    const uniqueCoverage = uniqueAfterDedupe > 0 ? uniqueAfterDedupe / Math.max(1, requested) : 0;
+    const rawCoverage = rawFound > 0 ? rawFound / Math.max(1, requested * 1.2) : 0;
+    const coverage = Math.max(queryCoverage, uniqueCoverage, rawCoverage);
+    if (coverage >= 0.06) {
+      const projectedRetrievalTotal = elapsedSeconds / Math.min(0.98, coverage);
+      const retrievalTail = Math.max(25, Math.min(180, requested * 0.3));
+      return Math.max(elapsedSeconds + 10, Math.min(4 * 3600, Math.round(projectedRetrievalTotal + retrievalTail)));
+    }
+  }
+  if (stage === "retrieval" && queriesTotal > 0 && queriesCompleted >= 4 && elapsedSeconds > 3) {
+    const remainingQueries = Math.max(0, queriesTotal - queriesCompleted);
+    const perQuerySeconds = Math.max(0.1, elapsedSeconds / Math.max(1, queriesCompleted));
+    const stageOverhead = Math.max(25, Math.min(220, requested * 0.4));
+    const dynamicTotal = elapsedSeconds + (remainingQueries * perQuerySeconds) + stageOverhead;
+    return Math.max(elapsedSeconds + 10, Math.min(4 * 3600, Math.round(dynamicTotal)));
+  }
+  const allowPercentProjection =
+    !(stage === "rerank" && rerankTarget > 0 && rerankedCount <= 0)
+    && !(stage === "finalizing" && finalizedCount <= 0);
+  if (
+    allowPercentProjection
+    && Number.isFinite(explicitPercent)
+    && explicitPercent >= 6
+    && explicitPercent < 100
+    && elapsedSeconds >= 6
+  ) {
+    const projectedTotal = elapsedSeconds / Math.max(0.06, Math.min(0.99, explicitPercent / 100));
+    return Math.max(elapsedSeconds + 6, Math.min(4 * 3600, Math.round(projectedTotal)));
+  }
+  let estimate = queriesTotal > 0 ? Math.max(45, queriesTotal / 4.2) : 55 + requested * 1.2;
+  estimate += Math.max(15, Math.min(90, requested * 0.12));
+  if (job?.payload?.include_discovery_slices) estimate += Math.max(25, requested * 0.18);
+  if (job?.payload?.include_history_slices) estimate += Math.max(15, requested * 0.1);
+  if (job?.payload?.registry_memory_enabled) estimate += 15;
+  if (job?.payload?.reranker_enabled) estimate += Math.max(30, Math.min(160, requested * 0.35));
+  if (job?.payload?.learned_ranker_enabled) estimate += Math.max(10, requested * 0.08);
+  return Math.max(90, Math.min(4 * 3600, Math.round(estimate)));
+}
+
+function jobProgressPayload(job) {
+  if (!job || typeof job.progress !== "object" || Array.isArray(job.progress)) {
+    return {};
+  }
+  return job.progress;
+}
+
+function formatCounterValue(value) {
+  const number = safeNumber(value, 0);
+  if (!Number.isFinite(number)) return "0";
+  return String(Math.max(0, Math.round(number)));
 }
 
 function runningJobProgress(job) {
+  const backendProgress = jobProgressPayload(job);
   const createdAt = parseTimestamp(job?.started_at || job?.created_at);
-  const elapsedSeconds = createdAt ? Math.max(0, (Date.now() - createdAt.getTime()) / 1000) : 0;
-  const estimatedSeconds = estimatedJobDurationSeconds(job);
-  const rawPercent = estimatedSeconds > 0 ? (elapsedSeconds / estimatedSeconds) * 100 : 0;
+  const elapsedFromClock = createdAt ? Math.max(0, (Date.now() - createdAt.getTime()) / 1000) : 0;
+  const backendElapsed = safeNumber(backendProgress.elapsed_seconds, 0);
+  const elapsedSeconds = Math.max(elapsedFromClock, backendElapsed);
   const status = String(job?.status || "").toLowerCase();
-  const progressPercent = status === "queued"
-    ? 4
-    : Math.max(3, Math.min(95, Math.round(rawPercent)));
+  const stage = String(backendProgress.stage || status || "queued").toLowerCase();
+  const lastProgressAt = parseTimestamp(backendProgress.updated_at || job?.heartbeat_at || job?.started_at || job?.created_at);
+  const stalledForSeconds = lastProgressAt ? Math.max(0, (Date.now() - lastProgressAt.getTime()) / 1000) : 0;
+  const rerankedCount = safeNumber(backendProgress.reranked_count, 0);
+  const rerankTargetValue = safeNumber(backendProgress.rerank_target, 0);
+  const rerankTarget = rerankTargetValue > 0 ? rerankTargetValue : 0;
+  const finalizedCount = safeNumber(backendProgress.finalized_count, 0);
+  const explicitPercent = safeNumber(backendProgress.percent, NaN);
+  const explicitPercentUsable = Number.isFinite(explicitPercent)
+    && !((stage === "rerank" && rerankTarget > 0 && rerankedCount <= 0)
+      || (stage === "finalizing" && finalizedCount <= 0));
+  let estimatedSeconds = estimatedJobDurationSeconds(job, backendProgress, elapsedSeconds);
+  const canProjectFromPercent =
+    explicitPercentUsable
+    && explicitPercent >= 4
+    && explicitPercent < 100
+    && elapsedSeconds >= 8
+    && !(
+      stalledForSeconds >= 20
+      && (stage === "rerank" || stage === "finalizing" || stage === "retrieval")
+    );
+  if (canProjectFromPercent) {
+    const percentRatio = Math.max(0.04, Math.min(0.99, explicitPercent / 100));
+    const projectedTotalFromPercent = elapsedSeconds / percentRatio;
+    estimatedSeconds = Math.round((estimatedSeconds * 0.55) + (projectedTotalFromPercent * 0.45));
+  }
+  estimatedSeconds = Math.max(elapsedSeconds + (status === "completed" ? 0 : 2), estimatedSeconds);
+  const rawPercent = estimatedSeconds > 0 ? (elapsedSeconds / estimatedSeconds) * 100 : 0;
+  const elapsedFloorPercent = status === "queued" ? 4 : Math.max(3, Math.min(97, Math.round(rawPercent)));
+  let progressPercent = explicitPercentUsable
+    ? Math.max(1, Math.min(99, Math.round(explicitPercent)))
+    : elapsedFloorPercent;
+  if (stage === "rerank" && rerankTarget > 0 && rerankedCount <= 0) {
+    progressPercent = Math.min(progressPercent, 88);
+  }
+  if (stage === "rerank" && rerankTarget > 0 && rerankedCount > 0) {
+    const rerankPercent = 80 + Math.min(15, Math.round((rerankedCount / rerankTarget) * 15));
+    progressPercent = Math.max(progressPercent, rerankPercent);
+  }
+  if (stage === "finalizing" && progressPercent < 95) {
+    progressPercent = 95;
+  }
+  const queriesCompleted = safeNumber(backendProgress.queries_completed, 0);
+  const queriesTotal = safeNumber(backendProgress.queries_total, 0);
+  const queriesInFlight = stage === "rerank" || stage === "finalizing"
+    ? 0
+    : safeNumber(backendProgress.queries_in_flight, 0);
+  const rawFound = safeNumber(backendProgress.raw_found, 0);
+  const uniqueAfterDedupe = safeNumber(backendProgress.unique_after_dedupe, 0);
+  const stageElapsedRaw = safeNumber(backendProgress.stage_elapsed_seconds, 0);
+  const stageElapsedSeconds = Math.max(0, Math.min(elapsedSeconds, stageElapsedRaw > 0 ? stageElapsedRaw : elapsedSeconds));
+  const stageLabel = String(backendProgress.stage_label || titleCaseWords(stage || "queued"));
+  const message = String(backendProgress.message || "")
+    .replace(/\(\s*\d+\s*s\s*elapsed\s*\)\.?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const etaKnown = !(stage === "rerank" && rerankTarget > 0 && rerankedCount <= 0);
+  const displayedEstimatedSeconds = etaKnown ? estimatedSeconds : 0;
+  const remainingSeconds = etaKnown ? Math.max(0, displayedEstimatedSeconds - elapsedSeconds) : 0;
   return {
     elapsedSeconds,
-    estimatedSeconds,
+    estimatedSeconds: displayedEstimatedSeconds,
+    remainingSeconds,
+    etaKnown,
     progressPercent,
     statusLabel: titleCaseWords(status || "queued"),
+    stage,
+    stageLabel,
+    stageElapsedSeconds,
+    message,
+    queriesCompleted,
+    queriesTotal,
+    queriesInFlight,
+    rawFound,
+    uniqueAfterDedupe,
+    rerankedCount,
+    rerankTarget,
+    finalizedCount,
+    stalledForSeconds,
     requested: jobRequestedLimit(job),
+  };
+}
+
+function latestCompletedSearchJobForCurrentReport() {
+  const job = latestSearchJobForSelectedProject();
+  if (!job || String(job?.job_type || "").toLowerCase() !== "search") {
+    return null;
+  }
+  if (String(job?.status || "").toLowerCase() !== "completed") {
+    return null;
+  }
+  const activeRunId = String(state.currentReport?.run_id || "").trim();
+  const jobRunId = String(job?.result?.run_id || "").trim();
+  if (activeRunId && jobRunId && activeRunId !== jobRunId) {
+    return null;
+  }
+  return job;
+}
+
+function resultsRunTiming() {
+  const completedJob = latestCompletedSearchJobForCurrentReport();
+  if (completedJob) {
+    const runtimeSeconds = durationSecondsBetween(
+      completedJob?.started_at || completedJob?.created_at,
+      completedJob?.finished_at || state.currentReport?.generated_at,
+    );
+    const estimatedSeconds = estimatedJobDurationSeconds(
+      completedJob,
+      jobProgressPayload(completedJob),
+      runtimeSeconds,
+    );
+    return {
+      source: "completed",
+      runtimeSeconds,
+      estimatedSeconds: Math.max(runtimeSeconds, estimatedSeconds),
+    };
+  }
+  const activeJob = activeSearchJobForSelectedProject();
+  if (activeJob) {
+    const progress = runningJobProgress(activeJob);
+    return {
+      source: "active",
+      runtimeSeconds: progress.elapsedSeconds,
+      estimatedSeconds: progress.estimatedSeconds,
+    };
+  }
+  return {
+    source: "none",
+    runtimeSeconds: 0,
+    estimatedSeconds: 0,
   };
 }
 
@@ -1209,7 +1515,24 @@ function runningJobMarkup(job, options = {}) {
   const compact = Boolean(options.compact);
   const heading = options.heading || `${progress.statusLabel} Search`;
   const lead = options.lead || `Requested up to ${progress.requested} candidates.`;
-  const note = options.note || "This is an estimated progress view based on search size and enabled ranking layers.";
+  const note = options.note || "Live stage telemetry from the running backend job.";
+  const queryCounter = progress.queriesTotal > 0
+    ? `${formatCounterValue(progress.queriesCompleted)} / ${formatCounterValue(progress.queriesTotal)}`
+    : formatCounterValue(progress.queriesCompleted);
+  let rerankedCounter = progress.rerankTarget > 0
+    ? `${formatCounterValue(progress.rerankedCount)} / ${formatCounterValue(progress.rerankTarget)}`
+    : formatCounterValue(progress.rerankedCount);
+  if (progress.stage === "rerank" && progress.rerankTarget > 0 && progress.rerankedCount <= 0) {
+    rerankedCounter = `Processing (${formatCounterValue(progress.rerankTarget)} target)`;
+  }
+  const finalizedCounter = progress.finalizedCount > 0
+    ? formatCounterValue(progress.finalizedCount)
+    : (progress.stage === "completed" || progress.stage === "failed" ? "0" : "Pending");
+  const etaValue = progress.etaKnown ? formatDuration(progress.remainingSeconds) : "Calculating...";
+  const estimatedTotalValue = progress.etaKnown ? formatDuration(progress.estimatedSeconds) : "Calculating...";
+  const stallNote = progress.stage === "retrieval" && progress.stalledForSeconds >= 20
+    ? `No fresh completion for ${formatDuration(progress.stalledForSeconds)}. Still waiting on in-flight retrieval requests.`
+    : "";
   return `
     <div class="job-progress-card ${compact ? "job-progress-card-compact" : ""}">
       <div class="job-progress-head">
@@ -1222,11 +1545,39 @@ function runningJobMarkup(job, options = {}) {
       <div class="job-progress-bar">
         <span style="width:${escapeHtml(String(progress.progressPercent))}%"></span>
       </div>
-      <div class="job-progress-meta">
-        <span><strong>Estimated Progress</strong> ${escapeHtml(String(progress.progressPercent))}%</span>
-        <span><strong>Elapsed</strong> ${escapeHtml(formatDuration(progress.elapsedSeconds))}</span>
-        <span><strong>Estimated Time</strong> ${escapeHtml(formatDuration(progress.estimatedSeconds))}</span>
+      <div class="job-progress-timing">
+        <span>
+          <small>Elapsed</small>
+          <strong>${escapeHtml(formatDuration(progress.elapsedSeconds))}</strong>
+        </span>
+        <span>
+          <small>Stage Elapsed</small>
+          <strong>${escapeHtml(formatDuration(progress.stageElapsedSeconds || 0))}</strong>
+        </span>
+        <span>
+          <small>ETA</small>
+          <strong>${escapeHtml(etaValue)}</strong>
+        </span>
+        <span>
+          <small>Estimated Total</small>
+          <strong>${escapeHtml(estimatedTotalValue)}</strong>
+        </span>
       </div>
+      <div class="job-progress-meta">
+        <span><strong>Stage</strong> ${escapeHtml(progress.stageLabel)}</span>
+        <span><strong>Progress</strong> ${escapeHtml(String(progress.progressPercent))}%</span>
+        <span><strong>Target</strong> ${escapeHtml(String(progress.requested))} candidates</span>
+      </div>
+      <div class="job-progress-counters">
+        <span><strong>Queries</strong> ${escapeHtml(queryCounter)}</span>
+        <span><strong>In Flight</strong> ${escapeHtml(formatCounterValue(progress.queriesInFlight))}</span>
+        <span><strong>Raw Found</strong> ${escapeHtml(formatCounterValue(progress.rawFound))}</span>
+        <span><strong>Unique</strong> ${escapeHtml(formatCounterValue(progress.uniqueAfterDedupe))}</span>
+        <span><strong>Reranked</strong> ${escapeHtml(rerankedCounter)}</span>
+        <span><strong>Finalized</strong> ${escapeHtml(finalizedCounter)}</span>
+      </div>
+      ${progress.message ? `<p class="muted small">${escapeHtml(progress.message)}</p>` : ""}
+      ${stallNote ? `<p class="muted small">${escapeHtml(stallNote)}</p>` : ""}
       <p class="muted small">${escapeHtml(note)}</p>
     </div>
   `;
@@ -1257,10 +1608,13 @@ function syncLiveJobStatus() {
   }
   const running = runningJobProgress(activeJob);
   const tone = String(activeJob.status || "").toLowerCase() === "queued" ? "default" : "warning";
+  const liveLine = running.message
+    ? running.message
+    : `${running.stageLabel}: ${formatCounterValue(running.queriesCompleted)} / ${formatCounterValue(running.queriesTotal)} queries, ${formatCounterValue(running.uniqueAfterDedupe)} unique.`;
   setStatus(
     `Search ${String(activeJob.status || "").toLowerCase() === "queued" ? "queued" : "running"}.`,
     tone,
-    `${running.statusLabel} for up to ${running.requested} candidates. Elapsed ${formatDuration(running.elapsedSeconds)} so far.`,
+    `${running.statusLabel} for up to ${running.requested} candidates. ${liveLine} Elapsed ${formatDuration(running.elapsedSeconds)}.`,
   );
   renderStatusJobPanel(activeJob);
   return true;
@@ -1282,6 +1636,22 @@ function currentCandidates() {
   return Array.isArray(state.currentReport?.candidates) ? state.currentReport.candidates : [];
 }
 
+function candidateLocationLabel(candidate) {
+  const location = String(candidate?.location_name || "").trim();
+  return location || "Unknown Location";
+}
+
+function candidateLocationBuckets() {
+  const counts = new Map();
+  currentCandidates().forEach((candidate) => {
+    const location = candidateLocationLabel(candidate);
+    counts.set(location, (counts.get(location) || 0) + 1);
+  });
+  return Array.from(counts.entries())
+    .map(([location, count]) => ({ location, count }))
+    .sort((left, right) => (right.count - left.count) || left.location.localeCompare(right.location));
+}
+
 function currentRequestedCandidateLimit() {
   const formLimit = document.getElementById("candidate-limit")?.value;
   const savedLimit =
@@ -1293,9 +1663,14 @@ function currentRequestedCandidateLimit() {
 
 function filteredCandidates() {
   const query = String(state.candidateSearchQuery || "").trim().toLowerCase();
+  const locationFilter = String(state.candidateLocationFilter || "all");
   return currentCandidates().filter((candidate) => {
     const status = statusFromCandidate(candidate).key;
     if (state.candidateStatusFilter !== "all" && status !== state.candidateStatusFilter) {
+      return false;
+    }
+    const candidateLocation = candidateLocationLabel(candidate);
+    if (locationFilter !== "all" && candidateLocation !== locationFilter) {
       return false;
     }
     if (!query) {
@@ -1391,10 +1766,19 @@ function renderResultsSummary() {
       return;
     }
     if (activeJob) {
-      root.innerHTML = runningJobMarkup(activeJob, {
-        heading: "Search In Progress",
-        lead: `The ${titleCaseWords(activeJob.status)} search requested up to ${jobRequestedLimit(activeJob)} candidates.`,
-      });
+      const live = runningJobProgress(activeJob);
+      const queryCounter = live.queriesTotal > 0
+        ? `${formatCounterValue(live.queriesCompleted)} / ${formatCounterValue(live.queriesTotal)}`
+        : formatCounterValue(live.queriesCompleted);
+      const etaText = live.etaKnown ? formatDuration(live.remainingSeconds) : "Calculating...";
+      root.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>Search In Progress</h4>
+          <p>The ${escapeHtml(titleCaseWords(activeJob.status))} search is running for up to ${escapeHtml(String(jobRequestedLimit(activeJob)))} candidates.</p>
+          <p class="muted">Stage: ${escapeHtml(live.stageLabel)} | Progress: ${escapeHtml(String(live.progressPercent))}% | Queries: ${escapeHtml(queryCounter)}</p>
+          <p class="muted">Elapsed: ${escapeHtml(formatDuration(live.elapsedSeconds))} | ETA: ${escapeHtml(etaText)}</p>
+        </div>
+      `;
       return;
     }
     root.innerHTML = `
@@ -1412,6 +1796,28 @@ function renderResultsSummary() {
     { label: "Needs Review", value: safeNumber(summary.review_count) },
     { label: "Rejected", value: safeNumber(summary.reject_count) },
   ];
+  const timing = resultsRunTiming();
+  const finalRuntime = timing.runtimeSeconds > 0 ? formatDuration(timing.runtimeSeconds) : "Not available";
+  const estimatedRuntime = timing.estimatedSeconds > 0 ? formatDuration(timing.estimatedSeconds) : "Not available";
+  const topLocationBuckets = candidateLocationBuckets().slice(0, 8);
+  const topLocationsMarkup = topLocationBuckets.length
+    ? `
+      <div class="summary-location-row">
+        <p class="muted small">Top Locations</p>
+        <div class="chip-row">
+          ${topLocationBuckets
+            .map((bucket) => `<span class="info-chip"><strong>${escapeHtml(bucket.location)}</strong> ${escapeHtml(String(bucket.count))}</span>`)
+            .join("")}
+        </div>
+      </div>
+    `
+    : "";
+  const timingNote =
+    timing.source === "completed"
+      ? "Timing from the latest completed run."
+      : timing.source === "active"
+        ? "Live timing from the active running search."
+        : "Timing will appear after search telemetry is available.";
   root.innerHTML = `
         <div class="summary-cards">
       ${cards
@@ -1425,6 +1831,18 @@ function renderResultsSummary() {
         )
         .join("")}
         </div>
+        <div class="summary-timing-grid">
+          <div class="summary-timing-card">
+            <span>Final Runtime</span>
+            <strong>${escapeHtml(finalRuntime)}</strong>
+          </div>
+          <div class="summary-timing-card">
+            <span>Estimated Time</span>
+            <strong>${escapeHtml(estimatedRuntime)}</strong>
+          </div>
+        </div>
+        ${topLocationsMarkup}
+        <p class="muted small">${escapeHtml(timingNote)}</p>
         <p class="muted">Latest run: ${escapeHtml(formatTimestamp(state.currentReport.generated_at))} for ${escapeHtml(state.selectedProject.name)}.</p>
         ${activeJob ? `<p class="muted">A newer search is currently ${escapeHtml(titleCaseWords(activeJob.status))}. Requested limit: ${escapeHtml(String(activeJob.payload?.limit || currentRequestedCandidateLimit()))} candidates.</p>` : ""}
         ${failedJob ? `<p class="muted">The latest search failed: ${escapeHtml(failedJob.error || "Retry when ready.")}</p><div class="inline-actions"><button type="button" class="button button-secondary" id="results-retry-search">Retry Search</button></div>` : ""}
@@ -1605,6 +2023,8 @@ function renderCandidateControls() {
   const pillRoot = document.getElementById("candidate-filter-pills");
   const exportRoot = document.getElementById("candidate-export-actions");
   const exportNote = document.getElementById("candidate-export-note");
+  const locationSelect = document.getElementById("candidate-location-filter");
+  const locationNote = document.getElementById("candidate-location-note");
   const buckets = [
     { id: "all", label: "All", count: currentCandidates().length },
     { id: "verified", label: "Verified", count: bucketCountFor("verified") },
@@ -1620,6 +2040,36 @@ function renderCandidateControls() {
       `,
     )
     .join("");
+  const locationBuckets = candidateLocationBuckets();
+  if (locationSelect) {
+    const hasSelectedLocation =
+      state.candidateLocationFilter === "all"
+      || locationBuckets.some((bucket) => bucket.location === state.candidateLocationFilter);
+    if (!hasSelectedLocation) {
+      state.candidateLocationFilter = "all";
+    }
+    locationSelect.innerHTML = [
+      `<option value="all">All Locations (${currentCandidates().length})</option>`,
+      ...locationBuckets.map(
+        (bucket) => `<option value="${escapeHtml(bucket.location)}">${escapeHtml(`${bucket.location} (${bucket.count})`)}</option>`,
+      ),
+    ].join("");
+    locationSelect.value = state.candidateLocationFilter;
+    locationSelect.onchange = () => {
+      state.candidateLocationFilter = locationSelect.value || "all";
+      renderCandidates();
+    };
+  }
+  if (locationNote) {
+    if (!currentCandidates().length) {
+      locationNote.textContent = "Filter by location from the latest candidate set.";
+    } else if (state.candidateLocationFilter === "all") {
+      locationNote.textContent = `${locationBuckets.length} locations in this run.`;
+    } else {
+      const selected = locationBuckets.find((bucket) => bucket.location === state.candidateLocationFilter);
+      locationNote.textContent = `${selected?.count || 0} candidates in ${state.candidateLocationFilter}.`;
+    }
+  }
   const csvPath = state.currentReport?.report_paths?.csv || "";
   if (csvPath) {
     exportRoot.innerHTML = `<a class="button button-secondary" href="${artifactHref(csvPath)}">Export CSV</a>`;
@@ -1680,7 +2130,7 @@ function renderCandidates() {
     tableRoot.innerHTML = `
       <div class="empty-state compact-empty">
         <h4>No Matches For This Filter</h4>
-        <p>Try a different bucket or clear the candidate search field.</p>
+        <p>Try a different review bucket, location, or clear the candidate search field.</p>
       </div>
     `;
     detailRoot.innerHTML = `
@@ -1696,10 +2146,12 @@ function renderCandidates() {
     : candidateIdentityRef(candidates[0]);
   state.selectedCandidateRef = selectedRef;
   const selectedCandidate = candidates.find((candidate) => candidateIdentityRef(candidate) === selectedRef) || candidates[0];
+  const locationFilterLabel =
+    state.candidateLocationFilter === "all" ? "All locations" : state.candidateLocationFilter;
   tableRoot.innerHTML = `
     <div class="candidate-table-meta">
       <p class="muted">Showing ${escapeHtml(String(candidates.length))} of ${escapeHtml(String(currentCandidates().length))} candidates.</p>
-      <p class="muted">Selected bucket: ${escapeHtml(titleCaseWords(state.candidateStatusFilter === "all" ? "all" : state.candidateStatusFilter))}</p>
+      <p class="muted">Bucket: ${escapeHtml(titleCaseWords(state.candidateStatusFilter === "all" ? "all" : state.candidateStatusFilter))} | Location: ${escapeHtml(locationFilterLabel)}</p>
     </div>
     <div class="candidate-table-wrap">
       <table class="candidate-table">
@@ -2081,6 +2533,7 @@ async function loadProject(projectId) {
   state.selectedProject = payload.project;
   state.candidateSearchQuery = "";
   state.candidateStatusFilter = "all";
+  state.candidateLocationFilter = "all";
   state.selectedCandidateRef = "";
   persistStoredState();
   populateProjectForm(payload.project);
@@ -2109,7 +2562,7 @@ async function loadProject(projectId) {
 async function loadLatestProjectJob(projectId) {
   if (!projectId) {
     state.activeJob = null;
-    state.polledJobId = "";
+    clearJobPolling();
     renderOwnerJobs();
     renderResults();
     renderCandidates();
@@ -2128,6 +2581,15 @@ async function loadLatestProjectJob(projectId) {
     state.activeJob = incomingJob;
   } else if (incomingJob && incomingJob.job_id === state.polledJobId) {
     state.activeJob = incomingJob;
+  }
+  if (incomingJob && isActiveJobStatus(incomingJob.status) && String(incomingJob.job_id || "").trim()) {
+    if (state.polledJobId !== String(incomingJob.job_id)) {
+      startJobPolling(incomingJob.job_id);
+    } else {
+      startLiveProgressTicker();
+    }
+  } else if (!incomingJob || !isActiveJobStatus(incomingJob.status)) {
+    clearJobPolling();
   }
   renderOwnerJobs();
   renderResults();
@@ -2162,6 +2624,7 @@ async function loadProjectRun(projectId, runId = "") {
     state.currentReport = null;
     state.candidateSearchQuery = "";
     state.candidateStatusFilter = "all";
+    state.candidateLocationFilter = "all";
     state.selectedCandidateRef = "";
     renderResults();
     renderCandidates();
@@ -2172,6 +2635,7 @@ async function loadProjectRun(projectId, runId = "") {
   state.currentReport = payload && payload.run_id ? payload : null;
   state.candidateSearchQuery = "";
   state.candidateStatusFilter = "all";
+  state.candidateLocationFilter = "all";
   state.selectedCandidateRef = "";
   renderResults();
   renderCandidates();
@@ -2211,6 +2675,7 @@ async function deleteProject() {
   state.currentReviews = [];
   state.candidateSearchQuery = "";
   state.candidateStatusFilter = "all";
+  state.candidateLocationFilter = "all";
   state.selectedCandidateRef = "";
   persistStoredState();
   resetProjectForm();
@@ -2253,16 +2718,23 @@ async function deleteRun(runId) {
 
 async function runSearch() {
   if (!state.user) return;
-  const roleTitle = document.getElementById("role-title").value.trim();
+  const briefPayload = buildBriefPayload();
+  const roleTitle = String(briefPayload.role_title || "").trim();
   if (!roleTitle) {
     setStatus("Role title is required.", "warning", "Add a role title before running search.");
+    switchTab("recruiter");
+    return;
+  }
+  const readiness = assessHuntReadiness(briefPayload);
+  if (!readiness.ok) {
+    setStatus("Add more hunt details.", "warning", readiness.message);
     switchTab("recruiter");
     return;
   }
   try {
     const project = await saveProject();
     const payload = {
-      ...buildBriefPayload(),
+      ...briefPayload,
       project_id: project.id,
     };
     const job = await fetchJSON("/app/search-jobs", { method: "POST", body: payload });
@@ -2283,15 +2755,44 @@ function clearJobPolling() {
     window.clearTimeout(state.jobPollHandle);
     state.jobPollHandle = null;
   }
+  if (state.liveProgressHandle) {
+    window.clearInterval(state.liveProgressHandle);
+    state.liveProgressHandle = null;
+  }
   state.polledJobId = "";
 }
 
+function startLiveProgressTicker() {
+  if (state.liveProgressHandle) {
+    return;
+  }
+  state.liveProgressHandle = window.setInterval(() => {
+    const activeJob = activeSearchJobForSelectedProject();
+    if (!activeJob || !isActiveJobStatus(activeJob.status)) {
+      if (state.liveProgressHandle) {
+        window.clearInterval(state.liveProgressHandle);
+        state.liveProgressHandle = null;
+      }
+      return;
+    }
+    syncLiveJobStatus();
+    if (state.activeTab === "results") {
+      renderResultsSummary();
+    }
+  }, 1000);
+}
+
 function startJobPolling(jobId) {
+  const resolvedJobId = String(jobId || "").trim();
+  if (!resolvedJobId) {
+    return;
+  }
   clearJobPolling();
-  state.polledJobId = String(jobId || "");
+  state.polledJobId = resolvedJobId;
+  startLiveProgressTicker();
   const poll = async () => {
     try {
-      const job = await fetchJSON(`/app/jobs/${encodeURIComponent(jobId)}`);
+      const job = await fetchJSON(`/app/jobs/${encodeURIComponent(resolvedJobId)}`, { timeoutMs: 8000 });
       state.activeJob = job;
       renderOwnerJobs();
       syncLiveJobStatus();
@@ -2446,48 +2947,136 @@ async function handleLogin(event) {
       method: "POST",
       body: { email, otp_code: otpCode },
     });
-    state.sessionToken = payload.session_token;
-    window.localStorage.setItem(SESSION_KEY, state.sessionToken);
-    window.localStorage.setItem(SESSION_HANDOFF_KEY, "1");
     message.textContent = "Signing in...";
-    window.setTimeout(() => {
-      window.location.assign("/");
-    }, 60);
+    await completeLoginPayload(payload);
   } catch (error) {
     showAuthShell();
     message.textContent = error.message;
   }
 }
 
+window.__hrHunterHandleLogin = handleLogin;
+
+function readSessionTokenFromHash() {
+  const raw = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+  const params = new URLSearchParams(raw);
+  return String(params.get(SESSION_HASH_KEY) || "").trim();
+}
+
+function clearSessionTokenFromUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("session");
+  url.hash = "";
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+async function completeLoginPayload(payload) {
+  state.sessionToken = String(payload?.session_token || "").trim();
+  if (!state.sessionToken) {
+    throw new Error("Sign in succeeded but no session token was returned.");
+  }
+  try {
+    window.localStorage.setItem(SESSION_KEY, state.sessionToken);
+    window.localStorage.setItem(SESSION_HANDOFF_KEY, "1");
+  } catch {
+    // Non-fatal: keep the session token in memory for this page load.
+  }
+  showAppShell();
+  setStatus("Restoring your session...", "default", "Loading your projects and hunt workspace.");
+  await completeSessionBootstrap(payload.user, payload.projects || []);
+  try {
+    window.localStorage.removeItem(SESSION_HANDOFF_KEY);
+  } catch {
+    // Non-fatal.
+  }
+  clearSessionTokenFromUrl();
+  switchTab("projects");
+  setStatus(`Welcome back, ${payload.user?.full_name || payload.user?.email || "Recruiter"}.`, "success", "Select a project or open the hunt brief.");
+}
+
+window.__hrHunterCompleteLogin = completeLoginPayload;
+
 async function restoreSession() {
-  const storedToken = window.localStorage.getItem(SESSION_KEY) || "";
-  const handoffFlag = window.localStorage.getItem(SESSION_HANDOFF_KEY) || "";
-  const sessionParam = new URLSearchParams(window.location.search).get("session") || "";
-  if (!storedToken) {
-    showAuthShell();
-    return;
+  const urlSessionParam = new URL(window.location.href).searchParams.get("session") || "";
+  const hashToken = readSessionTokenFromHash();
+  let storedToken = "";
+  try {
+    storedToken = window.localStorage.getItem(SESSION_KEY) || "";
+  } catch {
+    storedToken = "";
   }
-  if (!handoffFlag && !sessionParam) {
-    showAuthShell();
-    return;
+  const resolvedToken = storedToken || hashToken;
+  if (!resolvedToken) {
+    // Attempt cookie-backed session (server may have issued an HttpOnly session cookie).
+    try {
+      const payload = await fetchJSON("/app/auth/session");
+      showAppShell();
+      setStatus("Restoring your session...", "default", "Loading your projects and hunt workspace.");
+      await completeSessionBootstrap(payload.user, payload.projects || []);
+      clearSessionTokenFromUrl();
+      switchTab("projects");
+      setStatus(`Welcome back, ${payload.user.full_name || payload.user.email}.`, "success", "Select a project or open the hunt brief.");
+      return;
+    } catch {
+      showAuthShell();
+      if (urlSessionParam === "auth-failed") {
+        const message = document.getElementById("login-message");
+        if (message) {
+          message.textContent = "Invalid authenticator code. Please try again.";
+        }
+      }
+      clearSessionTokenFromUrl();
+      return;
+    }
   }
-  state.sessionToken = storedToken;
+  if (hashToken && !storedToken) {
+    try {
+      window.localStorage.setItem(SESSION_KEY, hashToken);
+      storedToken = hashToken;
+    } catch {
+      // Non-fatal.
+    }
+  }
+  state.sessionToken = resolvedToken;
   try {
     const payload = await fetchJSON("/app/auth/session");
     showAppShell();
     setStatus("Restoring your session...", "default", "Loading your projects and hunt workspace.");
     await completeSessionBootstrap(payload.user, payload.projects || []);
-    window.localStorage.removeItem(SESSION_HANDOFF_KEY);
-    if (window.location.search) {
-      window.history.replaceState({}, "", "/");
+    try {
+      window.localStorage.removeItem(SESSION_HANDOFF_KEY);
+    } catch {
+      // Non-fatal.
     }
+    clearSessionTokenFromUrl();
     switchTab("projects");
     setStatus(`Welcome back, ${payload.user.full_name || payload.user.email}.`, "success", "Select a project or open the hunt brief.");
   } catch {
-    window.localStorage.removeItem(SESSION_KEY);
-    window.localStorage.removeItem(SESSION_HANDOFF_KEY);
+    try {
+      window.localStorage.removeItem(SESSION_KEY);
+      window.localStorage.removeItem(SESSION_HANDOFF_KEY);
+    } catch {
+      // Non-fatal.
+    }
     state.sessionToken = "";
-    showAuthShell();
+    // If we have a cookie-backed session but the stored token was stale, retry once without the header.
+    try {
+      const payload = await fetchJSON("/app/auth/session");
+      showAppShell();
+      setStatus("Restoring your session...", "default", "Loading your projects and hunt workspace.");
+      await completeSessionBootstrap(payload.user, payload.projects || []);
+      try {
+        window.localStorage.removeItem(SESSION_HANDOFF_KEY);
+      } catch {
+        // Non-fatal.
+      }
+      clearSessionTokenFromUrl();
+      switchTab("projects");
+      setStatus(`Welcome back, ${payload.user.full_name || payload.user.email}.`, "success", "Select a project or open the hunt brief.");
+      return;
+    } catch {
+      showAuthShell();
+    }
   }
 }
 
@@ -2605,7 +3194,9 @@ async function handleRevealUserTotp(userId, rotate = false) {
 }
 
 function loadDemoBrief() {
-  const preset = state.config?.presets?.supply_chain_manager_uae;
+  const preset =
+    state.config?.presets?.ceo_marina_home_emea ||
+    state.config?.presets?.supply_chain_manager_uae;
   if (!preset) return;
   const existingProject = state.selectedProject ? formValuesFromProject(state.selectedProject) : null;
   if (existingProject) {

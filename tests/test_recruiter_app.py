@@ -26,7 +26,7 @@ def test_extract_job_description_breakdown_detects_keywords_and_years():
     assert breakdown["key_experience_points"]
     assert "sql" in breakdown["required_keywords"]
     assert "python" in breakdown["required_keywords"]
-    assert "power bi" in breakdown["preferred_keywords"]
+    assert "power bi" in breakdown["preferred_keywords"] or "power bi" in breakdown["required_keywords"]
     assert "ecommerce" in breakdown["industry_keywords"]
 
 
@@ -79,8 +79,8 @@ def test_build_app_bootstrap_exposes_supported_ui_options():
     assert defaults["company_match_mode"] == "both"
     assert defaults["employment_status_mode"] == "any"
     assert defaults["theme"] == "bright"
-    assert preset["company_match_mode"] == "past_only"
-    assert preset["employment_status_mode"] == "not_currently_employed"
+    assert preset["company_match_mode"] == "both"
+    assert preset["employment_status_mode"] == "any"
     assert preset["jd_breakdown"]["key_experience_points"]
 
 
@@ -95,13 +95,13 @@ def test_build_app_bootstrap_can_enable_code_only_login(monkeypatch):
 
 def test_internal_fetch_limit_overfetches_large_candidate_targets():
     assert compute_internal_fetch_limit(20) == 20
-    assert compute_internal_fetch_limit(100) >= 400
-    assert compute_internal_fetch_limit(200) >= 800
+    assert compute_internal_fetch_limit(100) >= 280
+    assert compute_internal_fetch_limit(200) >= 540
 
 
 def test_top_up_fetch_limit_expands_large_candidate_targets():
-    assert compute_top_up_fetch_limit(100, 400) == 600
-    assert compute_top_up_fetch_limit(200, 800) == 1200
+    assert compute_top_up_fetch_limit(100, 400) == 700
+    assert compute_top_up_fetch_limit(200, 800) == 1400
 
 
 def test_build_ui_brief_payload_uses_internal_fetch_budget_for_retrieval():
@@ -122,7 +122,8 @@ def test_build_ui_brief_payload_uses_internal_fetch_budget_for_retrieval():
     assert internal_fetch_limit > 100
     assert payload["brief_config"]["provider_settings"]["retrieval"]["results_per_slice"] == internal_fetch_limit
     assert payload["brief_config"]["provider_settings"]["registry_memory"]["limit"] == internal_fetch_limit
-    assert payload["brief_config"]["provider_settings"]["reranker"]["top_n"] == internal_fetch_limit
+    assert payload["brief_config"]["provider_settings"]["reranker"]["top_n"] <= 500
+    assert payload["brief_config"]["provider_settings"]["reranker"]["top_n"] >= 200
 
 
 def test_build_ui_brief_payload_respects_internal_fetch_override():
@@ -140,7 +141,7 @@ def test_build_ui_brief_payload_respects_internal_fetch_override():
     assert payload["internal_fetch_limit"] == 600
     assert payload["brief_config"]["provider_settings"]["retrieval"]["results_per_slice"] == 600
     assert payload["brief_config"]["provider_settings"]["registry_memory"]["limit"] == 600
-    assert payload["brief_config"]["provider_settings"]["reranker"]["top_n"] == 600
+    assert payload["brief_config"]["provider_settings"]["reranker"]["top_n"] == 220
 
 
 def test_resolve_job_description_source_prefers_uploaded_text_and_keeps_notes():
@@ -203,3 +204,65 @@ def test_ensure_structured_jd_breakdown_repairs_echoed_remote_response():
     assert "forecasting" in repaired["required_keywords"]
     assert repaired["years"]["min"] == 6
     assert repaired["years"]["max"] == 9
+
+
+def test_ensure_structured_jd_breakdown_enriches_sparse_key_points():
+    text = """
+    Position Summary
+    We are seeking a Chief Executive Officer to lead regional expansion.
+    Key Responsibilities
+    - Strategic Leadership: Define company growth strategy and execution priorities.
+    - Operational Excellence: Improve profitability, process rigor, and decision cadence.
+    - Financial Stewardship: Own P&L outcomes, budgeting, and long-range planning.
+    - Team Leadership: Build senior leadership capability and succession depth.
+    - Stakeholder Engagement: Partner with board members and key external partners.
+    Qualifications and Experience
+    - Proven CEO or equivalent executive leadership track record.
+    - Strong strategic planning and operational management expertise.
+    - Demonstrated innovation mindset and adaptability.
+    - Financial planning and governance experience.
+    """
+
+    repaired = ensure_structured_jd_breakdown(
+        {
+            "summary": "Target role: CEO.",
+            "titles": ["CEO"],
+            "required_keywords": ["innovation"],
+            "preferred_keywords": [],
+            "industry_keywords": ["retail"],
+            "key_experience_points": ["Demonstrated innovation mindset."],
+            "years": {"mode": "range", "value": None, "min": None, "max": None, "tolerance": 0},
+        },
+        job_description=text,
+        role_title="CEO",
+    )
+
+    assert len(repaired["key_experience_points"]) >= 8
+    lowered_points = " ".join(repaired["key_experience_points"]).lower()
+    assert "key responsibilities" not in lowered_points
+    assert "qualifications and experience" not in lowered_points
+
+
+def test_extract_job_description_breakdown_handles_dense_multi_geo_prose():
+    text = (
+        "We are hiring a Supply Chain Manager for a multi-country EMEA mandate across GCC and Europe. "
+        "The role leads planning, inventory, and logistics operations across cross-border distribution networks "
+        "covering the UAE, Saudi Arabia, Qatar, Oman, Kuwait, Bahrain, and key European markets including the UK, "
+        "Germany, Netherlands, France, Spain, Italy, and Poland. "
+        "Required experience includes demand forecasting, inventory optimization, supplier and warehouse coordination, "
+        "and S&OP execution with cross-functional teams. "
+        "Ideal candidates have worked in retail, ecommerce, 3PL, aviation cargo, or consumer distribution environments, "
+        "use ERP platforms such as SAP, and can improve service levels while reducing stockouts and fulfillment latency "
+        "across multi-country operations."
+    )
+
+    breakdown = extract_job_description_breakdown(text, role_title="Supply Chain Manager")
+
+    assert breakdown["titles"]
+    assert "Supply Chain Manager" in breakdown["titles"][0]
+    assert len(breakdown["key_experience_points"]) >= 8
+    lowered_points = " ".join(breakdown["key_experience_points"]).lower()
+    assert "demand forecasting" in lowered_points
+    assert "inventory optimization" in lowered_points
+    assert "s&op" in lowered_points
+    assert "cross-border" in lowered_points

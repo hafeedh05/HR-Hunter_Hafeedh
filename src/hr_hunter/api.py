@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,7 @@ from hr_hunter.output import (
 )
 from hr_hunter.parsers.documents import extract_document_text_from_bytes
 from hr_hunter.recruiter_app import (
+    assess_ui_brief_quality,
     build_app_bootstrap,
     build_ui_brief_payload,
     compute_top_up_fetch_limit,
@@ -45,6 +47,7 @@ from hr_hunter.state import (
     fail_job,
     find_similar_candidates,
     latest_project_job,
+    list_jobs,
     list_review_history,
     list_run_history,
     load_job,
@@ -53,9 +56,11 @@ from hr_hunter.state import (
     stop_job,
     start_job,
     summarize_system_state,
+    update_job_progress,
 )
 from hr_hunter.workspace import (
     PROJECT_STATUS_OPTIONS,
+    SESSION_TTL_DAYS,
     authenticate_user,
     attach_project_run,
     create_project,
@@ -77,8 +82,8 @@ from hr_hunter.workspace import (
 )
 
 try:
-    from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
-    from fastapi.responses import FileResponse
+    from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+    from fastapi.responses import FileResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
 except ImportError as exc:  # pragma: no cover - optional dependency
     FastAPI = None
@@ -87,8 +92,10 @@ except ImportError as exc:  # pragma: no cover - optional dependency
     Form = None
     HTTPException = RuntimeError
     Request = object
+    Response = object
     UploadFile = None
     FileResponse = None
+    RedirectResponse = None
     StaticFiles = None
     FASTAPI_IMPORT_ERROR = exc
 else:
@@ -129,7 +136,30 @@ def _finalize_report_for_limit(report, *, requested_limit: int, internal_fetch_l
     summary["requested_candidate_limit"] = requested
     summary["retrieval_candidate_limit"] = retrieval
     summary["returned_candidate_count"] = len(report.candidates)
-    report.summary = build_reporting_summary(report.candidates, summary)
+    rebuilt_summary = build_reporting_summary(report.candidates, summary)
+    pipeline_metrics = dict(rebuilt_summary.get("pipeline_metrics") or {})
+    reranked_count = max(0, int(pipeline_metrics.get("reranked_count", 0) or 0))
+    rerank_target = max(0, int(pipeline_metrics.get("rerank_target", 0) or 0))
+    unique_after_dedupe = max(
+        len(report.candidates),
+        int(pipeline_metrics.get("unique_after_dedupe", len(report.candidates)) or len(report.candidates)),
+    )
+    rerank_target = max(rerank_target, reranked_count)
+    rerank_target = min(rerank_target, unique_after_dedupe)
+    reranked_count = min(reranked_count, rerank_target) if rerank_target > 0 else reranked_count
+    pipeline_metrics.update(
+        {
+            "queries_completed": max(0, int(pipeline_metrics.get("queries_completed", 0) or 0)),
+            "queries_total": max(0, int(pipeline_metrics.get("queries_total", 0) or 0)),
+            "raw_found": max(0, int(pipeline_metrics.get("raw_found", 0) or 0)),
+            "unique_after_dedupe": unique_after_dedupe,
+            "rerank_target": rerank_target,
+            "reranked_count": reranked_count,
+            "finalized_count": len(report.candidates),
+        }
+    )
+    rebuilt_summary["pipeline_metrics"] = pipeline_metrics
+    report.summary = rebuilt_summary
     return report
 
 
@@ -250,6 +280,9 @@ def _session_token_from_request(request: "Request") -> str:
     header_token = request.headers.get("X-Session-Token", "").strip()
     if header_token:
         return header_token
+    cookie_token = str(getattr(request, "cookies", {}).get("hr_hunter_session", "")).strip()
+    if cookie_token:
+        return cookie_token
     query_token = str(getattr(request, "query_params", {}).get("session_token", "")).strip()
     if query_token:
         return query_token
@@ -306,6 +339,7 @@ def create_app() -> "FastAPI":
         dry_run: bool,
         exclude_report_paths: List[Path] | None = None,
         exclude_history_dirs: List[Path] | None = None,
+        progress_callback: Any = None,
     ):
         exclusion_sources = [*(exclude_report_paths or []), *(exclude_history_dirs or [])]
         exclude_candidate_keys = collect_seen_candidate_keys(exclusion_sources)
@@ -317,6 +351,7 @@ def create_app() -> "FastAPI":
             dry_run=dry_run,
             exclude_candidate_keys=exclude_candidate_keys,
             exclude_provider_queries=exclude_provider_queries,
+            progress_callback=progress_callback,
         )
 
     async def _expand_report_to_requested_limit(
@@ -329,25 +364,43 @@ def create_app() -> "FastAPI":
         execution_backend: str,
         exclude_report_paths: List[Path],
         exclude_history_dirs: List[Path],
+        progress_callback: Any = None,
     ) -> tuple[Any, int]:
         requested = max(1, int(requested_limit or 1))
         current_fetch_limit = max(requested, int(internal_fetch_limit or requested))
         current_unique_count = len(report.candidates)
         top_up_rounds = 0
         top_up_notes: List[str] = []
+        max_rounds = max(1, int(payload.get("top_up_max_rounds", 8) or 8))
+        stagnant_rounds = 0
+        source_exhausted = False
 
-        while current_unique_count < requested:
+        while current_unique_count < requested and top_up_rounds < max_rounds:
             next_fetch_limit = compute_top_up_fetch_limit(requested, current_fetch_limit)
-            if next_fetch_limit <= current_fetch_limit:
+            if next_fetch_limit <= current_fetch_limit and stagnant_rounds > 0:
                 break
 
             top_up_rounds += 1
             round_growth = 0
             payload_override = dict(payload)
             payload_override["internal_fetch_limit_override"] = next_fetch_limit
+            payload_override["top_up_round"] = top_up_rounds
             payload_override["jd_breakdown"] = dict(ui_payload.get("job_description_breakdown", {}))
             top_up_ui_payload = build_ui_brief_payload(payload_override)
             top_up_brief = build_search_brief(top_up_ui_payload["brief_config"])
+
+            if progress_callback:
+                progress_callback(
+                    {
+                        "stage": "retrieval",
+                        "stage_label": "Retrieval",
+                        "message": f"Top-up round {top_up_rounds} started.",
+                        "round": top_up_rounds,
+                        "target": requested,
+                        "unique_after_dedupe": current_unique_count,
+                        "finalized_count": min(current_unique_count, requested),
+                    }
+                )
 
             if execution_backend == "remote_api":
                 try:
@@ -366,6 +419,7 @@ def create_app() -> "FastAPI":
                     dry_run=bool(payload.get("dry_run", False)),
                     exclude_report_paths=exclude_report_paths,
                     exclude_history_dirs=exclude_history_dirs,
+                    progress_callback=progress_callback,
                 )
                 before_merge = len(report.candidates)
                 report = _merge_ranked_report_candidates(report, supplemental_report)
@@ -374,6 +428,11 @@ def create_app() -> "FastAPI":
             current_fetch_limit = next_fetch_limit
             updated_unique_count = len(report.candidates)
             if round_growth <= 0 or updated_unique_count <= current_unique_count:
+                stagnant_rounds += 1
+            else:
+                stagnant_rounds = 0
+            if stagnant_rounds >= 2:
+                source_exhausted = True
                 break
             current_unique_count = updated_unique_count
 
@@ -381,6 +440,8 @@ def create_app() -> "FastAPI":
             summary = dict(report.summary or {})
             summary["top_up_rounds"] = top_up_rounds
             summary["top_up_fetch_limit"] = current_fetch_limit
+            summary["top_up_source_exhausted"] = bool(source_exhausted)
+            summary["top_up_max_rounds"] = max_rounds
             if top_up_notes:
                 summary["top_up_notes"] = top_up_notes[-3:]
             report.summary = summary
@@ -390,6 +451,7 @@ def create_app() -> "FastAPI":
     async def _search_job_runner(job_id: str, payload: Dict[str, Any]) -> None:
         try:
             start_job(job_id)
+            job_started_monotonic = time.monotonic()
             ui_payload = build_ui_brief_payload(payload)
             brief = build_search_brief(ui_payload["brief_config"])
             requested_limit = int(ui_payload["limit"])
@@ -405,13 +467,216 @@ def create_app() -> "FastAPI":
                     ]
                     if str(value).strip()
                 ][:2]
-            )
+                    )
             actor = {
                 "id": str(payload.get("recruiter_id", "")).strip(),
                 "full_name": str(payload.get("recruiter_name", "")).strip(),
                 "team_id": str(payload.get("team_id", "")).strip(),
                 "is_admin": False,
             }
+            last_progress_write = 0.0
+            latest_telemetry: Dict[str, Any] = {
+                "stage": "running",
+                "stage_label": "Running",
+                "queries_completed": 0,
+                "queries_total": 0,
+                "queries_in_flight": 0,
+                "raw_found": 0,
+                "unique_after_dedupe": 0,
+                "reranked_count": 0,
+                "rerank_target": 0,
+                "finalized_count": 0,
+                "stage_elapsed_seconds": 0,
+                "estimated_total_seconds": 0,
+                "target": requested_limit,
+                "round": 0,
+                "percent": 2,
+                "message": "Search job started.",
+            }
+
+            def _push_progress(
+                patch: Dict[str, Any],
+                *,
+                checkpoint_patch: Dict[str, Any] | None = None,
+                force: bool = False,
+            ) -> None:
+                nonlocal last_progress_write
+                now = time.monotonic()
+                if not force and (now - last_progress_write) < 0.6:
+                    return
+                latest_telemetry.update({key: value for key, value in dict(patch or {}).items() if value is not None})
+                latest_telemetry["target"] = requested_limit
+                elapsed_seconds = max(0, int(now - job_started_monotonic))
+                latest_telemetry["elapsed_seconds"] = elapsed_seconds
+                estimated_total_seconds = int(latest_telemetry.get("estimated_total_seconds", 0) or 0)
+                stage = str(latest_telemetry.get("stage", "")).strip().lower() or "running"
+                percent = float(latest_telemetry.get("percent", 0) or 0)
+                reranked_count = int(latest_telemetry.get("reranked_count", 0) or 0)
+                rerank_target = int(latest_telemetry.get("rerank_target", 0) or 0)
+                finalized_count = int(latest_telemetry.get("finalized_count", 0) or 0)
+                target_count = max(1, int(latest_telemetry.get("target", requested_limit) or requested_limit or 1))
+                queries_completed = int(latest_telemetry.get("queries_completed", 0) or 0)
+                queries_total = int(latest_telemetry.get("queries_total", 0) or 0)
+
+                if stage in {"completed", "failed"}:
+                    estimated_total_seconds = max(elapsed_seconds, estimated_total_seconds)
+                elif stage == "rerank" and rerank_target > 0 and reranked_count > 0:
+                    coverage = min(0.995, max(0.01, reranked_count / max(1, rerank_target)))
+                    projected_total = int(elapsed_seconds / coverage)
+                    estimated_total_seconds = max(estimated_total_seconds, projected_total)
+                elif stage == "rerank" and rerank_target > 0:
+                    warmup_budget = max(90, min(1200, int(rerank_target * 1.4)))
+                    projected_total = elapsed_seconds + warmup_budget
+                    estimated_total_seconds = max(estimated_total_seconds, projected_total)
+                elif stage == "finalizing" and finalized_count > 0:
+                    coverage = min(0.995, max(0.01, finalized_count / max(1, target_count)))
+                    projected_total = int(elapsed_seconds / coverage)
+                    estimated_total_seconds = max(estimated_total_seconds, projected_total)
+                elif stage in {"retrieval", "dedupe"} and queries_total > 0 and queries_completed > 0:
+                    query_coverage = min(0.995, max(0.01, queries_completed / max(1, queries_total)))
+                    projected_total = int(elapsed_seconds / query_coverage)
+                    estimated_total_seconds = max(estimated_total_seconds, projected_total)
+                elif estimated_total_seconds <= 0 and percent >= 4 and not (
+                    stage == "rerank" and rerank_target > 0 and reranked_count <= 0
+                ):
+                    projected_total = int(elapsed_seconds / min(0.99, max(0.04, percent / 100.0)))
+                    estimated_total_seconds = projected_total
+
+                latest_telemetry["estimated_total_seconds"] = max(
+                    elapsed_seconds + (0 if stage in {"completed", "failed"} else 2),
+                    min(4 * 3600, max(0, int(estimated_total_seconds or 0))),
+                )
+                update_job_progress(
+                    job_id,
+                    latest_telemetry,
+                    checkpoint={
+                        "project_id": project_id,
+                        "stage": latest_telemetry.get("stage", ""),
+                        "queries_completed": int(latest_telemetry.get("queries_completed", 0) or 0),
+                        "queries_total": int(latest_telemetry.get("queries_total", 0) or 0),
+                        "queries_in_flight": int(latest_telemetry.get("queries_in_flight", 0) or 0),
+                        "raw_found": int(latest_telemetry.get("raw_found", 0) or 0),
+                        "unique_after_dedupe": int(latest_telemetry.get("unique_after_dedupe", 0) or 0),
+                        "reranked_count": int(latest_telemetry.get("reranked_count", 0) or 0),
+                        "rerank_target": int(latest_telemetry.get("rerank_target", 0) or 0),
+                        "finalized_count": int(latest_telemetry.get("finalized_count", 0) or 0),
+                        "stage_elapsed_seconds": int(latest_telemetry.get("stage_elapsed_seconds", 0) or 0),
+                        "estimated_total_seconds": int(latest_telemetry.get("estimated_total_seconds", 0) or 0),
+                        "requested_limit": requested_limit,
+                        "internal_fetch_limit": internal_fetch_limit,
+                        "round": int(latest_telemetry.get("round", 0) or 0),
+                        **(checkpoint_patch or {}),
+                    },
+                )
+                last_progress_write = now
+
+            def _on_pipeline_progress(event: Dict[str, Any]) -> None:
+                stage = str(event.get("stage", "")).strip().lower() or "running"
+                previous_stage = str(latest_telemetry.get("stage", "")).strip().lower() or "running"
+                stage_label_map = {
+                    "retrieval": "Retrieval",
+                    "dedupe": "Dedupe",
+                    "rerank": "Rerank",
+                    "finalizing": "Finalizing",
+                    "running": "Running",
+                }
+                previous_queries_total = int(latest_telemetry.get("queries_total", 0) or 0)
+                previous_queries_completed = int(latest_telemetry.get("queries_completed", 0) or 0)
+                previous_raw_found = int(latest_telemetry.get("raw_found", 0) or 0)
+                previous_unique = int(latest_telemetry.get("unique_after_dedupe", 0) or 0)
+                previous_reranked = int(latest_telemetry.get("reranked_count", 0) or 0)
+                previous_rerank_target = int(latest_telemetry.get("rerank_target", 0) or 0)
+                previous_finalized = int(latest_telemetry.get("finalized_count", 0) or 0)
+
+                queries_total = max(previous_queries_total, int(event.get("queries_total", previous_queries_total) or 0))
+                queries_completed = max(
+                    previous_queries_completed,
+                    int(event.get("queries_completed", previous_queries_completed) or 0),
+                )
+                queries_in_flight = int(event.get("queries_in_flight", latest_telemetry.get("queries_in_flight", 0)) or 0)
+                raw_found = max(previous_raw_found, int(event.get("raw_found", previous_raw_found) or 0))
+                unique_after_dedupe = max(
+                    previous_unique,
+                    int(event.get("unique_after_dedupe", previous_unique) or 0),
+                )
+                reranked_count = max(
+                    previous_reranked,
+                    int(event.get("reranked_count", previous_reranked) or 0),
+                )
+                rerank_target = max(
+                    previous_rerank_target,
+                    int(event.get("rerank_target", previous_rerank_target) or 0),
+                    reranked_count,
+                )
+                if stage == "rerank" and rerank_target <= 0:
+                    rerank_target = max(
+                        previous_rerank_target,
+                        min(
+                            max(1, unique_after_dedupe),
+                            max(1, int(latest_telemetry.get("target", requested_limit) or requested_limit or 1)),
+                        ),
+                    )
+                finalized_count = max(
+                    previous_finalized,
+                    int(event.get("finalized_count", previous_finalized) or 0),
+                )
+                round_number = int(event.get("round", latest_telemetry.get("round", 0)) or 0)
+                stage_elapsed_seconds = int(
+                    event.get(
+                        "stage_elapsed_seconds",
+                        0 if stage != previous_stage else latest_telemetry.get("stage_elapsed_seconds", 0),
+                    )
+                    or 0
+                )
+                estimated_total_seconds = int(event.get("estimated_total_seconds", latest_telemetry.get("estimated_total_seconds", 0)) or 0)
+                if stage in {"rerank", "finalizing"}:
+                    queries_in_flight = 0
+
+                explicit_percent = event.get("percent")
+                if explicit_percent is None:
+                    if stage == "retrieval" and queries_total > 0:
+                        explicit_percent = max(5, min(70, int(round((queries_completed / max(1, queries_total)) * 65 + 5))))
+                    elif stage == "dedupe":
+                        explicit_percent = 72
+                    elif stage == "rerank":
+                        explicit_percent = 84
+                    elif stage == "finalizing":
+                        explicit_percent = 95
+                    else:
+                        explicit_percent = int(latest_telemetry.get("percent", 5) or 5)
+
+                _push_progress(
+                    {
+                        "stage": stage,
+                        "stage_label": stage_label_map.get(stage, stage.title()),
+                        "queries_total": queries_total,
+                        "queries_completed": queries_completed,
+                        "queries_in_flight": queries_in_flight,
+                        "raw_found": raw_found,
+                        "unique_after_dedupe": unique_after_dedupe,
+                        "reranked_count": reranked_count,
+                        "rerank_target": rerank_target,
+                        "finalized_count": finalized_count,
+                        "stage_elapsed_seconds": stage_elapsed_seconds,
+                        "estimated_total_seconds": estimated_total_seconds,
+                        "round": round_number,
+                        "percent": int(max(0, min(99, int(explicit_percent)))),
+                        "message": str(event.get("message", latest_telemetry.get("message", "")) or ""),
+                    },
+                    checkpoint_patch={"event": "progress"},
+                )
+
+            _push_progress(
+                {
+                    "stage": "retrieval",
+                    "stage_label": "Retrieval",
+                    "percent": 4,
+                    "message": "Preparing search pipeline.",
+                },
+                checkpoint_patch={"event": "started"},
+                force=True,
+            )
+
             if project_id:
                 save_project_brief(
                     actor,
@@ -425,6 +690,15 @@ def create_app() -> "FastAPI":
             execution_backend = "local_engine"
             remote_error_message = ""
             if remote_client.is_configured():
+                _push_progress(
+                    {
+                        "stage": "retrieval",
+                        "stage_label": "Retrieval",
+                        "message": "Running remote sourcing request.",
+                        "percent": 8,
+                    },
+                    checkpoint_patch={"event": "remote_request"},
+                )
                 try:
                     report = await remote_client.run_search(payload, ui_payload)
                     execution_backend = "remote_api"
@@ -439,6 +713,7 @@ def create_app() -> "FastAPI":
                         dry_run=bool(payload.get("dry_run", False)),
                         exclude_report_paths=exclude_report_paths,
                         exclude_history_dirs=exclude_history_dirs,
+                        progress_callback=_on_pipeline_progress,
                     )
                     execution_backend = "local_fallback"
             else:
@@ -449,6 +724,7 @@ def create_app() -> "FastAPI":
                     dry_run=bool(payload.get("dry_run", False)),
                     exclude_report_paths=exclude_report_paths,
                     exclude_history_dirs=exclude_history_dirs,
+                    progress_callback=_on_pipeline_progress,
                 )
             report, internal_fetch_limit = await _expand_report_to_requested_limit(
                 report,
@@ -459,11 +735,28 @@ def create_app() -> "FastAPI":
                 execution_backend=execution_backend,
                 exclude_report_paths=exclude_report_paths,
                 exclude_history_dirs=exclude_history_dirs,
+                progress_callback=_on_pipeline_progress,
             )
             report = _finalize_report_for_limit(
                 report,
                 requested_limit=requested_limit,
                 internal_fetch_limit=internal_fetch_limit,
+            )
+            pipeline_metrics = dict(report.summary.get("pipeline_metrics", {}) or {})
+            _push_progress(
+                {
+                    "stage": "finalizing",
+                    "stage_label": "Finalizing",
+                    "percent": 97,
+                    "queries_in_flight": 0,
+                    "rerank_target": int(pipeline_metrics.get("rerank_target", 0) or 0),
+                    "reranked_count": int(pipeline_metrics.get("reranked_count", 0) or 0),
+                    "finalized_count": len(report.candidates),
+                    "stage_elapsed_seconds": 0,
+                    "message": "Persisting final results and artifacts.",
+                },
+                checkpoint_patch={"event": "finalizing"},
+                force=True,
             )
             output_dir = Path(ui_payload["output_dir"])
             json_path, csv_path = write_report(
@@ -525,11 +818,50 @@ def create_app() -> "FastAPI":
         except Exception as exc:
             fail_job(job_id, f"{str(exc).strip() or 'The training job failed unexpectedly.'} Please retry.")
 
+    async def _resume_pending_jobs() -> None:
+        pending: List[Dict[str, Any]] = []
+        pending.extend(list_jobs(limit=500, status="queued"))
+        pending.extend(list_jobs(limit=500, status="running"))
+        seen_ids: set[str] = set()
+        for job in pending:
+            job_id = str(job.get("job_id", "")).strip()
+            if not job_id or job_id in seen_ids:
+                continue
+            seen_ids.add(job_id)
+            if str(job.get("job_type", "")).strip().lower() != "search":
+                continue
+            payload = dict(job.get("payload") or {})
+            if not payload:
+                fail_job(job_id, "The job payload is missing, so this run cannot be resumed. Please retry.")
+                continue
+            update_job_progress(
+                job_id,
+                {
+                    "stage": "running",
+                    "stage_label": "Running",
+                    "status": "running",
+                    "message": "Resuming search after app restart.",
+                    "percent": max(3, int(job.get("progress", {}).get("percent", 3) or 3)),
+                },
+                checkpoint={"event": "resumed_after_restart"},
+            )
+            asyncio.create_task(_search_job_runner(job_id, payload))
+
+    @app.on_event("startup")
+    async def _app_startup_resume_jobs() -> None:
+        await _resume_pending_jobs()
+
     @app.get("/")
     async def home() -> FileResponse:
         if not ui_dir.exists():
             raise HTTPException(status_code=404, detail="UI assets are not installed.")
-        return FileResponse(ui_dir / "index.html")
+        return FileResponse(
+            ui_dir / "index.html",
+            headers={
+                "Cache-Control": "no-store, max-age=0, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
 
     @app.get("/healthz")
     async def healthz() -> Dict[str, str]:
@@ -555,7 +887,7 @@ def create_app() -> "FastAPI":
         return bootstrap
 
     @app.post("/app/auth/login")
-    async def app_auth_login(payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def app_auth_login(payload: Dict[str, Any], response: Response) -> Dict[str, Any]:
         try:
             result = authenticate_user(
                 str(payload.get("email", "")),
@@ -563,8 +895,38 @@ def create_app() -> "FastAPI":
             )
         except Exception as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
+        response.set_cookie(
+            "hr_hunter_session",
+            result["session_token"],
+            httponly=True,
+            samesite="lax",
+            max_age=SESSION_TTL_DAYS * 24 * 60 * 60,
+            path="/",
+        )
         result["projects"] = list_projects(result["user"], limit=40)
         return result
+
+    @app.post("/app/auth/login-form")
+    async def app_auth_login_form(request: Request) -> RedirectResponse:
+        form = await request.form()
+        try:
+            result = authenticate_user(
+                str(form.get("email", "")),
+                str(form.get("otp_code", form.get("totp_code", ""))),
+            )
+        except Exception:
+            return RedirectResponse(url="/?session=auth-failed", status_code=303)
+
+        response = RedirectResponse(url="/?session=ready", status_code=303)
+        response.set_cookie(
+            "hr_hunter_session",
+            result["session_token"],
+            httponly=True,
+            samesite="lax",
+            max_age=SESSION_TTL_DAYS * 24 * 60 * 60,
+            path="/",
+        )
+        return response
 
     @app.get("/app/auth/session")
     async def app_auth_session(request: Request) -> Dict[str, Any]:
@@ -576,10 +938,11 @@ def create_app() -> "FastAPI":
         }
 
     @app.post("/app/auth/logout")
-    async def app_auth_logout(request: Request) -> Dict[str, bool]:
+    async def app_auth_logout(request: Request, response: Response) -> Dict[str, bool]:
         token = _session_token_from_request(request)
         if token:
             revoke_session(token)
+        response.delete_cookie("hr_hunter_session", path="/")
         return {"ok": True}
 
     @app.get("/app/users")
@@ -923,6 +1286,9 @@ def create_app() -> "FastAPI":
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         try:
             ui_payload = build_ui_brief_payload(payload)
+            quality = assess_ui_brief_quality(ui_payload["brief_config"])
+            if not quality.get("ok"):
+                raise ValueError(str(quality.get("message", "Hunt brief details are not enough.")))
             brief = build_search_brief(ui_payload["brief_config"])
             requested_limit = int(ui_payload["limit"])
             internal_fetch_limit = int(ui_payload.get("internal_fetch_limit", requested_limit))
@@ -1150,7 +1516,10 @@ def create_app() -> "FastAPI":
         if not str(payload.get("project_id", "")).strip():
             raise HTTPException(status_code=400, detail="Select or create a project before running search.")
         try:
-            build_ui_brief_payload(payload)
+            ui_payload = build_ui_brief_payload(payload)
+            quality = assess_ui_brief_quality(ui_payload["brief_config"])
+            if not quality.get("ok"):
+                raise ValueError(str(quality.get("message", "Hunt brief details are not enough.")))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         get_project(user, str(payload.get("project_id", "")).strip())

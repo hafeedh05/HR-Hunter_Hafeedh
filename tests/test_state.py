@@ -24,6 +24,7 @@ from hr_hunter.state import (
     start_job,
     stop_job,
     summarize_system_state,
+    update_job_progress,
 )
 from hr_hunter.output import write_report
 
@@ -402,8 +403,14 @@ def test_expire_stale_jobs_marks_old_running_jobs_failed(tmp_path: Path) -> None
     target = db_path
     with connect_database(resolve_database_target(target, env_var="HR_HUNTER_STATE_DB", default_path="output/state/hr_hunter_state.db")) as connection:
         connection.execute(
-            "UPDATE jobs SET created_at = ?, started_at = ? WHERE id = ?",
-            ("2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00", queued["job_id"]),
+            "UPDATE jobs SET created_at = ?, started_at = ?, heartbeat_at = ?, progress_json = ? WHERE id = ?",
+            (
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "{\"updated_at\":\"2026-01-01T00:00:00+00:00\"}",
+                queued["job_id"],
+            ),
         )
 
     expired = expire_stale_jobs(db_path=db_path, max_age_seconds=60)
@@ -415,6 +422,45 @@ def test_expire_stale_jobs_marks_old_running_jobs_failed(tmp_path: Path) -> None
     assert "Please retry" in job["error"]
 
 
+def test_expire_stale_jobs_keeps_running_jobs_with_recent_heartbeat(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.db"
+    queued = enqueue_job("search", {"project_id": "project_live", "role_title": "Operations Lead"}, db_path=db_path)
+    start_job(queued["job_id"], db_path=db_path)
+
+    target = db_path
+    with connect_database(resolve_database_target(target, env_var="HR_HUNTER_STATE_DB", default_path="output/state/hr_hunter_state.db")) as connection:
+        connection.execute(
+            "UPDATE jobs SET created_at = ?, started_at = ?, heartbeat_at = ?, progress_json = ? WHERE id = ?",
+            (
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "{\"updated_at\":\"2026-01-01T00:00:00+00:00\"}",
+                queued["job_id"],
+            ),
+        )
+
+    update_job_progress(
+        queued["job_id"],
+        {
+            "stage": "retrieval",
+            "stage_label": "Retrieval",
+            "percent": 51,
+            "queries_completed": 120,
+            "queries_total": 380,
+            "message": "Still running.",
+        },
+        db_path=db_path,
+    )
+
+    expired = expire_stale_jobs(db_path=db_path, max_age_seconds=60)
+    job = load_job(queued["job_id"], db_path=db_path)
+
+    assert queued["job_id"] not in expired
+    assert job is not None
+    assert job["status"] == "running"
+
+
 def test_expire_stale_jobs_disabled_keeps_running_jobs(tmp_path: Path) -> None:
     db_path = tmp_path / "state.db"
     queued = enqueue_job("search", {"project_id": "project_789", "role_title": "Operations Manager"}, db_path=db_path)
@@ -423,8 +469,14 @@ def test_expire_stale_jobs_disabled_keeps_running_jobs(tmp_path: Path) -> None:
     target = db_path
     with connect_database(resolve_database_target(target, env_var="HR_HUNTER_STATE_DB", default_path="output/state/hr_hunter_state.db")) as connection:
         connection.execute(
-            "UPDATE jobs SET created_at = ?, started_at = ? WHERE id = ?",
-            ("2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00", queued["job_id"]),
+            "UPDATE jobs SET created_at = ?, started_at = ?, heartbeat_at = ?, progress_json = ? WHERE id = ?",
+            (
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "{\"updated_at\":\"2026-01-01T00:00:00+00:00\"}",
+                queued["job_id"],
+            ),
         )
 
     expired = expire_stale_jobs(db_path=db_path, max_age_seconds=0)
@@ -433,3 +485,36 @@ def test_expire_stale_jobs_disabled_keeps_running_jobs(tmp_path: Path) -> None:
     assert expired == []
     assert job is not None
     assert job["status"] == "running"
+
+
+def test_update_job_progress_persists_stage_counters_and_checkpoint(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.db"
+    queued = enqueue_job(
+        "search",
+        {"project_id": "project_progress", "role_title": "Supply Chain Manager", "limit": 300},
+        db_path=db_path,
+    )
+    start_job(queued["job_id"], db_path=db_path)
+
+    updated = update_job_progress(
+        queued["job_id"],
+        {
+            "stage": "retrieval",
+            "stage_label": "Retrieval",
+            "percent": 42,
+            "queries_completed": 85,
+            "queries_total": 200,
+            "raw_found": 124,
+            "unique_after_dedupe": 97,
+            "message": "Retrieval in progress.",
+        },
+        checkpoint={"round": 2, "project_id": "project_progress"},
+        db_path=db_path,
+    )
+
+    assert updated is not None
+    assert updated["progress"]["stage"] == "retrieval"
+    assert updated["progress"]["percent"] == 42
+    assert updated["progress"]["queries_completed"] == 85
+    assert updated["checkpoint"]["round"] == 2
+    assert updated["checkpoint"]["project_id"] == "project_progress"

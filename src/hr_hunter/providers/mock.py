@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Callable, Dict
+
 from hr_hunter.models import CandidateProfile, ProviderRunResult, SearchBrief, SearchSlice
 from hr_hunter.providers.base import SearchProvider
 
@@ -14,6 +16,7 @@ class MockProvider(SearchProvider):
         limit: int,
         dry_run: bool,
         exclude_queries: set[str] | None = None,
+        progress_callback: Callable[[Dict[str, Any]], None] | None = None,
     ) -> ProviderRunResult:
         diagnostics = {
             "slice_count": len(slices),
@@ -54,6 +57,17 @@ class MockProvider(SearchProvider):
                 raw={"fixture": True},
             )
         ]
+        if progress_callback:
+            progress_callback(
+                {
+                    "provider": self.name,
+                    "stage": "retrieval",
+                    "queries_total": 1,
+                    "queries_completed": 1,
+                    "raw_found": len(candidates),
+                    "message": "Mock retrieval completed.",
+                }
+            )
         return ProviderRunResult(
             provider_name=self.name,
             executed=True,

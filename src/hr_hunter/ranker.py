@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from hr_hunter.features import FeatureBuildResult
 from hr_hunter.config import resolve_ranker_model_dir
+from hr_hunter.features import FeatureBuildResult
+from hr_hunter.briefing import normalize_text
 from hr_hunter.models import CandidateProfile, SearchBrief
 from hr_hunter.state import record_model_version
 
@@ -123,6 +124,14 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
     industry_weight = float(brief.anchor_weights.get("industry_fit", 0.0))
     company_mode = brief.company_match_mode
     employment_mode = brief.employment_status_mode
+    normalized_location_targets = {
+        normalize_text(str(value))
+        for value in [*brief.location_targets, brief.geography.location_name, brief.geography.country]
+        if normalize_text(str(value))
+    }
+    broad_location_scope = len(normalized_location_targets) >= 6
+    outside_location_penalty = 10.0 if broad_location_scope else 25.0
+    imprecise_location_penalty = 4.0 if broad_location_scope else 10.0
 
     if brief.company_targets:
         if company_mode == "current_only":
@@ -140,14 +149,22 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
                 score -= min(14.0, company_weight * 14.0 or 12.0)
                 notes.append("ranker_penalty: target_company_history_missing")
         else:
+            broad_company_scope = broad_location_scope or len(brief.company_targets) >= 8
             if features.current_target_company_match:
                 score += 6.0
                 notes.append("ranker_bonus: current_target_company_match")
             elif features.target_company_history_match:
-                score -= 8.0
-                notes.append("ranker_penalty: target_company_history_only")
+                if broad_company_scope:
+                    score += 2.0
+                    notes.append("ranker_bonus: target_company_history_match")
+                else:
+                    score -= 8.0
+                    notes.append("ranker_penalty: target_company_history_only")
             else:
-                score -= min(14.0, company_weight * 14.0)
+                if broad_company_scope:
+                    score -= min(8.0, company_weight * 8.0 or 6.0)
+                else:
+                    score -= min(14.0, company_weight * 14.0)
                 notes.append("ranker_penalty: target_company_missing")
 
     if features.current_title_match:
@@ -158,13 +175,13 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
         notes.append("ranker_penalty: current_title_not_aligned")
 
     if features.location_bucket == "outside_target_area":
-        score -= 25.0
+        score -= outside_location_penalty
         notes.append("ranker_penalty: outside_target_area")
         if location_weight >= 0.7:
             max_score = min(max_score, 45.0)
             cap_reasons.append("outside_target_area")
     elif features.location_bucket in {"country_only", "unknown_location"}:
-        score -= 10.0
+        score -= imprecise_location_penalty
         notes.append("ranker_penalty: imprecise_location")
         if location_weight >= 0.7:
             max_score = min(max_score, 69.0)
@@ -230,10 +247,10 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
             and features.target_company_history_match
             and not features.current_target_company_match
             and company_weight >= 0.75
+            and not (broad_location_scope or len(brief.company_targets) >= 8)
         ):
             max_score = min(max_score, 69.0)
             cap_reasons.append("current_target_company_required")
-
     if (brief.titles or brief.title_keywords) and not features.current_title_match and title_weight >= 0.75:
         max_score = min(max_score, 69.0)
         if "title_alignment_required" not in cap_reasons:
