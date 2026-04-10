@@ -1621,8 +1621,8 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "search_tuning": {
                         "internal_fetch_limit_override": 900,
                         "reranker_top_n": 280,
-                        "provider_parallel_requests": 18,
-                        "scrapingbee_max_queries": 520,
+                        "provider_parallel_requests": 20,
+                        "scrapingbee_max_queries": 140,
                         "max_geo_groups": 10,
                         "company_chunk_size": 4,
                         "company_slice_location_group_limit": 6,
