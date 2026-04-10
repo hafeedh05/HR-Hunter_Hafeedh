@@ -207,6 +207,8 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         self.max_geo_groups = max(1, int(settings.get("max_geo_groups", 10) or 10))
         self.geo_group_size = max(1, int(settings.get("geo_group_size", 2) or 2))
         self.max_queries = int(settings.get("max_queries", 0))
+        self.stagnation_query_window = max(0, int(settings.get("stagnation_query_window", 28) or 28))
+        self.stagnation_min_results = max(0, int(settings.get("stagnation_min_results", 0) or 0))
         self.include_query_terms = list(settings.get("include_query_terms", []))
         self.exclude_query_terms = list(settings.get("exclude_query_terms", []))
         self.include_site_terms = list(
@@ -1036,6 +1038,9 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         raw_found = 0
         queries_in_flight = 0
         last_completion_monotonic = time.monotonic()
+        last_growth_completed = 0
+        last_growth_raw_found = 0
+        stagnation_stop_reason = ""
         total_query_pages = len(executable_plans) * max(1, self.pages_per_query)
         lock = asyncio.Lock()
         stop_event = asyncio.Event()
@@ -1055,7 +1060,8 @@ class ScrapingBeeGoogleProvider(SearchProvider):
             )
 
         async def run_plan(plan: Dict[str, str]) -> None:
-            nonlocal request_count, queries_completed, raw_found, queries_in_flight, last_completion_monotonic
+            nonlocal request_count, queries_completed, raw_found, queries_in_flight
+            nonlocal last_completion_monotonic, last_growth_completed, last_growth_raw_found, stagnation_stop_reason
             if stop_event.is_set():
                 return
             search_query = plan["search"]
@@ -1124,12 +1130,35 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                             if fresh_candidates:
                                 candidates.extend(fresh_candidates)
                                 raw_found = len(candidates)
+                                if raw_found > last_growth_raw_found:
+                                    last_growth_raw_found = raw_found
+                                    last_growth_completed = queries_completed
                                 if len(candidates) >= limit:
                                     stop_event.set()
 
                     async with lock:
                         queries_completed += 1
                         last_completion_monotonic = time.monotonic()
+                        if raw_found > last_growth_raw_found:
+                            last_growth_raw_found = raw_found
+                            last_growth_completed = queries_completed
+                        stagnation_window = max(0, int(self.stagnation_query_window))
+                        stagnation_min_results = max(
+                            self.stagnation_min_results,
+                            max(180, int(max(brief.max_profiles, brief.result_target_max) * 0.6)),
+                        )
+                        stale_queries = max(0, queries_completed - last_growth_completed)
+                        if (
+                            not stop_event.is_set()
+                            and stagnation_window > 0
+                            and raw_found >= stagnation_min_results
+                            and stale_queries >= stagnation_window
+                        ):
+                            stagnation_stop_reason = (
+                                f"Retrieval plateaued after {stale_queries} queries without new candidates; "
+                                f"stopping early at {raw_found} raw results."
+                            )
+                            stop_event.set()
                 finally:
                     async with lock:
                         queries_in_flight = max(0, queries_in_flight - 1)
@@ -1140,7 +1169,11 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                             "queries_completed": queries_completed,
                             "raw_found": raw_found,
                             "queries_in_flight": queries_in_flight,
-                            "message": f"Query {queries_completed}/{max(1, total_query_pages)} completed.",
+                            "message": (
+                                stagnation_stop_reason
+                                if stagnation_stop_reason
+                                else f"Query {queries_completed}/{max(1, total_query_pages)} completed."
+                            ),
                         }
                     if progress_callback:
                         progress_callback(telemetry)
@@ -1158,6 +1191,8 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                     total = int(total_query_pages)
                     found = int(raw_found)
                     in_flight = int(queries_in_flight)
+                    stale_queries = max(0, completed - last_growth_completed)
+                    plateau_message = str(stagnation_stop_reason)
                 stalled_for = max(0, int(time.monotonic() - last_completion_monotonic))
                 pending = max(0, total - completed)
                 if progress_callback:
@@ -1172,11 +1207,17 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                             "queries_pending": pending,
                             "stalled_for_seconds": stalled_for,
                             "heartbeat": True,
-                            "message": (
+                            "message": plateau_message
+                            or (
                                 f"Waiting on {in_flight} in-flight query pages; "
                                 f"{completed}/{max(1, total)} completed."
                                 if in_flight > 0
-                                else f"Retrieval active: {completed}/{max(1, total)} completed."
+                                else (
+                                    f"Retrieval plateau watch: {stale_queries} stale queries, "
+                                    f"{completed}/{max(1, total)} completed."
+                                    if stale_queries >= max(8, self.parallel_requests)
+                                    else f"Retrieval active: {completed}/{max(1, total)} completed."
+                                )
                             ),
                         }
                     )
@@ -1220,6 +1261,14 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         diagnostics["query_budget"]["executed_query_count"] = len(executable_plans)
         diagnostics["query_budget"]["query_page_total"] = total_query_pages
         diagnostics["query_budget"]["query_page_completed"] = queries_completed
+        diagnostics["query_budget"]["stagnation_query_window"] = self.stagnation_query_window
+        diagnostics["query_budget"]["stagnation_min_results"] = max(
+            self.stagnation_min_results,
+            max(180, int(max(brief.max_profiles, brief.result_target_max) * 0.6)),
+        )
+        diagnostics["query_budget"]["stagnation_stop_triggered"] = bool(stagnation_stop_reason)
+        if stagnation_stop_reason:
+            diagnostics["query_budget"]["stagnation_stop_reason"] = stagnation_stop_reason
 
         return ProviderRunResult(
             provider_name=self.name,

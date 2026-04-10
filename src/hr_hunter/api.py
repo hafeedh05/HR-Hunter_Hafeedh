@@ -542,6 +542,8 @@ def create_app() -> "FastAPI":
                 "percent": 2,
                 "message": "Search job started.",
             }
+            live_stage_name = "running"
+            live_stage_started_monotonic = job_started_monotonic
 
             def _project_total_runtime_seconds() -> int:
                 elapsed_seconds = int(latest_telemetry.get("elapsed_seconds", 0) or 0)
@@ -592,11 +594,23 @@ def create_app() -> "FastAPI":
                 checkpoint_patch: Dict[str, Any] | None = None,
                 force: bool = False,
             ) -> None:
-                nonlocal last_progress_write
+                nonlocal last_progress_write, live_stage_name, live_stage_started_monotonic
                 now = time.monotonic()
                 if not force and (now - last_progress_write) < 0.6:
                     return
-                latest_telemetry.update({key: value for key, value in dict(patch or {}).items() if value is not None})
+                patch_payload = {key: value for key, value in dict(patch or {}).items() if value is not None}
+                stage_name = str(patch_payload.get("stage", latest_telemetry.get("stage", ""))).strip().lower() or "running"
+                if stage_name != live_stage_name:
+                    live_stage_name = stage_name
+                    live_stage_started_monotonic = now
+                provided_stage_elapsed = patch_payload.get("stage_elapsed_seconds")
+                if provided_stage_elapsed is not None:
+                    stage_elapsed_seconds = max(0, int(provided_stage_elapsed or 0))
+                    live_stage_started_monotonic = now - float(stage_elapsed_seconds)
+                else:
+                    stage_elapsed_seconds = max(0, int(now - live_stage_started_monotonic))
+                patch_payload["stage_elapsed_seconds"] = stage_elapsed_seconds
+                latest_telemetry.update(patch_payload)
                 latest_telemetry["target"] = requested_limit
                 elapsed_seconds = max(0, int(now - job_started_monotonic))
                 latest_telemetry["elapsed_seconds"] = elapsed_seconds
@@ -686,13 +700,6 @@ def create_app() -> "FastAPI":
                     int(event.get("finalized_count", previous_finalized) or 0),
                 )
                 round_number = int(event.get("round", latest_telemetry.get("round", 0)) or 0)
-                stage_elapsed_seconds = int(
-                    event.get(
-                        "stage_elapsed_seconds",
-                        0 if stage != previous_stage else latest_telemetry.get("stage_elapsed_seconds", 0),
-                    )
-                    or 0
-                )
                 estimated_total_seconds = int(event.get("estimated_total_seconds", latest_telemetry.get("estimated_total_seconds", 0)) or 0)
                 if stage in {"rerank", "finalizing"}:
                     queries_in_flight = 0
@@ -722,7 +729,7 @@ def create_app() -> "FastAPI":
                         "reranked_count": reranked_count,
                         "rerank_target": rerank_target,
                         "finalized_count": finalized_count,
-                        "stage_elapsed_seconds": stage_elapsed_seconds,
+                        "stage_elapsed_seconds": event.get("stage_elapsed_seconds"),
                         "estimated_total_seconds": estimated_total_seconds,
                         "round": round_number,
                         "percent": int(max(0, min(99, int(explicit_percent)))),
