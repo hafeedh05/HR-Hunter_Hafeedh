@@ -76,6 +76,21 @@ def _default_job_progress(*, target: int = 0, stage: str = "queued", status: str
 
 
 def _ensure_jobs_columns(connection: Any) -> None:
+    backend = getattr(connection, "backend", "sqlite")
+    additions = [
+        ("progress_json", "TEXT DEFAULT '{}'"),
+        ("checkpoint_json", "TEXT DEFAULT '{}'"),
+        ("heartbeat_at", "TEXT DEFAULT ''"),
+    ]
+    if backend == "postgres":
+        for column_name, definition in additions:
+            try:
+                connection.execute(f"ALTER TABLE jobs ADD COLUMN IF NOT EXISTS {column_name} {definition}")
+            except Exception:
+                # Column may already exist or the table may not be visible yet.
+                pass
+        return
+
     existing_columns: set[str] = set()
     try:
         rows = connection.execute("PRAGMA table_info(jobs)").fetchall()
@@ -88,11 +103,6 @@ def _ensure_jobs_columns(connection: Any) -> None:
             name = str(getattr(row, "name", "")).strip()
         if name:
             existing_columns.add(name)
-    additions = [
-        ("progress_json", "TEXT DEFAULT '{}'"),
-        ("checkpoint_json", "TEXT DEFAULT '{}'"),
-        ("heartbeat_at", "TEXT DEFAULT ''"),
-    ]
     for column_name, definition in additions:
         if column_name in existing_columns:
             continue
