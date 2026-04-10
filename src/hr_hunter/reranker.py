@@ -22,6 +22,8 @@ MAX_BRIEF_SUMMARY_CHARS = 800
 MAX_BRIEF_DOC_CHARS = 1200
 MAX_CANDIDATE_SUMMARY_CHARS = 520
 MAX_EXPERIENCE_SUMMARY_CHARS = 180
+DEFAULT_MIN_TOTAL_MEMORY_GB = 3.0
+DEFAULT_MIN_AVAILABLE_MEMORY_GB = 1.25
 
 
 @dataclass
@@ -46,6 +48,82 @@ def _safe_float(value: object, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _memory_snapshot_bytes() -> tuple[int | None, int | None]:
+    meminfo: dict[str, int] = {}
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+            for line in handle:
+                key, _, raw_value = line.partition(":")
+                amount = raw_value.strip().split()[0] if raw_value.strip() else ""
+                if amount.isdigit():
+                    meminfo[key] = int(amount) * 1024
+    except OSError:
+        meminfo = {}
+    total_bytes = meminfo.get("MemTotal")
+    available_bytes = meminfo.get("MemAvailable")
+    if total_bytes is None:
+        try:
+            page_size = int(os.sysconf("SC_PAGE_SIZE"))
+            page_count = int(os.sysconf("SC_PHYS_PAGES"))
+            total_bytes = page_size * page_count
+        except (AttributeError, OSError, ValueError):
+            total_bytes = None
+    return total_bytes, available_bytes
+
+
+def _format_gib(value_bytes: int | None) -> str:
+    if value_bytes is None or value_bytes <= 0:
+        return "unknown"
+    return f"{value_bytes / (1024 ** 3):.2f} GiB"
+
+
+def _low_memory_reranker_override_enabled() -> bool:
+    return str(os.getenv("HR_HUNTER_RERANKER_ALLOW_LOW_MEMORY", "false")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _ensure_transformer_reranker_memory_budget(device: str | None) -> None:
+    if "cuda" in str(device or "").lower() or _low_memory_reranker_override_enabled():
+        return
+    total_bytes, available_bytes = _memory_snapshot_bytes()
+    min_total_bytes = max(
+        0,
+        int(
+            _safe_float(
+                os.getenv("HR_HUNTER_RERANKER_MIN_TOTAL_MEMORY_GB", DEFAULT_MIN_TOTAL_MEMORY_GB),
+                DEFAULT_MIN_TOTAL_MEMORY_GB,
+            )
+            * (1024 ** 3)
+        ),
+    )
+    min_available_bytes = max(
+        0,
+        int(
+            _safe_float(
+                os.getenv("HR_HUNTER_RERANKER_MIN_AVAILABLE_MEMORY_GB", DEFAULT_MIN_AVAILABLE_MEMORY_GB),
+                DEFAULT_MIN_AVAILABLE_MEMORY_GB,
+            )
+            * (1024 ** 3)
+        ),
+    )
+    if total_bytes is not None and total_bytes < min_total_bytes:
+        raise RuntimeError(
+            "Transformer reranker skipped on low-memory host "
+            f"(total={_format_gib(total_bytes)}, available={_format_gib(available_bytes)}, "
+            f"requires at least {min_total_bytes / (1024 ** 3):.2f} GiB total RAM)."
+        )
+    if available_bytes is not None and available_bytes < min_available_bytes:
+        raise RuntimeError(
+            "Transformer reranker skipped because available memory is too low "
+            f"(total={_format_gib(total_bytes)}, available={_format_gib(available_bytes)}, "
+            f"requires at least {min_available_bytes / (1024 ** 3):.2f} GiB free RAM)."
+        )
 
 
 def parse_reranker_settings(brief: SearchBrief) -> RerankerSettings:
@@ -159,6 +237,8 @@ class TransformersCrossEncoderBackend(BaseRerankerBackend):
             "yes",
             "on",
         }
+        selected_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        _ensure_transformer_reranker_memory_budget(selected_device)
         self._tokenizer = AutoTokenizer.from_pretrained(
             model_name,
             local_files_only=not allow_download,
@@ -166,8 +246,8 @@ class TransformersCrossEncoderBackend(BaseRerankerBackend):
         model = AutoModelForSequenceClassification.from_pretrained(
             model_name,
             local_files_only=not allow_download,
+            low_cpu_mem_usage=True,
         )
-        selected_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self._device = selected_device
         self._model = model.to(selected_device)
         self._model.eval()

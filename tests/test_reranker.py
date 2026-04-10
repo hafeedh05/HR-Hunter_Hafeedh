@@ -1,6 +1,10 @@
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.models import CandidateProfile
-from hr_hunter.reranker import parse_reranker_settings, rerank_candidates
+from hr_hunter.reranker import (
+    _ensure_transformer_reranker_memory_budget,
+    parse_reranker_settings,
+    rerank_candidates,
+)
 
 
 class _FakeBackend:
@@ -105,3 +109,65 @@ def test_rerank_candidates_reapply_guardrail_caps(monkeypatch) -> None:
 
     assert reranked[0].score == 35.0
     assert reranked[0].verification_status == "reject"
+
+
+def test_low_memory_guard_skips_transformer_reranker(monkeypatch) -> None:
+    monkeypatch.setattr("hr_hunter.reranker._memory_snapshot_bytes", lambda: (2 * 1024**3, 900 * 1024**2))
+    monkeypatch.delenv("HR_HUNTER_RERANKER_ALLOW_LOW_MEMORY", raising=False)
+    monkeypatch.delenv("HR_HUNTER_RERANKER_MIN_TOTAL_MEMORY_GB", raising=False)
+    monkeypatch.delenv("HR_HUNTER_RERANKER_MIN_AVAILABLE_MEMORY_GB", raising=False)
+
+    try:
+        _ensure_transformer_reranker_memory_budget("cpu")
+    except RuntimeError as exc:
+        assert "low-memory host" in str(exc)
+    else:  # pragma: no cover - guard should always fire in this scenario
+        raise AssertionError("expected low-memory guard to skip transformer reranker")
+
+
+def test_rerank_candidates_fallbacks_when_backend_load_is_blocked(monkeypatch) -> None:
+    brief = build_search_brief(
+        {
+            "id": "reranker-fallback-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "provider_settings": {
+                "reranker": {
+                    "enabled": True,
+                    "model_name": "BAAI/bge-reranker-v2-m3",
+                    "top_n": 2,
+                    "weight": 0.35,
+                }
+            },
+        }
+    )
+    candidates = [
+        CandidateProfile(
+            full_name="Alpha",
+            score=80.0,
+            verification_status="verified",
+            semantic_similarity_score=0.30,
+            title_similarity_score=0.20,
+            skill_overlap_score=0.10,
+        ),
+        CandidateProfile(
+            full_name="Beta",
+            score=75.0,
+            verification_status="review",
+            semantic_similarity_score=0.85,
+            title_similarity_score=0.70,
+            skill_overlap_score=0.60,
+        ),
+    ]
+    monkeypatch.setattr(
+        "hr_hunter.reranker._load_backend",
+        lambda model_name, device: (_ for _ in ()).throw(RuntimeError("low-memory host")),
+    )
+
+    reranked = rerank_candidates(brief, candidates)
+
+    assert reranked[0].ranking_model_version == "fallback-lexical-reranker-v1"
+    assert reranked[0].reranker_score > 0.0
+    assert reranked[1].ranking_model_version == "fallback-lexical-reranker-v1"
+    assert reranked[1].reranker_score > reranked[0].reranker_score
+    assert any("low-memory host" in note for note in reranked[0].verification_notes)
