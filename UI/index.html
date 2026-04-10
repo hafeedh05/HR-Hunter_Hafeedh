@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HR Hunter</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260407jd2" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260410prod2" />
   </head>
   <body class="theme-bright">
     <div class="auth-shell" id="auth-shell">
@@ -17,7 +17,7 @@
             <p class="muted" id="login-help-text">Use the 6-digit code from your authenticator app to open projects, run searches, and review candidates.</p>
           </div>
         </div>
-        <form id="login-form" class="auth-form" method="post" action="/app/auth/login-form">
+        <form id="login-form" class="auth-form" method="post" action="/app/auth/login-form" onsubmit="return window.__hrHunterInlineLogin ? window.__hrHunterInlineLogin(event) : false" data-inline-managed="true">
           <label id="login-email-group" hidden>
             <span>Email</span>
             <input id="login-email" name="email" type="text" autocomplete="username" placeholder="admin.hrhunter@hyve" />
@@ -921,7 +921,7 @@
         return false;
       };
     </script>
-    <script src="/assets/app.js?v=20260410login7" defer></script>
+    <script src="/assets/app.js?v=20260410prod2" defer></script>
     <script>
       // If the main bundle fails to load/parse, make that obvious instead of looking like "login is broken".
       window.setTimeout(() => {

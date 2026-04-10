@@ -772,6 +772,75 @@ select:focus {
   font-size: 1.05rem;
 }
 
+.quality-diagnostics-card {
+  display: grid;
+  gap: 0.8rem;
+  margin: 0 0 0.8rem;
+  padding: 1rem 1.05rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(217, 119, 6, 0.18);
+  background: linear-gradient(180deg, rgba(217, 119, 6, 0.05) 0%, var(--surface-strong) 100%);
+}
+
+.quality-diagnostics-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.quality-diagnostics-head h4,
+.quality-diagnostics-head p {
+  margin: 0;
+}
+
+.quality-diagnostics-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.quality-issue-grid {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.quality-issue {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--surface-border);
+  background: var(--surface-strong);
+}
+
+.quality-issue p {
+  margin: 0;
+}
+
+.quality-issue-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  color: var(--text-soft);
+  font-size: 0.88rem;
+}
+
+.quality-issue-high {
+  border-color: rgba(204, 79, 57, 0.22);
+  background: linear-gradient(180deg, rgba(204, 79, 57, 0.06) 0%, var(--surface-strong) 100%);
+}
+
+.quality-issue-medium {
+  border-color: rgba(217, 119, 6, 0.22);
+  background: linear-gradient(180deg, rgba(217, 119, 6, 0.05) 0%, var(--surface-strong) 100%);
+}
+
+.quality-issue-watch {
+  border-color: rgba(27, 184, 215, 0.18);
+}
+
 .candidate-card {
   display: grid;
   gap: 0.85rem;

@@ -494,6 +494,49 @@ def create_app() -> "FastAPI":
                 "message": "Search job started.",
             }
 
+            def _project_total_runtime_seconds() -> int:
+                elapsed_seconds = int(latest_telemetry.get("elapsed_seconds", 0) or 0)
+                stage = str(latest_telemetry.get("stage", "")).strip().lower() or "running"
+                target_count = max(1, int(latest_telemetry.get("target", requested_limit) or requested_limit or 1))
+                stage_elapsed_seconds = max(0, int(latest_telemetry.get("stage_elapsed_seconds", 0) or 0))
+                queries_completed = max(0, int(latest_telemetry.get("queries_completed", 0) or 0))
+                queries_total = max(0, int(latest_telemetry.get("queries_total", 0) or 0))
+                queries_in_flight = max(0, int(latest_telemetry.get("queries_in_flight", 0) or 0))
+                unique_after_dedupe = max(0, int(latest_telemetry.get("unique_after_dedupe", 0) or 0))
+                reranked_count = max(0, int(latest_telemetry.get("reranked_count", 0) or 0))
+                rerank_target = max(reranked_count, int(latest_telemetry.get("rerank_target", 0) or 0))
+                finalized_count = max(0, int(latest_telemetry.get("finalized_count", 0) or 0))
+                completed_before_stage = max(0, elapsed_seconds - stage_elapsed_seconds)
+                finalizing_budget = max(8, min(150, int(max(1, target_count) * 0.07) + 8))
+                predicted_rerank_pool = max(rerank_target, min(max(unique_after_dedupe, target_count), max(target_count, 120)))
+                rerank_budget = max(40, min(900, int(predicted_rerank_pool * 0.38) + 24))
+                retrieval_tail = max(20, min(240, int(max(queries_total, target_count) * 0.12) + (queries_in_flight * 3)))
+
+                if stage in {"completed", "failed"}:
+                    return elapsed_seconds
+                if stage in {"retrieval", "dedupe", "running"}:
+                    if queries_total > 0 and queries_completed > 0 and stage_elapsed_seconds > 0:
+                        coverage = min(0.995, max(0.02, queries_completed / max(1, queries_total)))
+                        stage_total = int(round(stage_elapsed_seconds / coverage))
+                    else:
+                        stage_total = stage_elapsed_seconds + retrieval_tail
+                    return completed_before_stage + max(stage_elapsed_seconds, stage_total) + rerank_budget + finalizing_budget
+                if stage == "rerank":
+                    if rerank_target > 0 and reranked_count > 0 and stage_elapsed_seconds > 0:
+                        coverage = min(0.995, max(0.02, reranked_count / max(1, rerank_target)))
+                        stage_total = int(round(stage_elapsed_seconds / coverage))
+                    else:
+                        stage_total = stage_elapsed_seconds + max(45, min(900, int(max(1, rerank_target or predicted_rerank_pool) * 0.35) + 30))
+                    return completed_before_stage + max(stage_elapsed_seconds, stage_total) + finalizing_budget
+                if stage == "finalizing":
+                    if target_count > 0 and finalized_count > 0 and stage_elapsed_seconds > 0:
+                        coverage = min(0.995, max(0.05, finalized_count / max(1, target_count)))
+                        stage_total = int(round(stage_elapsed_seconds / coverage))
+                    else:
+                        stage_total = stage_elapsed_seconds + max(8, min(90, int(max(1, target_count) * 0.05) + 8))
+                    return completed_before_stage + max(stage_elapsed_seconds, stage_total)
+                return max(elapsed_seconds + 2, completed_before_stage + stage_elapsed_seconds + finalizing_budget)
+
             def _push_progress(
                 patch: Dict[str, Any],
                 *,
@@ -508,43 +551,11 @@ def create_app() -> "FastAPI":
                 latest_telemetry["target"] = requested_limit
                 elapsed_seconds = max(0, int(now - job_started_monotonic))
                 latest_telemetry["elapsed_seconds"] = elapsed_seconds
-                estimated_total_seconds = int(latest_telemetry.get("estimated_total_seconds", 0) or 0)
                 stage = str(latest_telemetry.get("stage", "")).strip().lower() or "running"
-                percent = float(latest_telemetry.get("percent", 0) or 0)
-                reranked_count = int(latest_telemetry.get("reranked_count", 0) or 0)
-                rerank_target = int(latest_telemetry.get("rerank_target", 0) or 0)
-                finalized_count = int(latest_telemetry.get("finalized_count", 0) or 0)
-                target_count = max(1, int(latest_telemetry.get("target", requested_limit) or requested_limit or 1))
-                queries_completed = int(latest_telemetry.get("queries_completed", 0) or 0)
-                queries_total = int(latest_telemetry.get("queries_total", 0) or 0)
-
-                if stage in {"completed", "failed"}:
-                    estimated_total_seconds = max(elapsed_seconds, estimated_total_seconds)
-                elif stage == "rerank" and rerank_target > 0 and reranked_count > 0:
-                    coverage = min(0.995, max(0.01, reranked_count / max(1, rerank_target)))
-                    projected_total = int(elapsed_seconds / coverage)
-                    estimated_total_seconds = max(estimated_total_seconds, projected_total)
-                elif stage == "rerank" and rerank_target > 0:
-                    warmup_budget = max(90, min(1200, int(rerank_target * 1.4)))
-                    projected_total = elapsed_seconds + warmup_budget
-                    estimated_total_seconds = max(estimated_total_seconds, projected_total)
-                elif stage == "finalizing" and finalized_count > 0:
-                    coverage = min(0.995, max(0.01, finalized_count / max(1, target_count)))
-                    projected_total = int(elapsed_seconds / coverage)
-                    estimated_total_seconds = max(estimated_total_seconds, projected_total)
-                elif stage in {"retrieval", "dedupe"} and queries_total > 0 and queries_completed > 0:
-                    query_coverage = min(0.995, max(0.01, queries_completed / max(1, queries_total)))
-                    projected_total = int(elapsed_seconds / query_coverage)
-                    estimated_total_seconds = max(estimated_total_seconds, projected_total)
-                elif estimated_total_seconds <= 0 and percent >= 4 and not (
-                    stage == "rerank" and rerank_target > 0 and reranked_count <= 0
-                ):
-                    projected_total = int(elapsed_seconds / min(0.99, max(0.04, percent / 100.0)))
-                    estimated_total_seconds = projected_total
-
+                projected_total_seconds = _project_total_runtime_seconds()
                 latest_telemetry["estimated_total_seconds"] = max(
                     elapsed_seconds + (0 if stage in {"completed", "failed"} else 2),
-                    min(4 * 3600, max(0, int(estimated_total_seconds or 0))),
+                    min(4 * 3600, max(0, int(projected_total_seconds or 0))),
                 )
                 update_job_progress(
                     job_id,
@@ -593,7 +604,12 @@ def create_app() -> "FastAPI":
                     previous_queries_completed,
                     int(event.get("queries_completed", previous_queries_completed) or 0),
                 )
-                queries_in_flight = int(event.get("queries_in_flight", latest_telemetry.get("queries_in_flight", 0)) or 0)
+                if "queries_in_flight" in event:
+                    queries_in_flight = int(event.get("queries_in_flight", latest_telemetry.get("queries_in_flight", 0)) or 0)
+                elif stage in {"dedupe", "rerank", "finalizing", "completed", "failed"}:
+                    queries_in_flight = 0
+                else:
+                    queries_in_flight = int(latest_telemetry.get("queries_in_flight", 0) or 0)
                 raw_found = max(previous_raw_found, int(event.get("raw_found", previous_raw_found) or 0))
                 unique_after_dedupe = max(
                     previous_unique,
@@ -917,7 +933,7 @@ def create_app() -> "FastAPI":
         except Exception:
             return RedirectResponse(url="/?session=auth-failed", status_code=303)
 
-        response = RedirectResponse(url="/?session=ready", status_code=303)
+        response = RedirectResponse(url="/", status_code=303)
         response.set_cookie(
             "hr_hunter_session",
             result["session_token"],

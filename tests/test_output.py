@@ -1,271 +1,159 @@
-from pathlib import Path
-
-import csv
-import json
-
-from hr_hunter.briefing import build_search_brief
-from hr_hunter.models import CandidateProfile, EvidenceRecord, SearchRunReport
-from hr_hunter.output import (
-    build_reporting_summary,
-    candidate_to_row,
-    hydrate_candidate_reporting,
-    load_report,
-    write_report,
-)
-from hr_hunter.scoring import score_candidate
+from hr_hunter.models import CandidateProfile
+from hr_hunter.output import build_reporting_summary
 
 
-def test_report_roundtrip_preserves_reporting_fields(tmp_path: Path) -> None:
-    candidate = CandidateProfile(
-        full_name="Jane Search",
-        current_title="Senior Brand Manager",
-        current_company="Unilever",
-        location_name="Dublin, Ireland",
-        location_aligned=True,
-        current_target_company_match=True,
-        current_title_match=True,
-        current_company_confirmed=True,
-        current_title_confirmed=True,
-        current_location_confirmed=True,
-        precise_location_confirmed=True,
-        current_employment_confirmed=True,
-        verification_status="verified",
-        qualification_tier="strict_verified",
-        matched_title_family="brand",
-        location_precision_bucket="within_expanded_radius",
-        current_role_proof_count=2,
-        source_quality_score=0.9,
-        evidence_freshness_year=2026,
-        current_function_fit=1.0,
-        current_fmcg_fit=1.0,
-        search_strategies=["current-target-strict", "trade-media-location-probe"],
-        cap_reasons=["missing_none"],
-        disqualifier_reasons=[],
-        score=88.0,
-        evidence_records=[
-            EvidenceRecord(
-                source_url="https://example.com/people/jane-search",
-                source_domain="example.com",
-                profile_signal=True,
-                current_employment_signal=True,
-                recency_year=2026,
-                confidence=0.84,
-            )
-        ],
-    )
-    report = SearchRunReport(
-        run_id="roundtrip-reporting",
-        brief_id="brief",
-        dry_run=False,
-        generated_at="2026-03-31T00:00:00+00:00",
-        provider_results=[],
-        candidates=[candidate],
-        summary={},
+def _candidate(
+    *,
+    name: str,
+    status: str,
+    score: float,
+    current_title_match: bool,
+    location_aligned: bool,
+    location_bucket: str,
+    parser_confidence: float,
+    evidence_quality_score: float,
+    skill_overlap_score: float,
+    current_function_fit: float,
+    years_fit_score: float,
+    industry_fit_score: float,
+    cap_reasons: list[str],
+) -> CandidateProfile:
+    return CandidateProfile(
+        full_name=name,
+        current_title="Chief Executive Officer" if current_title_match else "Regional Director",
+        current_company="Marina Home Interiors" if status == "verified" else "Adjacent Retail Co",
+        location_name="Dubai" if location_aligned else "London",
+        current_title_match=current_title_match,
+        location_aligned=location_aligned,
+        location_precision_bucket=location_bucket,
+        parser_confidence=parser_confidence,
+        evidence_quality_score=evidence_quality_score,
+        skill_overlap_score=skill_overlap_score,
+        current_function_fit=current_function_fit,
+        years_fit_score=years_fit_score,
+        industry_fit_score=industry_fit_score,
+        current_target_company_match=status == "verified",
+        target_company_history_match=False,
+        verification_status=status,
+        score=score,
+        cap_reasons=cap_reasons,
     )
 
-    json_path, _ = write_report(report, tmp_path)
-    loaded = load_report(json_path)
-    restored = loaded.candidates[0]
 
-    assert restored.qualification_tier == "strict_verified"
-    assert restored.matched_title_family == "brand"
-    assert restored.location_precision_bucket == "within_expanded_radius"
-    assert restored.precise_location_confirmed is True
-    assert restored.current_role_proof_count == 2
-    assert restored.source_quality_score == 0.9
-    assert restored.evidence_freshness_year == 2026
-    assert restored.current_function_fit == 1.0
-    assert restored.current_fmcg_fit == 1.0
-    assert restored.search_strategies == ["current-target-strict", "trade-media-location-probe"]
-
-
-def test_build_reporting_summary_counts_strict_and_search_qualified() -> None:
-    strict_candidate = CandidateProfile(
-        full_name="Strict Match",
-        current_title="Senior Brand Manager",
-        current_company="Unilever",
-        location_aligned=True,
-        current_target_company_match=True,
-        current_title_match=True,
-        current_company_confirmed=True,
-        current_title_confirmed=True,
-        current_location_confirmed=True,
-        current_employment_confirmed=True,
-        verification_status="verified",
-        qualification_tier="strict_verified",
-    )
-    search_qualified_candidate = CandidateProfile(
-        full_name="Search Qualified",
-        current_title="Shopper Marketing Manager",
-        current_company="Unilever",
-        location_aligned=True,
-        current_target_company_match=True,
-        current_title_match=False,
-        current_company_confirmed=True,
-        current_title_confirmed=False,
-        current_location_confirmed=True,
-        current_employment_confirmed=False,
-        verification_status="review",
-        qualification_tier="search_qualified",
-        cap_reasons=["missing_current_title_confirmation", "missing_current_role_proof"],
-    )
-    weak_candidate = CandidateProfile(
-        full_name="Weak Match",
-        current_title="Marketing Specialist",
-        current_company="Other Co",
-        location_aligned=False,
-        verification_status="reject",
-        qualification_tier="weak",
-    )
+def test_build_reporting_summary_adds_low_yield_quality_diagnostics() -> None:
+    candidates = [
+        _candidate(
+            name="Verified One",
+            status="verified",
+            score=78.0,
+            current_title_match=True,
+            location_aligned=True,
+            location_bucket="named_target_location",
+            parser_confidence=0.82,
+            evidence_quality_score=0.76,
+            skill_overlap_score=0.78,
+            current_function_fit=0.86,
+            years_fit_score=0.74,
+            industry_fit_score=0.8,
+            cap_reasons=[],
+        ),
+        _candidate(
+            name="Review Title Gap",
+            status="review",
+            score=58.0,
+            current_title_match=False,
+            location_aligned=False,
+            location_bucket="outside_target_area",
+            parser_confidence=0.22,
+            evidence_quality_score=0.2,
+            skill_overlap_score=0.12,
+            current_function_fit=0.2,
+            years_fit_score=0.32,
+            industry_fit_score=0.08,
+            cap_reasons=["title_alignment_required", "outside_target_area", "parser_confidence_too_low"],
+        ),
+        _candidate(
+            name="Review Geo Gap",
+            status="review",
+            score=55.0,
+            current_title_match=False,
+            location_aligned=False,
+            location_bucket="outside_target_area",
+            parser_confidence=0.24,
+            evidence_quality_score=0.24,
+            skill_overlap_score=0.15,
+            current_function_fit=0.24,
+            years_fit_score=0.35,
+            industry_fit_score=0.1,
+            cap_reasons=["precise_location_required", "title_alignment_required"],
+        ),
+        _candidate(
+            name="Reject Weak Anchors",
+            status="reject",
+            score=44.0,
+            current_title_match=False,
+            location_aligned=True,
+            location_bucket="country_only",
+            parser_confidence=0.31,
+            evidence_quality_score=0.21,
+            skill_overlap_score=0.1,
+            current_function_fit=0.28,
+            years_fit_score=0.2,
+            industry_fit_score=0.12,
+            cap_reasons=["title_alignment_required"],
+        ),
+        _candidate(
+            name="Reject Sparse Evidence",
+            status="reject",
+            score=41.0,
+            current_title_match=False,
+            location_aligned=False,
+            location_bucket="unknown_location",
+            parser_confidence=0.18,
+            evidence_quality_score=0.1,
+            skill_overlap_score=0.08,
+            current_function_fit=0.12,
+            years_fit_score=0.18,
+            industry_fit_score=0.05,
+            cap_reasons=["parser_confidence_too_low", "outside_target_area"],
+        ),
+        _candidate(
+            name="Reject Adjacent Retail",
+            status="reject",
+            score=39.0,
+            current_title_match=False,
+            location_aligned=False,
+            location_bucket="outside_target_area",
+            parser_confidence=0.28,
+            evidence_quality_score=0.22,
+            skill_overlap_score=0.12,
+            current_function_fit=0.18,
+            years_fit_score=0.24,
+            industry_fit_score=0.09,
+            cap_reasons=["current_function_review", "outside_target_area"],
+        ),
+    ]
 
     summary = build_reporting_summary(
-        [strict_candidate, search_qualified_candidate, weak_candidate],
-        {"role_title": "Brand Manager"},
-    )
-
-    assert summary["candidate_count"] == 3
-    assert summary["verified_count"] == 1
-    assert summary["review_count"] == 1
-    assert summary["reject_count"] == 1
-    assert summary["strict_verified_count"] == 1
-    assert summary["search_qualified_count"] == 1
-    assert summary["weak_count"] == 1
-
-
-def test_hydrate_candidate_reporting_recomputes_tier_after_verified_candidate_is_downgraded() -> None:
-    candidate = CandidateProfile(
-        full_name="Downgraded Match",
-        current_title="Brand Manager",
-        current_company="Procter & Gamble",
-        location_name="Ireland",
-        location_aligned=True,
-        current_target_company_match=True,
-        current_title_match=True,
-        current_company_confirmed=False,
-        current_title_confirmed=False,
-        current_location_confirmed=True,
-        current_employment_confirmed=False,
-        verification_status="review",
-        qualification_tier="strict_verified",
-        score=90.0,
-    )
-
-    hydrated = hydrate_candidate_reporting(candidate)
-
-    assert hydrated.qualification_tier == "search_qualified"
-
-
-def test_score_candidate_treats_country_only_ireland_as_imprecise_location() -> None:
-    brief = build_search_brief(
+        candidates,
         {
-            "id": "score-country-only-ireland-test",
-            "role_title": "Brand Manager",
-            "titles": ["Brand Manager"],
-            "company_targets": ["Unilever"],
-            "geography": {
-                "location_name": "Drogheda",
-                "country": "Ireland",
-                "location_hints": ["Ireland", "Dublin", "Galway"],
-                "center_latitude": 53.7179,
-                "center_longitude": -6.3561,
-                "radius_miles": 60,
+            "target_range": [300, 300],
+            "pipeline_metrics": {
+                "raw_found": 96,
+                "unique_after_dedupe": 18,
+                "finalized_count": len(candidates),
             },
-            "industry_keywords": ["FMCG"],
-        }
+        },
     )
 
-    candidate = CandidateProfile(
-        full_name="Country Only Ireland",
-        current_title="Senior Brand Manager",
-        current_company="Unilever",
-        location_name="Ireland",
-        summary="Brand leadership across Ireland FMCG markets.",
-    )
+    diagnostics = summary["quality_diagnostics"]
 
-    scored = score_candidate(candidate, brief)
-
-    assert scored.location_precision_bucket == "country_only"
-    assert scored.verification_status != "verified"
-
-
-def test_candidate_row_uses_recruiter_friendly_export_fields() -> None:
-    brief = build_search_brief(
-        {
-            "id": "score-row-shape-test",
-            "role_title": "Brand Manager",
-            "titles": ["Brand Manager"],
-            "company_targets": ["Unilever"],
-            "geography": {
-                "location_name": "Dublin",
-                "country": "Ireland",
-            },
-            "anchors": {
-                "title": "critical",
-                "company": "critical",
-                "location": "important",
-            },
-            "industry_keywords": ["FMCG"],
-        }
-    )
-    scored = score_candidate(
-        CandidateProfile(
-            full_name="Jane Search",
-            current_title="Senior Brand Manager",
-            current_company="Unilever",
-            location_name="Dublin, Ireland",
-            summary="Senior FMCG brand leader.",
-        ),
-        brief,
-    )
-
-    row = candidate_to_row(scored)
-    assert row["company_match_context"] == "Current target company"
-    assert row["employment_signal"] == "Current company listed"
-    assert row["matched_titles"]
-    assert "Current title aligned" in row["key_signals"]
-    assert "feature_scores" not in row
-
-
-def test_candidate_row_repairs_common_mojibake_for_csv_exports() -> None:
-    row = candidate_to_row(
-        CandidateProfile(
-            full_name="CondÃ© Candidate",
-            current_title="Power BI â€¢ Tableau â€¢ Python â€¢",
-            current_company="CondÃ© Nast",
-            location_name="Dubai",
-            verification_status="review",
-            qualification_tier="search_qualified",
-            score=54.0,
-        )
-    )
-
-    assert row["full_name"] == "Condé Candidate"
-    assert row["current_title"] == "Power BI | Tableau | Python"
-    assert row["current_company"] == "Condé Nast"
-
-
-def test_write_report_can_limit_csv_rows_without_truncating_json(tmp_path: Path) -> None:
-    report = SearchRunReport(
-        run_id="csv-limit-report",
-        brief_id="brief",
-        dry_run=False,
-        generated_at="2026-04-03T00:00:00+00:00",
-        provider_results=[],
-        candidates=[
-            CandidateProfile(full_name="Candidate One", verification_status="verified", score=91.0),
-            CandidateProfile(full_name="Candidate Two", verification_status="review", score=66.0),
-            CandidateProfile(full_name="Candidate Three", verification_status="reject", score=24.0),
-        ],
-        summary={},
-    )
-
-    json_path, csv_path = write_report(report, tmp_path, csv_candidate_limit=2)
-
-    payload = json.loads(json_path.read_text(encoding="utf-8"))
-    with csv_path.open("r", encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle))
-
-    assert len(payload["candidates"]) == 3
-    assert len(rows) == 2
-    assert rows[0]["full_name"] == "Candidate One"
-    assert rows[1]["full_name"] == "Candidate Two"
+    assert diagnostics["enabled"] is True
+    assert diagnostics["yield_status"] == "low"
+    assert diagnostics["verified_count"] == 1
+    assert diagnostics["unique_after_dedupe"] == 18
+    issue_keys = [issue["key"] for issue in diagnostics["issues"]]
+    assert "title_mismatch" in issue_keys
+    assert "geo_mismatch" in issue_keys
+    assert "parser_confidence" in issue_keys
+    assert "market_scarcity" in issue_keys

@@ -1157,6 +1157,12 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     breakdown = payload.get("jd_breakdown")
     if not isinstance(breakdown, dict):
         breakdown = extract_job_description_breakdown(job_description, role_title=role_title)
+    keyword_tracks = breakdown.get("keyword_tracks", {})
+    if not isinstance(keyword_tracks, dict):
+        keyword_tracks = {}
+    search_tuning = breakdown.get("search_tuning", {})
+    if not isinstance(search_tuning, dict):
+        search_tuning = {}
 
     years_mode = str(payload.get("years_mode", breakdown.get("years", {}).get("mode", "range")) or "range")
     years_value = _coerce_int(payload.get("years_value"))
@@ -1191,6 +1197,10 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     required_keywords = unique_preserving_order([*must_have, *breakdown.get("required_keywords", [])])
     preferred_keywords = unique_preserving_order([*nice_to_have, *breakdown.get("preferred_keywords", [])])
     industry_keywords = unique_preserving_order([*industry_keywords, *breakdown.get("industry_keywords", [])])
+    portfolio_keywords = unique_preserving_order(parse_multi_value(keyword_tracks.get("portfolio_keywords")))
+    commercial_keywords = unique_preserving_order(parse_multi_value(keyword_tracks.get("commercial_keywords")))
+    leadership_keywords = unique_preserving_order(parse_multi_value(keyword_tracks.get("leadership_keywords")))
+    scope_keywords = unique_preserving_order(parse_multi_value(keyword_tracks.get("scope_keywords")))
     seniority_levels = unique_preserving_order(
         [*parse_multi_value(payload.get("seniority_levels")), *breakdown.get("seniority_levels", [])]
     )
@@ -1200,6 +1210,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     model_dir = resolve_ranker_model_dir(payload.get("model_dir"))
     limit = max(1, int(payload.get("limit", 20) or 20))
     internal_fetch_override = _coerce_int(payload.get("internal_fetch_limit_override"))
+    if internal_fetch_override is None:
+        internal_fetch_override = _coerce_int(search_tuning.get("internal_fetch_limit_override"))
     internal_fetch_limit = max(
         limit,
         internal_fetch_override if internal_fetch_override is not None else compute_internal_fetch_limit(limit),
@@ -1210,6 +1222,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     top_up_round = max(0, _coerce_int(payload.get("top_up_round")) or 0)
     country_code = _selected_country_code(countries)
     reranker_requested_top_n = _coerce_int(payload.get("reranker_top_n"))
+    if reranker_requested_top_n is None:
+        reranker_requested_top_n = _coerce_int(search_tuning.get("reranker_top_n"))
     if reranker_requested_top_n is None:
         if limit >= 400:
             reranker_requested_top_n = max(220, int(round(limit * 0.6)))
@@ -1227,34 +1241,54 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     scrapingbee_parallel_requests = max(
         4,
         _coerce_int(payload.get("provider_parallel_requests"))
+        or _coerce_int(search_tuning.get("provider_parallel_requests"))
         or (16 if limit >= 220 else (12 if limit >= 120 else 8)),
     )
     scrapingbee_pages_per_query = max(
         1,
         min(
             5,
-            (_coerce_int(payload.get("scrapingbee_pages_per_query")) or 1),
+            (
+                _coerce_int(payload.get("scrapingbee_pages_per_query"))
+                or _coerce_int(search_tuning.get("scrapingbee_pages_per_query"))
+                or 1
+            ),
         ),
     )
     scrapingbee_max_queries = max(
         120,
-        _coerce_int(payload.get("scrapingbee_max_queries")) or compute_provider_max_queries(limit),
+        _coerce_int(payload.get("scrapingbee_max_queries"))
+        or _coerce_int(search_tuning.get("scrapingbee_max_queries"))
+        or compute_provider_max_queries(limit),
     )
     default_geo_groups = 8 if limit >= 220 else (6 if limit >= 120 else 8)
+    tuned_company_chunk_size = _coerce_int(search_tuning.get("company_chunk_size"))
+    tuned_max_geo_groups = _coerce_int(search_tuning.get("max_geo_groups"))
+    tuned_discovery_chunk_size = _coerce_int(search_tuning.get("discovery_keyword_chunk_size"))
+    tuned_market_chunk_size = _coerce_int(search_tuning.get("market_keyword_chunk_size"))
+    tuned_history_query_terms = parse_multi_value(search_tuning.get("history_query_terms"))
+    tuned_company_slice_location_group_limit = _coerce_int(search_tuning.get("company_slice_location_group_limit"))
+    tuned_geo_group_size = _coerce_int(search_tuning.get("geo_group_size"))
     providers_settings = {
         "retrieval": {
-            "company_chunk_size": int(payload.get("company_chunk_size", 5) or 5),
+            "company_chunk_size": int(payload.get("company_chunk_size", tuned_company_chunk_size or 5) or 5),
             "results_per_slice": max(internal_fetch_limit, int(payload.get("results_per_slice", 40) or 40)),
             "include_strict_slice": True,
             "include_broad_slice": True,
             "include_history_slices": bool(payload.get("include_history_slices", True)),
             "include_discovery_slices": bool(payload.get("include_discovery_slices", True)),
             "geo_fanout_enabled": bool(payload.get("geo_fanout_enabled", True)),
-            "max_geo_groups": max(3, _coerce_int(payload.get("max_geo_groups")) or default_geo_groups),
-            "discovery_keyword_chunk_size": int(payload.get("discovery_keyword_chunk_size", 6) or 6),
-            "market_keyword_chunk_size": int(payload.get("market_keyword_chunk_size", 5) or 5),
+            "max_geo_groups": max(3, _coerce_int(payload.get("max_geo_groups")) or tuned_max_geo_groups or default_geo_groups),
+            "discovery_keyword_chunk_size": int(payload.get("discovery_keyword_chunk_size", tuned_discovery_chunk_size or 6) or 6),
+            "market_keyword_chunk_size": int(payload.get("market_keyword_chunk_size", tuned_market_chunk_size or 5) or 5),
             "history_query_terms": unique_preserving_order(
-                [*breakdown.get("key_experience_points", [])[:3], "formerly", "previously", "before joining", "ex"]
+                [
+                    *(tuned_history_query_terms or breakdown.get("key_experience_points", [])[:3]),
+                    "formerly",
+                    "previously",
+                    "before joining",
+                    "ex",
+                ]
             ),
         },
         "registry_memory": {
@@ -1277,9 +1311,21 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "parallel_requests": scrapingbee_parallel_requests,
             "pages_per_query": scrapingbee_pages_per_query,
             "max_queries": scrapingbee_max_queries,
-            "max_company_terms_per_query": max(6, _coerce_int(payload.get("max_company_terms_per_query")) or 12),
+            "max_company_terms_per_query": max(
+                6,
+                _coerce_int(payload.get("max_company_terms_per_query"))
+                or _coerce_int(search_tuning.get("max_company_terms_per_query"))
+                or 12,
+            ),
             "geo_fanout_enabled": bool(payload.get("geo_fanout_enabled", True)),
-            "max_geo_groups": max(3, _coerce_int(payload.get("max_geo_groups")) or default_geo_groups),
+            "max_geo_groups": max(3, _coerce_int(payload.get("max_geo_groups")) or tuned_max_geo_groups or default_geo_groups),
+            "company_slice_location_group_limit": max(
+                0,
+                _coerce_int(payload.get("company_slice_location_group_limit"))
+                or tuned_company_slice_location_group_limit
+                or 0,
+            ),
+            "geo_group_size": max(1, _coerce_int(payload.get("geo_group_size")) or tuned_geo_group_size or 2),
         },
     }
 
@@ -1307,10 +1353,10 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "location_targets": location_targets,
         "required_keywords": required_keywords,
         "preferred_keywords": preferred_keywords,
-        "portfolio_keywords": [],
-        "commercial_keywords": [],
-        "leadership_keywords": [],
-        "scope_keywords": [],
+        "portfolio_keywords": portfolio_keywords,
+        "commercial_keywords": commercial_keywords,
+        "leadership_keywords": leadership_keywords,
+        "scope_keywords": scope_keywords,
         "industry_keywords": industry_keywords,
         "exclude_title_keywords": exclude_titles,
         "exclude_company_keywords": exclude_companies,
@@ -1337,6 +1383,10 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "must_have_keywords": must_have,
             "nice_to_have_keywords": nice_to_have,
             "industry_keywords": industry_keywords,
+            "portfolio_keywords": portfolio_keywords,
+            "commercial_keywords": commercial_keywords,
+            "leadership_keywords": leadership_keywords,
+            "scope_keywords": scope_keywords,
             "exclude_title_keywords": exclude_titles,
             "exclude_company_keywords": exclude_companies,
             "years_mode": years_mode,
@@ -1353,6 +1403,13 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "uploaded_job_description_name": uploaded_job_description_name,
             "uploaded_job_description_text": uploaded_job_description_text,
             "anchors": anchors,
+            "search_tuning": search_tuning,
+            "keyword_tracks": {
+                "portfolio_keywords": portfolio_keywords,
+                "commercial_keywords": commercial_keywords,
+                "leadership_keywords": leadership_keywords,
+                "scope_keywords": scope_keywords,
+            },
         },
     }
 
@@ -1416,31 +1473,29 @@ def build_app_bootstrap() -> Dict[str, Any]:
                 "role_title": "Chief Executive Officer (CEO)",
                 "titles": [
                     "Chief Executive Officer",
-                    "CEO",
                     "Group CEO",
                     "Managing Director",
                     "President",
+                    "Regional CEO",
+                    "Business Unit CEO",
                     "Chief Operating Officer",
-                    "General Manager",
-                    "Country Manager",
-                    "Business Director",
+                    "CEO",
                 ],
                 "countries": [
                     "United Arab Emirates",
                     "Saudi Arabia",
                     "Qatar",
-                    "Oman",
                     "Kuwait",
+                    "Oman",
                     "Bahrain",
                     "Egypt",
+                    "India",
                     "United Kingdom",
+                    "Italy",
                     "Germany",
                     "France",
-                    "Italy",
                     "Spain",
                     "Netherlands",
-                    "Poland",
-                    "India",
                 ],
                 "continents": ["Middle East", "Africa", "Europe", "Asia"],
                 "cities": [
@@ -1449,100 +1504,131 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Riyadh",
                     "Jeddah",
                     "Doha",
-                    "Muscat",
                     "Kuwait City",
+                    "Muscat",
                     "Manama",
                     "Cairo",
-                    "Alexandria",
-                    "London",
-                    "Manchester",
-                    "Berlin",
-                    "Munich",
-                    "Paris",
-                    "Milan",
-                    "Madrid",
-                    "Amsterdam",
-                    "Warsaw",
                     "Mumbai",
                     "New Delhi",
                     "Bengaluru",
-                    "Chennai",
+                    "London",
+                    "Milan",
+                    "Berlin",
+                    "Paris",
+                    "Madrid",
+                    "Amsterdam",
                 ],
                 "company_targets": [
                     "Marina Home Interiors",
-                    "Home Centre",
-                    "Pan Emirates",
                     "The One",
                     "Al Huzaifa",
+                    "Pan Emirates",
+                    "Home Centre",
                     "IDdesign",
-                    "IKEA",
                     "Pottery Barn",
                     "West Elm",
                     "Crate & Barrel",
                     "Williams-Sonoma",
                     "RH",
-                    "Ethan Allen",
                     "Roche Bobois",
                     "BoConcept",
-                    "Kartell",
-                    "CB2",
                     "Maisons du Monde",
                     "Zara Home",
-                    "Home Box",
-                    "Harrods Home",
-                    "Selfridges Home",
                 ],
                 "company_match_mode": "both",
                 "employment_status_mode": "any",
                 "years_mode": "at_least",
-                "years_value": 5,
+                "years_value": 12,
                 "years_tolerance": 0,
                 "max_profiles": 300,
                 "must_have_keywords": [
-                    "General Management",
-                    "P&L",
+                    "P&L Ownership",
+                    "Multi-country Leadership",
+                    "Retail Operations",
+                    "Executive Team Leadership",
+                    "Board / Founder Stakeholder Management",
                     "Business Scaling",
                 ],
                 "nice_to_have_keywords": [
-                    "Operational Excellence",
-                    "Team Leadership",
-                    "Brand Development",
+                    "Home Furnishings",
+                    "Premium Retail",
+                    "Interior Design Retail",
+                    "Omnichannel",
                     "Market Expansion",
-                    "Stakeholder Management",
-                    "Family-Owned Business",
-                    "Founder-Led Transition",
-                    "Board Governance",
+                    "Turnaround",
                     "Arabic",
                     "MBA",
-                    "Home Interiors",
-                    "Omnichannel",
+                    "Founder-Led Transition",
+                    "P&L",
                 ],
-                "industry_keywords": ["luxury retail", "home furnishings", "interior design", "consumer"],
+                "industry_keywords": ["home furnishings", "premium retail", "interior design", "luxury retail", "consumer"],
                 "job_description": (
-                    "Marina Home Interiors is a Dubai-based premium home furnishings brand with operations across the "
-                    "Arabian Gulf region, Egypt, and the Indian subcontinent. We are hiring a visionary CEO to lead "
-                    "the business into its next growth phase as the founder transitions to a formal board role. The "
-                    "role requires strategic leadership, operational excellence, financial stewardship, innovation, and "
-                    "strong stakeholder engagement while preserving the brand's creative identity. Candidates should "
-                    "bring CEO or senior executive leadership experience, ideally in luxury home interiors, premium "
-                    "retail, or design-led consumer businesses, with proven capability in profitability management, "
-                    "international expansion, and leading high-performing executive teams. Experience in family-owned "
-                    "or founder-led environments is advantageous. Fluent English is required and Arabic is an advantage."
+                    "Marina Home Interiors is a Dubai-headquartered premium home furnishings and design-led retail "
+                    "business operating across the GCC with additional exposure in Egypt and India. We are hiring a "
+                    "Chief Executive Officer to lead the next stage of profitable growth as the founder transitions "
+                    "into a board-led governance model. The mandate requires a senior operator with genuine CEO, "
+                    "Managing Director, President, or divisional P&L leadership experience in premium retail, home "
+                    "furnishings, furniture, interiors, lifestyle, or adjacent design-led consumer businesses. The "
+                    "CEO must be able to drive revenue growth, store and omnichannel performance, operating cadence, "
+                    "executive team leadership, board and shareholder communication, and multi-country market "
+                    "expansion while protecting brand quality and customer experience. Experience in founder-led, "
+                    "family-owned, or transformation situations is valuable. Fluent English is required and Arabic is "
+                    "a strong advantage."
                 ),
-                "jd_breakdown": extract_job_description_breakdown(
-                    (
-                        "Marina Home Interiors is a Dubai-based premium home furnishings brand with operations across the "
-                        "Arabian Gulf region, Egypt, and the Indian subcontinent. We are hiring a visionary CEO to lead "
-                        "the business into its next growth phase as the founder transitions to a formal board role. The "
-                        "role requires strategic leadership, operational excellence, financial stewardship, innovation, and "
-                        "strong stakeholder engagement while preserving the brand's creative identity. Candidates should "
-                        "bring CEO or senior executive leadership experience, ideally in luxury home interiors, premium "
-                        "retail, or design-led consumer businesses, with proven capability in profitability management, "
-                        "international expansion, and leading high-performing executive teams. Experience in family-owned "
-                        "or founder-led environments is advantageous. Fluent English is required and Arabic is an advantage."
+                "jd_breakdown": {
+                    **extract_job_description_breakdown(
+                        (
+                            "Marina Home Interiors is a Dubai-headquartered premium home furnishings and design-led retail "
+                            "business operating across the GCC with additional exposure in Egypt and India. We are hiring a "
+                            "Chief Executive Officer to lead the next stage of profitable growth as the founder transitions "
+                            "into a board-led governance model. The mandate requires a senior operator with genuine CEO, "
+                            "Managing Director, President, or divisional P&L leadership experience in premium retail, home "
+                            "furnishings, furniture, interiors, lifestyle, or adjacent design-led consumer businesses. The "
+                            "CEO must be able to drive revenue growth, store and omnichannel performance, operating cadence, "
+                            "executive team leadership, board and shareholder communication, and multi-country market "
+                            "expansion while protecting brand quality and customer experience. Experience in founder-led, "
+                            "family-owned, or transformation situations is valuable. Fluent English is required and Arabic is "
+                            "a strong advantage."
+                        ),
+                        role_title="Chief Executive Officer (CEO)",
                     ),
-                    role_title="Chief Executive Officer (CEO)",
-                ),
+                    "keyword_tracks": {
+                        "portfolio_keywords": [
+                            "home furnishings",
+                            "store network",
+                            "omnichannel",
+                            "brand scaling",
+                        ],
+                        "commercial_keywords": [
+                            "P&L ownership",
+                            "profitability",
+                            "revenue growth",
+                            "market expansion",
+                        ],
+                        "leadership_keywords": [
+                            "board governance",
+                            "executive team leadership",
+                            "founder-led transition",
+                            "stakeholder management",
+                        ],
+                        "scope_keywords": [
+                            "multi-country",
+                            "regional",
+                            "international",
+                            "GCC",
+                        ],
+                    },
+                    "search_tuning": {
+                        "internal_fetch_limit_override": 900,
+                        "reranker_top_n": 280,
+                        "provider_parallel_requests": 18,
+                        "scrapingbee_max_queries": 520,
+                        "max_geo_groups": 10,
+                        "company_chunk_size": 4,
+                        "company_slice_location_group_limit": 6,
+                        "max_company_terms_per_query": 10,
+                    },
+                },
                 "anchors": {
                     "title": "preferred",
                     "skills": "preferred",

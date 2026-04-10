@@ -530,7 +530,318 @@ def build_reporting_summary(
             ),
         }
     )
+    summary["quality_diagnostics"] = build_quality_diagnostics(hydrated_candidates, summary)
     return summary
+
+
+def _diagnostic_issue(
+    *,
+    key: str,
+    label: str,
+    count: int,
+    total: int,
+    severity: str,
+    message: str,
+    action: str,
+) -> Dict[str, object]:
+    share = (float(count) / float(total)) if total else 0.0
+    return {
+        "key": key,
+        "label": label,
+        "count": int(max(0, count)),
+        "share": round(max(0.0, share), 3),
+        "severity": severity,
+        "message": message,
+        "action": action,
+    }
+
+
+def build_quality_diagnostics(
+    candidates: Iterable[CandidateProfile],
+    summary: Dict[str, object] | None = None,
+) -> Dict[str, object]:
+    hydrated_candidates = list(candidates)
+    total = len(hydrated_candidates)
+    base_summary = dict(summary or {})
+    pipeline_metrics = dict(base_summary.get("pipeline_metrics", {}) or {})
+    target_range = list(base_summary.get("target_range", []) or [])
+    target = int(target_range[-1] or total or 0) if target_range else total
+    if total <= 0:
+        return {
+            "enabled": False,
+            "yield_status": "unknown",
+            "headline": "No candidate data yet.",
+            "verified_rate": 0.0,
+            "issues": [],
+        }
+
+    verified_count = len([candidate for candidate in hydrated_candidates if candidate.verification_status == "verified"])
+    review_count = len([candidate for candidate in hydrated_candidates if candidate.verification_status == "review"])
+    reject_count = len([candidate for candidate in hydrated_candidates if candidate.verification_status == "reject"])
+    verified_rate = verified_count / max(1, total)
+    review_rate = review_count / max(1, total)
+    reject_rate = reject_count / max(1, total)
+
+    title_gap_count = len(
+        [
+            candidate
+            for candidate in hydrated_candidates
+            if (not candidate.current_title_match)
+            or "title_alignment_required" in set(candidate.cap_reasons or [])
+        ]
+    )
+    geo_gap_count = len(
+        [
+            candidate
+            for candidate in hydrated_candidates
+            if (not candidate.location_aligned)
+            or candidate.location_precision_bucket in {"outside_target_area", "unknown_location"}
+            or {"outside_target_area", "precise_location_required"}.intersection(set(candidate.cap_reasons or []))
+        ]
+    )
+    weak_anchor_count = len(
+        [
+            candidate
+            for candidate in hydrated_candidates
+            if candidate.skill_overlap_score < 0.25
+            and candidate.current_function_fit < 0.55
+            and candidate.years_fit_score < 0.45
+        ]
+    )
+    company_industry_gap_count = len(
+        [
+            candidate
+            for candidate in hydrated_candidates
+            if not candidate.current_target_company_match
+            and not candidate.target_company_history_match
+            and candidate.industry_fit_score < 0.25
+        ]
+    )
+    parser_gap_count = len(
+        [
+            candidate
+            for candidate in hydrated_candidates
+            if candidate.parser_confidence < 0.45
+            or candidate.evidence_quality_score < 0.35
+            or "parser_confidence_too_low" in set(candidate.cap_reasons or [])
+        ]
+    )
+    strict_cap_count = len(
+        [
+            candidate
+            for candidate in hydrated_candidates
+            if {
+                "outside_target_area",
+                "precise_location_required",
+                "current_function_review",
+                "current_target_company_required",
+                "target_company_history_required",
+                "title_alignment_required",
+            }.intersection(set(candidate.cap_reasons or []))
+        ]
+    )
+    loose_match_count = len(
+        [
+            candidate
+            for candidate in hydrated_candidates
+            if candidate.verification_status == "reject"
+            and (
+                (not candidate.current_title_match)
+                or candidate.skill_overlap_score < 0.15
+                or candidate.current_function_fit < 0.35
+            )
+        ]
+    )
+    unique_after_dedupe = int(pipeline_metrics.get("unique_after_dedupe", total) or total)
+    raw_found = int(pipeline_metrics.get("raw_found", unique_after_dedupe) or unique_after_dedupe)
+    scarcity_gap = max(0, target - unique_after_dedupe)
+
+    issues: List[Dict[str, object]] = []
+    if title_gap_count / max(1, total) >= 0.28:
+        issues.append(
+            _diagnostic_issue(
+                key="title_mismatch",
+                label="Title mismatch",
+                count=title_gap_count,
+                total=total,
+                severity="high" if title_gap_count / max(1, total) >= 0.45 else "medium",
+                message=(
+                    "A large share of candidates surfaced with adjacent leadership titles rather than clean CEO / "
+                    "Managing Director / President evidence."
+                ),
+                action=(
+                    "Tighten the accepted title family around the true executive titles you will actually accept, "
+                    "and remove looser adjacent titles if they are not interviewable."
+                ),
+            )
+        )
+    if geo_gap_count / max(1, total) >= 0.24:
+        issues.append(
+            _diagnostic_issue(
+                key="geo_mismatch",
+                label="Geo mismatch",
+                count=geo_gap_count,
+                total=total,
+                severity="high" if geo_gap_count / max(1, total) >= 0.4 else "medium",
+                message=(
+                    "Many candidates are outside the priority markets or only have weak public location evidence, "
+                    "which drags verified yield down."
+                ),
+                action=(
+                    "Keep the first countries and cities as the true priority markets. Remove low-priority geos if "
+                    "the mandate must stay concentrated."
+                ),
+            )
+        )
+    if weak_anchor_count / max(1, total) >= 0.22:
+        issues.append(
+            _diagnostic_issue(
+                key="weak_must_have_anchors",
+                label="Weak must-have anchors",
+                count=weak_anchor_count,
+                total=total,
+                severity="medium",
+                message=(
+                    "A meaningful share of candidates have generic leadership signals but weak overlap on the must-have "
+                    "commercial, operating, or scaling anchors."
+                ),
+                action=(
+                    "Add 4 to 6 must-have phrases that are hard to fake, such as P&L scope, multi-country retail, "
+                    "omnichannel, executive team leadership, or founder-transition context."
+                ),
+            )
+        )
+    if company_industry_gap_count / max(1, total) >= 0.22:
+        issues.append(
+            _diagnostic_issue(
+                key="weak_company_or_industry_signals",
+                label="Weak company / industry signals",
+                count=company_industry_gap_count,
+                total=total,
+                severity="medium",
+                message=(
+                    "Too few candidates show target-company history or strong premium home / design-led retail industry "
+                    "signals, so the search is leaning on adjacent executives."
+                ),
+                action=(
+                    "Add more comparable premium home, furniture, interiors, and design-led retail companies instead "
+                    "of broad consumer brands."
+                ),
+            )
+        )
+    if parser_gap_count / max(1, total) >= 0.24:
+        issues.append(
+            _diagnostic_issue(
+                key="parser_confidence",
+                label="Parser confidence / public evidence",
+                count=parser_gap_count,
+                total=total,
+                severity="medium",
+                message=(
+                    "Public profile data is thin or ambiguous for many candidates, which blocks confident verification "
+                    "even when the profile looks directionally relevant."
+                ),
+                action=(
+                    "Broaden into markets with richer public executive profiles, or relax exact-company expectations so "
+                    "better-documented adjacent executives can surface."
+                ),
+            )
+        )
+    if strict_cap_count / max(1, total) >= 0.3 and review_rate >= 0.3:
+        issues.append(
+            _diagnostic_issue(
+                key="filters_too_strict",
+                label="Filters may be too strict",
+                count=strict_cap_count,
+                total=total,
+                severity="medium",
+                message=(
+                    "A large share of candidates are getting capped into review because one hard constraint is missing, "
+                    "even though the rest of the profile is directionally strong."
+                ),
+                action=(
+                    "Decide which anchors are truly mandatory. If location or exact-company history is only a preference, "
+                    "soften it so strong adjacent leaders can verify."
+                ),
+            )
+        )
+    elif loose_match_count / max(1, total) >= 0.35 and reject_rate >= 0.45:
+        issues.append(
+            _diagnostic_issue(
+                key="filters_too_loose",
+                label="Filters may be too loose",
+                count=loose_match_count,
+                total=total,
+                severity="medium",
+                message=(
+                    "The search is pulling too many adjacent executives with weak title or operating-fit evidence, "
+                    "which floods the run with rejects."
+                ),
+                action=(
+                    "Narrow the title family, strengthen must-have anchors, or trim weak discovery keywords so the run "
+                    "stays executive-quality."
+                ),
+            )
+        )
+    if target > 0 and ((scarcity_gap / max(1, target)) >= 0.18 or raw_found < max(target, int(target * 1.4))):
+        issues.append(
+            _diagnostic_issue(
+                key="market_scarcity",
+                label="Market scarcity",
+                count=max(scarcity_gap, max(0, target - raw_found)),
+                total=max(1, target),
+                severity="high" if verified_rate < 0.2 else "medium",
+                message=(
+                    "The market did not produce enough unique in-scope executives to honestly support a much higher "
+                    "verified count."
+                ),
+                action=(
+                    "Expand the highest-priority geos, allow one adjacent executive title, or accept that the verified "
+                    "ceiling is lower for this market."
+                ),
+            )
+        )
+
+    issue_priority = {
+        "market_scarcity": 0,
+        "title_mismatch": 1,
+        "geo_mismatch": 2,
+        "parser_confidence": 3,
+        "weak_must_have_anchors": 4,
+        "weak_company_or_industry_signals": 5,
+        "filters_too_strict": 6,
+        "filters_too_loose": 7,
+    }
+    issues = sorted(
+        issues,
+        key=lambda issue: (
+            issue_priority.get(str(issue.get("key", "")), 99),
+            -float(issue.get("share", 0.0)),
+            -int(issue.get("count", 0)),
+        ),
+    )
+    if verified_rate >= 0.4:
+        headline = "Verified yield looks healthy."
+        yield_status = "healthy"
+    elif verified_rate >= 0.2:
+        headline = "Verified yield is usable but constrained."
+        yield_status = "constrained"
+    else:
+        headline = "Verified yield is low for this brief."
+        yield_status = "low"
+
+    return {
+        "enabled": bool(issues) or yield_status != "healthy",
+        "yield_status": yield_status,
+        "headline": headline,
+        "verified_rate": round(verified_rate, 3),
+        "verified_count": verified_count,
+        "review_count": review_count,
+        "reject_count": reject_count,
+        "raw_found": raw_found,
+        "unique_after_dedupe": unique_after_dedupe,
+        "issues": issues[:4],
+    }
 
 
 def filter_new_candidates(candidates: Iterable[CandidateProfile], seen_keys: Set[str]) -> List[CandidateProfile]:

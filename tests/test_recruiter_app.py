@@ -126,6 +126,54 @@ def test_build_ui_brief_payload_uses_internal_fetch_budget_for_retrieval():
     assert payload["brief_config"]["provider_settings"]["reranker"]["top_n"] >= 200
 
 
+def test_build_ui_brief_payload_supports_keyword_tracks_and_search_tuning_from_breakdown():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Chief Executive Officer (CEO)",
+            "titles": ["Chief Executive Officer", "Managing Director"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "company_targets": ["Marina Home Interiors", "The One"],
+            "limit": 300,
+            "job_description": "Need a premium retail executive with real P&L and multi-country leadership experience.",
+            "jd_breakdown": {
+                "summary": "Target role: CEO.",
+                "titles": ["Chief Executive Officer"],
+                "required_keywords": ["P&L ownership"],
+                "preferred_keywords": ["premium retail"],
+                "industry_keywords": ["home furnishings"],
+                "key_experience_points": ["Multi-country retail leadership."],
+                "years": {"mode": "at_least", "value": 12, "min": 12, "max": None, "tolerance": 0},
+                "keyword_tracks": {
+                    "portfolio_keywords": ["omnichannel"],
+                    "commercial_keywords": ["profitability"],
+                    "leadership_keywords": ["board governance"],
+                    "scope_keywords": ["regional"],
+                },
+                "search_tuning": {
+                    "internal_fetch_limit_override": 900,
+                    "provider_parallel_requests": 18,
+                    "scrapingbee_max_queries": 520,
+                    "max_geo_groups": 10,
+                    "company_chunk_size": 4,
+                    "company_slice_location_group_limit": 6,
+                },
+            },
+        }
+    )
+
+    brief = payload["brief_config"]
+    assert payload["internal_fetch_limit"] == 900
+    assert brief["portfolio_keywords"] == ["omnichannel"]
+    assert brief["commercial_keywords"] == ["profitability"]
+    assert brief["leadership_keywords"] == ["board governance"]
+    assert brief["scope_keywords"] == ["regional"]
+    assert brief["provider_settings"]["retrieval"]["company_chunk_size"] == 4
+    assert brief["provider_settings"]["retrieval"]["max_geo_groups"] == 10
+    assert brief["provider_settings"]["scrapingbee_google"]["parallel_requests"] == 18
+    assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 520
+    assert brief["provider_settings"]["scrapingbee_google"]["company_slice_location_group_limit"] == 6
+
+
 def test_build_ui_brief_payload_respects_internal_fetch_override():
     payload = build_ui_brief_payload(
         {

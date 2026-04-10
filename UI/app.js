@@ -208,6 +208,10 @@ function formatScore(value) {
   return safeNumber(value).toFixed(2);
 }
 
+function formatPercent(value) {
+  return `${Math.round(Math.max(0, safeNumber(value, 0) * 100))}%`;
+}
+
 function titleCaseWords(value) {
   return String(value || "")
     .split(/[\s_:-]+/)
@@ -1427,7 +1431,17 @@ function runningJobProgress(job) {
   const rawFound = safeNumber(backendProgress.raw_found, 0);
   const uniqueAfterDedupe = safeNumber(backendProgress.unique_after_dedupe, 0);
   const stageElapsedRaw = safeNumber(backendProgress.stage_elapsed_seconds, 0);
-  const stageElapsedSeconds = Math.max(0, Math.min(elapsedSeconds, stageElapsedRaw > 0 ? stageElapsedRaw : elapsedSeconds));
+  const liveStageElapsed = isActiveJobStatus(status)
+    ? stageElapsedRaw + stalledForSeconds
+    : stageElapsedRaw;
+  const stageElapsedFallback = ["completed", "failed"].includes(status) ? 0 : elapsedSeconds;
+  const stageElapsedSeconds = Math.max(
+    0,
+    Math.min(
+      elapsedSeconds,
+      Math.round(liveStageElapsed > 0 ? liveStageElapsed : stageElapsedFallback),
+    ),
+  );
   const stageLabel = String(backendProgress.stage_label || titleCaseWords(stage || "queued"));
   const message = String(backendProgress.message || "")
     .replace(/\(\s*\d+\s*s\s*elapsed\s*\)\.?/gi, "")
@@ -1600,6 +1614,16 @@ function renderStatusJobPanel(job) {
   });
 }
 
+function renderActiveJobTabPanels() {
+  if (state.activeTab === "results") {
+    renderResults();
+    return;
+  }
+  if (state.activeTab === "candidates") {
+    renderCandidates();
+  }
+}
+
 function syncLiveJobStatus() {
   const activeJob = activeSearchJobForSelectedProject();
   if (!activeJob) {
@@ -1746,6 +1770,52 @@ function compactFeatureSummary(candidate) {
   `;
 }
 
+function qualityIssueTone(severity) {
+  const normalized = String(severity || "").toLowerCase();
+  if (normalized === "high") return "quality-issue-high";
+  if (normalized === "medium") return "quality-issue-medium";
+  return "quality-issue-watch";
+}
+
+function qualityDiagnosticsMarkup(summary) {
+  const diagnostics = summary?.quality_diagnostics;
+  if (!diagnostics?.enabled) {
+    return "";
+  }
+  const issues = Array.isArray(diagnostics.issues) ? diagnostics.issues : [];
+  const issuesMarkup = issues.length
+    ? issues.map((issue) => `
+        <article class="quality-issue ${qualityIssueTone(issue.severity)}">
+          <div class="quality-issue-head">
+            <strong>${escapeHtml(issue.label || "Diagnostic")}</strong>
+            <span>${escapeHtml(String(issue.count || 0))} candidates | ${escapeHtml(formatPercent(issue.share || 0))}</span>
+          </div>
+          <p>${escapeHtml(issue.message || "")}</p>
+          <p class="muted small"><strong>How to improve:</strong> ${escapeHtml(issue.action || "")}</p>
+        </article>
+      `).join("")
+    : `<p class="muted small">No major quality blockers were detected in the latest candidate set.</p>`;
+  return `
+    <section class="quality-diagnostics-card">
+      <div class="quality-diagnostics-head">
+        <div>
+          <p class="eyebrow">Quality Diagnostics</p>
+          <h4>${escapeHtml(diagnostics.headline || "Candidate quality diagnostics")}</h4>
+        </div>
+        <div class="quality-diagnostics-metrics">
+          <span class="info-chip"><strong>Verified Yield</strong> ${escapeHtml(formatPercent(diagnostics.verified_rate || 0))}</span>
+          <span class="info-chip"><strong>Verified</strong> ${escapeHtml(String(diagnostics.verified_count || 0))}</span>
+          <span class="info-chip"><strong>Unique</strong> ${escapeHtml(String(diagnostics.unique_after_dedupe || 0))}</span>
+          <span class="info-chip"><strong>Raw</strong> ${escapeHtml(String(diagnostics.raw_found || 0))}</span>
+        </div>
+      </div>
+      <div class="quality-issue-grid">
+        ${issuesMarkup}
+      </div>
+    </section>
+  `;
+}
+
 function renderResultsSummary() {
   const root = document.getElementById("results-summary");
   const activeJob = activeSearchJobForSelectedProject();
@@ -1818,6 +1888,7 @@ function renderResultsSummary() {
       : timing.source === "active"
         ? "Live timing from the active running search."
         : "Timing will appear after search telemetry is available.";
+  const diagnosticsMarkup = qualityDiagnosticsMarkup(summary);
   root.innerHTML = `
         <div class="summary-cards">
       ${cards
@@ -1842,6 +1913,7 @@ function renderResultsSummary() {
           </div>
         </div>
         ${topLocationsMarkup}
+        ${diagnosticsMarkup}
         <p class="muted small">${escapeHtml(timingNote)}</p>
         <p class="muted">Latest run: ${escapeHtml(formatTimestamp(state.currentReport.generated_at))} for ${escapeHtml(state.selectedProject.name)}.</p>
         ${activeJob ? `<p class="muted">A newer search is currently ${escapeHtml(titleCaseWords(activeJob.status))}. Requested limit: ${escapeHtml(String(activeJob.payload?.limit || currentRequestedCandidateLimit()))} candidates.</p>` : ""}
@@ -2776,9 +2848,7 @@ function startLiveProgressTicker() {
       return;
     }
     syncLiveJobStatus();
-    if (state.activeTab === "results") {
-      renderResultsSummary();
-    }
+    renderActiveJobTabPanels();
   }, 1000);
 }
 
@@ -2795,6 +2865,7 @@ function startJobPolling(jobId) {
       const job = await fetchJSON(`/app/jobs/${encodeURIComponent(resolvedJobId)}`, { timeoutMs: 8000 });
       state.activeJob = job;
       renderOwnerJobs();
+      renderActiveJobTabPanels();
       syncLiveJobStatus();
       if (job.status === "completed") {
         clearJobPolling();
