@@ -656,6 +656,10 @@ def create_app() -> "FastAPI":
                     elapsed_seconds + (0 if stage in {"completed", "failed"} else 2),
                     min(4 * 3600, max(0, int(projected_total_seconds or 0))),
                 )
+                latest_telemetry["eta_seconds"] = max(
+                    0,
+                    int(latest_telemetry["estimated_total_seconds"]) - elapsed_seconds,
+                ) if stage not in {"completed", "failed"} else 0
                 update_job_progress(
                     job_id,
                     latest_telemetry,
@@ -675,6 +679,7 @@ def create_app() -> "FastAPI":
                         "verification_requests_used": int(latest_telemetry.get("verification_requests_used", 0) or 0),
                         "stage_elapsed_seconds": int(latest_telemetry.get("stage_elapsed_seconds", 0) or 0),
                         "estimated_total_seconds": int(latest_telemetry.get("estimated_total_seconds", 0) or 0),
+                        "eta_seconds": int(latest_telemetry.get("eta_seconds", 0) or 0),
                         "requested_limit": requested_limit,
                         "internal_fetch_limit": internal_fetch_limit,
                         "round": int(latest_telemetry.get("round", 0) or 0),

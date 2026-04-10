@@ -1282,6 +1282,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     tuned_history_query_terms = parse_multi_value(search_tuning.get("history_query_terms"))
     tuned_company_slice_location_group_limit = _coerce_int(search_tuning.get("company_slice_location_group_limit"))
     tuned_geo_group_size = _coerce_int(search_tuning.get("geo_group_size"))
+    tuned_stagnation_query_window = _coerce_int(search_tuning.get("stagnation_query_window"))
+    tuned_stagnation_min_results = _coerce_int(search_tuning.get("stagnation_min_results"))
     tuned_include_history_slices = _coerce_bool(search_tuning.get("include_history_slices"))
     tuned_include_discovery_slices = _coerce_bool(search_tuning.get("include_discovery_slices"))
     tuned_verification_enabled = _coerce_bool(search_tuning.get("verification_enabled"))
@@ -1405,6 +1407,18 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                 or 0,
             ),
             "geo_group_size": max(1, _coerce_int(payload.get("geo_group_size")) or tuned_geo_group_size or 2),
+            "stagnation_query_window": max(
+                0,
+                _coerce_int(payload.get("stagnation_query_window"))
+                or tuned_stagnation_query_window
+                or 28,
+            ),
+            "stagnation_min_results": max(
+                0,
+                _coerce_int(payload.get("stagnation_min_results"))
+                or tuned_stagnation_min_results
+                or 0,
+            ),
             "query_family_budgets": {
                 str(family).strip(): max(0, int(value))
                 for family, value in dict(payload_query_family_budgets or tuned_query_family_budgets).items()
@@ -1717,28 +1731,30 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         ],
                     },
                     "search_tuning": {
-                        "internal_fetch_limit_override": 720,
+                        "internal_fetch_limit_override": 480,
                         "reranker_top_n": 240,
                         "provider_parallel_requests": 20,
-                        "scrapingbee_max_queries": 130,
-                        "max_geo_groups": 7,
+                        "scrapingbee_max_queries": 72,
+                        "max_geo_groups": 6,
                         "geo_group_size": 1,
                         "company_chunk_size": 3,
-                        "company_slice_location_group_limit": 4,
+                        "company_slice_location_group_limit": 3,
                         "max_company_terms_per_query": 10,
+                        "stagnation_query_window": 12,
+                        "stagnation_min_results": 360,
                         "include_history_slices": True,
                         "include_discovery_slices": True,
                         "verification_top_n": 120,
-                        "verification_parallel_candidates": 6,
+                        "verification_parallel_candidates": 8,
                         "query_family_budgets": {
-                            "team_leadership_pages": 24,
-                            "appointment_news_pages": 18,
-                            "speaker_bio_pages": 12,
-                            "award_industry_pages": 6,
-                            "industry_association_pages": 6,
-                            "trade_directory_pages": 6,
-                            "org_chart_profile_pages": 24,
-                            "profile_like_public_pages": 24,
+                            "team_leadership_pages": 18,
+                            "appointment_news_pages": 12,
+                            "speaker_bio_pages": 8,
+                            "award_industry_pages": 4,
+                            "industry_association_pages": 4,
+                            "trade_directory_pages": 4,
+                            "org_chart_profile_pages": 16,
+                            "profile_like_public_pages": 16,
                         },
                     },
                 },

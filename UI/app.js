@@ -438,6 +438,11 @@ function showAppShell() {
   document.getElementById("app-shell").hidden = false;
 }
 
+function showRestoringShell(detail = "Loading your projects and hunt workspace.") {
+  showAppShell();
+  setStatus("Restoring your session...", "default", detail);
+}
+
 function openNav() {
   state.navOpen = true;
   document.getElementById("nav-drawer").hidden = false;
@@ -2634,6 +2639,7 @@ async function loadProject(projectId) {
   const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}`);
   state.selectedProjectId = payload.project.id;
   state.selectedProject = payload.project;
+  state.currentReport = null;
   state.candidateSearchQuery = "";
   state.candidateStatusFilter = "all";
   state.candidateLocationFilter = "all";
@@ -2647,10 +2653,13 @@ async function loadProject(projectId) {
     loadProjectRuns(projectId),
     loadProjectReviews(projectId),
     loadLatestProjectJob(projectId),
-    loadProjectRun(projectId),
   ]);
+  const reportLoad = loadProjectRun(projectId, "", { timeoutMs: 5000, suppressErrors: true });
   const failedJob = failedSearchJobForSelectedProject();
   const activeJob = activeSearchJobForSelectedProject();
+  if (!activeJob) {
+    await reportLoad;
+  }
   if (failedJob) {
     setStatus("Latest search failed.", "danger", `${failedJob.error || "The latest search did not complete successfully."} Retry when ready.`);
     return;
@@ -2722,7 +2731,7 @@ async function loadProjectReviews(projectId) {
   renderFeedback();
 }
 
-async function loadProjectRun(projectId, runId = "") {
+async function loadProjectRun(projectId, runId = "", options = {}) {
   if (!projectId) {
     state.currentReport = null;
     state.candidateSearchQuery = "";
@@ -2734,14 +2743,26 @@ async function loadProjectRun(projectId, runId = "") {
     return;
   }
   const query = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
-  const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}/run${query}`);
-  state.currentReport = payload && payload.run_id ? payload : null;
-  state.candidateSearchQuery = "";
-  state.candidateStatusFilter = "all";
-  state.candidateLocationFilter = "all";
-  state.selectedCandidateRef = "";
-  renderResults();
-  renderCandidates();
+  try {
+    const timeoutMs = safeNumber(options.timeoutMs, 0);
+    const payload = await fetchJSON(
+      `/app/projects/${encodeURIComponent(projectId)}/run${query}`,
+      timeoutMs > 0 ? { timeoutMs } : {},
+    );
+    state.currentReport = payload && payload.run_id ? payload : null;
+    state.candidateSearchQuery = "";
+    state.candidateStatusFilter = "all";
+    state.candidateLocationFilter = "all";
+    state.selectedCandidateRef = "";
+    renderResults();
+    renderCandidates();
+    return state.currentReport;
+  } catch (error) {
+    if (!options.suppressErrors) {
+      throw error;
+    }
+    return null;
+  }
 }
 
 async function saveProject() {
@@ -3083,8 +3104,7 @@ async function completeLoginPayload(payload) {
   } catch {
     // Non-fatal: keep the session token in memory for this page load.
   }
-  showAppShell();
-  setStatus("Restoring your session...", "default", "Loading your projects and hunt workspace.");
+  showRestoringShell();
   await completeSessionBootstrap(payload.user, payload.projects || []);
   try {
     window.localStorage.removeItem(SESSION_HANDOFF_KEY);
@@ -3112,8 +3132,7 @@ async function restoreSession() {
     // Attempt cookie-backed session (server may have issued an HttpOnly session cookie).
     try {
       const payload = await fetchJSON("/app/auth/session");
-      showAppShell();
-      setStatus("Restoring your session...", "default", "Loading your projects and hunt workspace.");
+      showRestoringShell();
       await completeSessionBootstrap(payload.user, payload.projects || []);
       clearSessionTokenFromUrl();
       switchTab("projects");
@@ -3140,10 +3159,9 @@ async function restoreSession() {
     }
   }
   state.sessionToken = resolvedToken;
+  showRestoringShell();
   try {
     const payload = await fetchJSON("/app/auth/session");
-    showAppShell();
-    setStatus("Restoring your session...", "default", "Loading your projects and hunt workspace.");
     await completeSessionBootstrap(payload.user, payload.projects || []);
     try {
       window.localStorage.removeItem(SESSION_HANDOFF_KEY);
@@ -3164,8 +3182,7 @@ async function restoreSession() {
     // If we have a cookie-backed session but the stored token was stale, retry once without the header.
     try {
       const payload = await fetchJSON("/app/auth/session");
-      showAppShell();
-      setStatus("Restoring your session...", "default", "Loading your projects and hunt workspace.");
+      showRestoringShell();
       await completeSessionBootstrap(payload.user, payload.projects || []);
       try {
         window.localStorage.removeItem(SESSION_HANDOFF_KEY);
