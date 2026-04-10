@@ -156,6 +156,13 @@ def test_build_ui_brief_payload_supports_keyword_tracks_and_search_tuning_from_b
                     "max_geo_groups": 10,
                     "company_chunk_size": 4,
                     "company_slice_location_group_limit": 6,
+                    "include_discovery_slices": False,
+                    "verification_top_n": 120,
+                    "verification_parallel_candidates": 8,
+                    "query_family_budgets": {
+                        "org_chart_profile_pages": 24,
+                        "profile_like_public_pages": 18,
+                    },
                 },
             },
         }
@@ -169,9 +176,13 @@ def test_build_ui_brief_payload_supports_keyword_tracks_and_search_tuning_from_b
     assert brief["scope_keywords"] == ["regional"]
     assert brief["provider_settings"]["retrieval"]["company_chunk_size"] == 4
     assert brief["provider_settings"]["retrieval"]["max_geo_groups"] == 10
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is False
     assert brief["provider_settings"]["scrapingbee_google"]["parallel_requests"] == 18
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 520
     assert brief["provider_settings"]["scrapingbee_google"]["company_slice_location_group_limit"] == 6
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["org_chart_profile_pages"] == 24
+    assert brief["provider_settings"]["verification"]["top_n"] == 120
+    assert brief["provider_settings"]["verification"]["parallel_candidates"] == 8
 
 
 def test_build_ui_brief_payload_respects_internal_fetch_override():

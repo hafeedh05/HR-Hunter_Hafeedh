@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List
+from typing import Any, Callable, Dict, Iterable, List
 from urllib.parse import urlparse
 
 import httpx
@@ -128,6 +129,7 @@ class PublicEvidenceVerifier:
         self.location_probe_queries = int(settings.get("location_probe_queries", 1))
         self.company_location_probe_queries = int(settings.get("company_location_probe_queries", 0))
         self.results_per_query = int(settings.get("results_per_query", 10))
+        self.parallel_candidates = max(1, int(settings.get("parallel_candidates", 6) or 6))
         self.include_site_terms = unique_preserving_order(
             [str(value).strip() for value in settings.get("include_site_terms", []) if str(value).strip()]
         )
@@ -896,23 +898,65 @@ class PublicEvidenceVerifier:
         candidates: List[CandidateProfile],
         brief: SearchBrief,
         limit: int,
+        progress_callback: Callable[[Dict[str, Any]], None] | None = None,
     ) -> Dict[str, Any]:
         request_count = 0
         verified_count = 0
         reviewed_count = 0
+        total = min(max(0, int(limit or 0)), len(candidates))
+        if total <= 0:
+            return {
+                "candidates_checked": 0,
+                "requests_used": 0,
+                "promoted_to_verified": 0,
+                "promoted_to_review": 0,
+            }
 
-        for candidate in candidates[:limit]:
-            evidence_records, used_requests = await self.collect_evidence(candidate, brief)
-            request_count += used_requests
+        checked_count = 0
+        semaphore = asyncio.Semaphore(self.parallel_candidates)
+        progress_lock = asyncio.Lock()
+
+        async def emit_progress() -> None:
+            if not progress_callback:
+                return
+            try:
+                progress_callback(
+                    {
+                        "candidates_checked": checked_count,
+                        "candidates_total": total,
+                        "requests_used": request_count,
+                        "promoted_to_verified": verified_count,
+                        "promoted_to_review": reviewed_count,
+                    }
+                )
+            except Exception:
+                return
+
+        async def verify_one(candidate: CandidateProfile) -> None:
+            nonlocal checked_count, request_count, verified_count, reviewed_count
             before_status = candidate.verification_status
-            self.apply_evidence(candidate, brief, evidence_records)
-            if candidate.verification_status == "verified" and before_status != "verified":
-                verified_count += 1
-            if candidate.verification_status == "review" and before_status == "reject":
-                reviewed_count += 1
+            evidence_records: List[EvidenceRecord] = []
+            used_requests = 0
+            async with semaphore:
+                try:
+                    evidence_records, used_requests = await self.collect_evidence(candidate, brief)
+                except Exception:
+                    evidence_records, used_requests = [], 0
+                self.apply_evidence(candidate, brief, evidence_records)
 
+            async with progress_lock:
+                checked_count += 1
+                request_count += used_requests
+                if candidate.verification_status == "verified" and before_status != "verified":
+                    verified_count += 1
+                if candidate.verification_status == "review" and before_status == "reject":
+                    reviewed_count += 1
+                await emit_progress()
+
+        await emit_progress()
+        await asyncio.gather(*(verify_one(candidate) for candidate in candidates[:total]))
         return {
-            "candidates_checked": min(limit, len(candidates)),
+            "candidates_checked": total,
             "requests_used": request_count,
             "promoted_to_verified": verified_count,
             "promoted_to_review": reviewed_count,

@@ -59,6 +59,7 @@ from hr_hunter.state import (
     summarize_system_state,
     update_job_progress,
 )
+from hr_hunter.verifier import PublicEvidenceVerifier, refresh_report_summary
 from hr_hunter.workspace import (
     PROJECT_STATUS_OPTIONS,
     SESSION_TTL_DAYS,
@@ -515,6 +516,12 @@ def create_app() -> "FastAPI":
             brief = build_search_brief(ui_payload["brief_config"])
             requested_limit = int(ui_payload["limit"])
             internal_fetch_limit = int(ui_payload.get("internal_fetch_limit", requested_limit))
+            verification_settings = dict(brief.provider_settings.get("verification", {}) or {})
+            verification_enabled = bool(verification_settings.get("enabled", True)) and not bool(payload.get("dry_run", False))
+            verification_target = min(
+                internal_fetch_limit,
+                max(0, int(verification_settings.get("top_n", 0) or 0)),
+            )
             project_id = str(payload.get("project_id", "")).strip()
             target_geography = _summarize_target_geography(ui_payload, brief)
             actor = {
@@ -535,6 +542,9 @@ def create_app() -> "FastAPI":
                 "reranked_count": 0,
                 "rerank_target": 0,
                 "finalized_count": 0,
+                "verified_candidates_checked": 0,
+                "verification_target": verification_target,
+                "verification_requests_used": 0,
                 "stage_elapsed_seconds": 0,
                 "estimated_total_seconds": 0,
                 "target": requested_limit,
@@ -557,10 +567,23 @@ def create_app() -> "FastAPI":
                 reranked_count = max(0, int(latest_telemetry.get("reranked_count", 0) or 0))
                 rerank_target = max(reranked_count, int(latest_telemetry.get("rerank_target", 0) or 0))
                 finalized_count = max(0, int(latest_telemetry.get("finalized_count", 0) or 0))
+                verified_candidates_checked = max(
+                    0,
+                    int(latest_telemetry.get("verified_candidates_checked", 0) or 0),
+                )
+                verification_target_count = max(
+                    0,
+                    int(latest_telemetry.get("verification_target", verification_target) or verification_target or 0),
+                )
                 completed_before_stage = max(0, elapsed_seconds - stage_elapsed_seconds)
                 finalizing_budget = max(8, min(150, int(max(1, target_count) * 0.07) + 8))
                 predicted_rerank_pool = max(rerank_target, min(max(unique_after_dedupe, target_count), max(target_count, 120)))
                 rerank_budget = max(40, min(900, int(predicted_rerank_pool * 0.38) + 24))
+                verification_budget = (
+                    max(25, min(900, int(max(1, verification_target_count) * 2.2) + 20))
+                    if verification_target_count > 0
+                    else 0
+                )
                 retrieval_tail = max(20, min(240, int(max(queries_total, target_count) * 0.12) + (queries_in_flight * 3)))
 
                 if stage in {"completed", "failed"}:
@@ -571,13 +594,26 @@ def create_app() -> "FastAPI":
                         stage_total = int(round(stage_elapsed_seconds / coverage))
                     else:
                         stage_total = stage_elapsed_seconds + retrieval_tail
-                    return completed_before_stage + max(stage_elapsed_seconds, stage_total) + rerank_budget + finalizing_budget
+                    return (
+                        completed_before_stage
+                        + max(stage_elapsed_seconds, stage_total)
+                        + rerank_budget
+                        + verification_budget
+                        + finalizing_budget
+                    )
                 if stage == "rerank":
                     if rerank_target > 0 and reranked_count > 0 and stage_elapsed_seconds > 0:
                         coverage = min(0.995, max(0.02, reranked_count / max(1, rerank_target)))
                         stage_total = int(round(stage_elapsed_seconds / coverage))
                     else:
                         stage_total = stage_elapsed_seconds + max(45, min(900, int(max(1, rerank_target or predicted_rerank_pool) * 0.35) + 30))
+                    return completed_before_stage + max(stage_elapsed_seconds, stage_total) + verification_budget + finalizing_budget
+                if stage == "verifying":
+                    if verification_target_count > 0 and verified_candidates_checked > 0 and stage_elapsed_seconds > 0:
+                        coverage = min(0.995, max(0.02, verified_candidates_checked / max(1, verification_target_count)))
+                        stage_total = int(round(stage_elapsed_seconds / coverage))
+                    else:
+                        stage_total = stage_elapsed_seconds + verification_budget
                     return completed_before_stage + max(stage_elapsed_seconds, stage_total) + finalizing_budget
                 if stage == "finalizing":
                     if target_count > 0 and finalized_count > 0 and stage_elapsed_seconds > 0:
@@ -634,6 +670,9 @@ def create_app() -> "FastAPI":
                         "reranked_count": int(latest_telemetry.get("reranked_count", 0) or 0),
                         "rerank_target": int(latest_telemetry.get("rerank_target", 0) or 0),
                         "finalized_count": int(latest_telemetry.get("finalized_count", 0) or 0),
+                        "verified_candidates_checked": int(latest_telemetry.get("verified_candidates_checked", 0) or 0),
+                        "verification_target": int(latest_telemetry.get("verification_target", verification_target) or verification_target or 0),
+                        "verification_requests_used": int(latest_telemetry.get("verification_requests_used", 0) or 0),
                         "stage_elapsed_seconds": int(latest_telemetry.get("stage_elapsed_seconds", 0) or 0),
                         "estimated_total_seconds": int(latest_telemetry.get("estimated_total_seconds", 0) or 0),
                         "requested_limit": requested_limit,
@@ -651,6 +690,7 @@ def create_app() -> "FastAPI":
                     "retrieval": "Retrieval",
                     "dedupe": "Dedupe",
                     "rerank": "Rerank",
+                    "verifying": "Verifying",
                     "finalizing": "Finalizing",
                     "running": "Running",
                 }
@@ -669,7 +709,7 @@ def create_app() -> "FastAPI":
                 )
                 if "queries_in_flight" in event:
                     queries_in_flight = int(event.get("queries_in_flight", latest_telemetry.get("queries_in_flight", 0)) or 0)
-                elif stage in {"dedupe", "rerank", "finalizing", "completed", "failed"}:
+                elif stage in {"dedupe", "rerank", "verifying", "finalizing", "completed", "failed"}:
                     queries_in_flight = 0
                 else:
                     queries_in_flight = int(latest_telemetry.get("queries_in_flight", 0) or 0)
@@ -701,7 +741,7 @@ def create_app() -> "FastAPI":
                 )
                 round_number = int(event.get("round", latest_telemetry.get("round", 0)) or 0)
                 estimated_total_seconds = int(event.get("estimated_total_seconds", latest_telemetry.get("estimated_total_seconds", 0)) or 0)
-                if stage in {"rerank", "finalizing"}:
+                if stage in {"rerank", "verifying", "finalizing"}:
                     queries_in_flight = 0
 
                 explicit_percent = event.get("percent")
@@ -712,6 +752,8 @@ def create_app() -> "FastAPI":
                         explicit_percent = 72
                     elif stage == "rerank":
                         explicit_percent = 84
+                    elif stage == "verifying":
+                        explicit_percent = 92
                     elif stage == "finalizing":
                         explicit_percent = 95
                     else:
@@ -809,6 +851,57 @@ def create_app() -> "FastAPI":
                 exclude_history_dirs=exclude_history_dirs,
                 progress_callback=_on_pipeline_progress,
             )
+            verification_stats = None
+            if verification_enabled and verification_target > 0:
+                verifier = PublicEvidenceVerifier(
+                    {
+                        **dict(brief.provider_settings.get("scrapingbee_google", {}) or {}),
+                        **verification_settings,
+                    }
+                )
+                if verifier.is_configured():
+                    def _on_verification_progress(event: Dict[str, Any]) -> None:
+                        checked = max(0, int(event.get("candidates_checked", 0) or 0))
+                        total = max(1, int(event.get("candidates_total", verification_target) or verification_target or 1))
+                        coverage = min(1.0, max(0.0, checked / max(1, total)))
+                        _push_progress(
+                            {
+                                "stage": "verifying",
+                                "stage_label": "Verifying",
+                                "queries_in_flight": 0,
+                                "verification_target": total,
+                                "verified_candidates_checked": checked,
+                                "verification_requests_used": int(event.get("requests_used", 0) or 0),
+                                "percent": max(92, min(98, 92 + int(round(coverage * 6)))),
+                                "message": (
+                                    "Checking public evidence for top candidates. "
+                                    f"{checked}/{total} reviewed."
+                                ),
+                            },
+                            checkpoint_patch={"event": "verifying"},
+                        )
+
+                    _push_progress(
+                        {
+                            "stage": "verifying",
+                            "stage_label": "Verifying",
+                            "queries_in_flight": 0,
+                            "verification_target": verification_target,
+                            "verified_candidates_checked": 0,
+                            "verification_requests_used": 0,
+                            "percent": 92,
+                            "message": "Checking public evidence for top candidates.",
+                        },
+                        checkpoint_patch={"event": "verifying_started"},
+                        force=True,
+                    )
+                    verification_stats = await verifier.verify_candidates(
+                        report.candidates,
+                        brief,
+                        limit=verification_target,
+                        progress_callback=_on_verification_progress,
+                    )
+                    refresh_report_summary(report, verification_stats)
             report = _finalize_report_for_limit(
                 report,
                 requested_limit=requested_limit,
@@ -824,7 +917,15 @@ def create_app() -> "FastAPI":
                     "rerank_target": int(pipeline_metrics.get("rerank_target", 0) or 0),
                     "reranked_count": int(pipeline_metrics.get("reranked_count", 0) or 0),
                     "finalized_count": len(report.candidates),
-                    "stage_elapsed_seconds": 0,
+                    "verified_candidates_checked": int(
+                        (verification_stats or {}).get("candidates_checked", latest_telemetry.get("verified_candidates_checked", 0))
+                        or 0
+                    ),
+                    "verification_target": int(latest_telemetry.get("verification_target", verification_target) or verification_target or 0),
+                    "verification_requests_used": int(
+                        (verification_stats or {}).get("requests_used", latest_telemetry.get("verification_requests_used", 0))
+                        or 0
+                    ),
                     "message": "Persisting final results and artifacts.",
                 },
                 checkpoint_patch={"event": "finalizing"},

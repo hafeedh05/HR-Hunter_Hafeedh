@@ -987,6 +987,19 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
+def _coerce_bool(value: Any) -> bool | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 def _selected_country_code(countries: List[str]) -> str:
     for country in countries:
         code = COUNTRY_TO_ALPHA2.get(normalize_text(country), "")
@@ -1269,14 +1282,80 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     tuned_history_query_terms = parse_multi_value(search_tuning.get("history_query_terms"))
     tuned_company_slice_location_group_limit = _coerce_int(search_tuning.get("company_slice_location_group_limit"))
     tuned_geo_group_size = _coerce_int(search_tuning.get("geo_group_size"))
+    tuned_include_history_slices = _coerce_bool(search_tuning.get("include_history_slices"))
+    tuned_include_discovery_slices = _coerce_bool(search_tuning.get("include_discovery_slices"))
+    tuned_verification_enabled = _coerce_bool(search_tuning.get("verification_enabled"))
+    tuned_verification_top_n = _coerce_int(search_tuning.get("verification_top_n"))
+    tuned_verification_parallel_candidates = _coerce_int(search_tuning.get("verification_parallel_candidates"))
+    tuned_verification_queries_per_candidate = _coerce_int(search_tuning.get("verification_queries_per_candidate"))
+    tuned_verification_location_probe_queries = _coerce_int(search_tuning.get("verification_location_probe_queries"))
+    tuned_verification_company_location_probe_queries = _coerce_int(
+        search_tuning.get("verification_company_location_probe_queries")
+    )
+    tuned_query_family_budgets = search_tuning.get("query_family_budgets", {})
+    if not isinstance(tuned_query_family_budgets, dict):
+        tuned_query_family_budgets = {}
+    payload_query_family_budgets = payload.get("query_family_budgets", {})
+    if not isinstance(payload_query_family_budgets, dict):
+        payload_query_family_budgets = {}
+    verification_enabled = _coerce_bool(payload.get("verification_enabled"))
+    if verification_enabled is None:
+        verification_enabled = tuned_verification_enabled
+    if verification_enabled is None:
+        verification_enabled = True
+    verification_top_n = _coerce_int(payload.get("verification_top_n"))
+    if verification_top_n is None:
+        verification_top_n = tuned_verification_top_n
+    if verification_top_n is None:
+        if limit >= 300:
+            verification_top_n = 120
+        elif limit >= 180:
+            verification_top_n = 90
+        elif limit >= 100:
+            verification_top_n = 60
+        else:
+            verification_top_n = limit
+    verification_top_n = min(internal_fetch_limit, max(0, verification_top_n))
+    verification_parallel_candidates = max(
+        1,
+        _coerce_int(payload.get("verification_parallel_candidates"))
+        or tuned_verification_parallel_candidates
+        or 6,
+    )
+    verification_queries_per_candidate = max(
+        1,
+        _coerce_int(payload.get("verification_queries_per_candidate"))
+        or tuned_verification_queries_per_candidate
+        or 2,
+    )
+    verification_location_probe_queries = max(
+        0,
+        _coerce_int(payload.get("verification_location_probe_queries"))
+        or tuned_verification_location_probe_queries
+        or 1,
+    )
+    verification_company_location_probe_queries = max(
+        0,
+        _coerce_int(payload.get("verification_company_location_probe_queries"))
+        or tuned_verification_company_location_probe_queries
+        or 0,
+    )
     providers_settings = {
         "retrieval": {
             "company_chunk_size": int(payload.get("company_chunk_size", tuned_company_chunk_size or 5) or 5),
             "results_per_slice": max(internal_fetch_limit, int(payload.get("results_per_slice", 40) or 40)),
             "include_strict_slice": True,
             "include_broad_slice": True,
-            "include_history_slices": bool(payload.get("include_history_slices", True)),
-            "include_discovery_slices": bool(payload.get("include_discovery_slices", True)),
+            "include_history_slices": (
+                _coerce_bool(payload.get("include_history_slices"))
+                if _coerce_bool(payload.get("include_history_slices")) is not None
+                else (tuned_include_history_slices if tuned_include_history_slices is not None else True)
+            ),
+            "include_discovery_slices": (
+                _coerce_bool(payload.get("include_discovery_slices"))
+                if _coerce_bool(payload.get("include_discovery_slices")) is not None
+                else (tuned_include_discovery_slices if tuned_include_discovery_slices is not None else True)
+            ),
             "geo_fanout_enabled": bool(payload.get("geo_fanout_enabled", True)),
             "max_geo_groups": max(3, _coerce_int(payload.get("max_geo_groups")) or tuned_max_geo_groups or default_geo_groups),
             "discovery_keyword_chunk_size": int(payload.get("discovery_keyword_chunk_size", tuned_discovery_chunk_size or 6) or 6),
@@ -1326,6 +1405,22 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                 or 0,
             ),
             "geo_group_size": max(1, _coerce_int(payload.get("geo_group_size")) or tuned_geo_group_size or 2),
+            "query_family_budgets": {
+                str(family).strip(): max(0, int(value))
+                for family, value in dict(payload_query_family_budgets or tuned_query_family_budgets).items()
+                if str(family).strip()
+            },
+        },
+        "verification": {
+            "enabled": bool(verification_enabled),
+            "top_n": verification_top_n,
+            "parallel_candidates": verification_parallel_candidates,
+            "country_code": str(payload.get("scrapingbee_country_code", "") or country_code or "us"),
+            "queries_per_candidate": verification_queries_per_candidate,
+            "location_probe_queries": verification_location_probe_queries,
+            "company_location_probe_queries": verification_company_location_probe_queries,
+            "pages_per_query": scrapingbee_pages_per_query,
+            "results_per_query": 10,
         },
     }
 
@@ -1478,7 +1573,6 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "President",
                     "Regional CEO",
                     "Business Unit CEO",
-                    "Chief Operating Officer",
                     "CEO",
                 ],
                 "countries": [
@@ -1491,13 +1585,10 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Egypt",
                     "India",
                     "United Kingdom",
-                    "Italy",
-                    "Germany",
                     "France",
-                    "Spain",
-                    "Netherlands",
+                    "Italy",
                 ],
-                "continents": ["Middle East", "Africa", "Europe", "Asia"],
+                "continents": [],
                 "cities": [
                     "Dubai",
                     "Abu Dhabi",
@@ -1512,11 +1603,8 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "New Delhi",
                     "Bengaluru",
                     "London",
-                    "Milan",
-                    "Berlin",
                     "Paris",
-                    "Madrid",
-                    "Amsterdam",
+                    "Milan",
                 ],
                 "company_targets": [
                     "Marina Home Interiors",
@@ -1524,6 +1612,8 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Al Huzaifa",
                     "Pan Emirates",
                     "Home Centre",
+                    "Home Box",
+                    "Landmark Group",
                     "IDdesign",
                     "Pottery Barn",
                     "West Elm",
@@ -1561,7 +1651,15 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Founder-Led Transition",
                     "P&L",
                 ],
-                "industry_keywords": ["home furnishings", "premium retail", "interior design", "luxury retail", "consumer"],
+                "industry_keywords": [
+                    "home furnishings",
+                    "furniture retail",
+                    "premium retail",
+                    "interior design",
+                    "luxury retail",
+                    "home decor",
+                    "consumer",
+                ],
                 "job_description": (
                     "Marina Home Interiors is a Dubai-headquartered premium home furnishings and design-led retail "
                     "business operating across the GCC with additional exposure in Egypt and India. We are hiring a "
@@ -1619,14 +1717,29 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         ],
                     },
                     "search_tuning": {
-                        "internal_fetch_limit_override": 900,
-                        "reranker_top_n": 280,
+                        "internal_fetch_limit_override": 720,
+                        "reranker_top_n": 240,
                         "provider_parallel_requests": 20,
-                        "scrapingbee_max_queries": 140,
-                        "max_geo_groups": 10,
-                        "company_chunk_size": 4,
-                        "company_slice_location_group_limit": 6,
+                        "scrapingbee_max_queries": 130,
+                        "max_geo_groups": 7,
+                        "geo_group_size": 1,
+                        "company_chunk_size": 3,
+                        "company_slice_location_group_limit": 4,
                         "max_company_terms_per_query": 10,
+                        "include_history_slices": True,
+                        "include_discovery_slices": True,
+                        "verification_top_n": 120,
+                        "verification_parallel_candidates": 6,
+                        "query_family_budgets": {
+                            "team_leadership_pages": 24,
+                            "appointment_news_pages": 18,
+                            "speaker_bio_pages": 12,
+                            "award_industry_pages": 6,
+                            "industry_association_pages": 6,
+                            "trade_directory_pages": 6,
+                            "org_chart_profile_pages": 24,
+                            "profile_like_public_pages": 24,
+                        },
                     },
                 },
                 "anchors": {

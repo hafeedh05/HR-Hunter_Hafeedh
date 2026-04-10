@@ -212,6 +212,64 @@ def test_score_candidate_accepts_adjacent_fmcg_title_family() -> None:
     assert scored.score >= 70.0
 
 
+def test_score_candidate_prefers_priority_geo_matches() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-priority-geo-test",
+            "role_title": "Chief Executive Officer",
+            "titles": ["Chief Executive Officer", "Managing Director"],
+            "company_targets": ["Marina Home Interiors"],
+            "geography": {
+                "location_name": "",
+                "country": "",
+                "radius_miles": 0,
+                "location_hints": [
+                    "Dubai",
+                    "Abu Dhabi",
+                    "Riyadh",
+                    "Jeddah",
+                    "London",
+                    "Paris",
+                ],
+            },
+            "location_targets": [
+                "Dubai",
+                "Abu Dhabi",
+                "Riyadh",
+                "Jeddah",
+                "London",
+                "Paris",
+            ],
+            "industry_keywords": ["home furnishings", "premium retail"],
+            "minimum_years_experience": 12,
+        }
+    )
+
+    priority_candidate = CandidateProfile(
+        full_name="Priority Geo",
+        current_title="Chief Executive Officer",
+        current_company="Marina Home Interiors",
+        location_name="Dubai, United Arab Emirates",
+        summary="Premium retail and home furnishings operator.",
+        experience=[{"company": {"name": "Marina Home Interiors"}, "start_date": "2010-01-01"}],
+    )
+    secondary_candidate = CandidateProfile(
+        full_name="Secondary Geo",
+        current_title="Chief Executive Officer",
+        current_company="Marina Home Interiors",
+        location_name="Paris, France",
+        summary="Premium retail and home furnishings operator.",
+        experience=[{"company": {"name": "Marina Home Interiors"}, "start_date": "2010-01-01"}],
+    )
+
+    scored_priority = score_candidate(priority_candidate, brief)
+    scored_secondary = score_candidate(secondary_candidate, brief)
+
+    assert scored_priority.location_match_score > scored_secondary.location_match_score
+    assert scored_priority.location_precision_bucket == "priority_target_location"
+    assert scored_secondary.location_precision_bucket in {"named_target_location", "secondary_target_location"}
+
+
 def test_score_candidate_demotes_low_seniority_specialist_role() -> None:
     brief = build_search_brief(
         {

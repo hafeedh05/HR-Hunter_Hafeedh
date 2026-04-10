@@ -354,6 +354,16 @@ def brief_location_targets(brief: SearchBrief) -> List[str]:
     )
 
 
+def location_priority_rank(target_locations: List[str], hint: str) -> int:
+    normalized_hint = normalize_text(hint)
+    if not normalized_hint:
+        return len(target_locations)
+    for index, value in enumerate(target_locations):
+        if normalize_text(value) == normalized_hint:
+            return index
+    return len(target_locations)
+
+
 def title_signal_tokens(value: str) -> set[str]:
     return {
         token
@@ -601,8 +611,15 @@ def evaluate_location_match(candidate: CandidateProfile, brief: SearchBrief) -> 
         "",
     )
     if matched_hint:
-        notes.append(f"location_match: named_target_location ({matched_hint})")
-        return 0.82, "named_target_location", True, notes
+        priority_index = location_priority_rank(target_locations, matched_hint)
+        if priority_index <= 3:
+            notes.append(f"location_match: priority_target_location ({matched_hint})")
+            return 0.92, "priority_target_location", True, notes
+        if priority_index <= 9:
+            notes.append(f"location_match: named_target_location ({matched_hint})")
+            return 0.82, "named_target_location", True, notes
+        notes.append(f"location_match: secondary_target_location ({matched_hint})")
+        return 0.7, "secondary_target_location", True, notes
     country_targets = unique_preserving_order([brief.geography.country])
     matched_country = next(
         (hint for hint in country_targets if normalize_text(hint) and normalize_text(hint) in location_haystack),
