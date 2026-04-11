@@ -258,7 +258,7 @@ def test_build_ui_brief_payload_respects_internal_fetch_override():
     assert payload["brief_config"]["provider_settings"]["reranker"]["top_n"] == 220
 
 
-def test_build_ui_brief_payload_uses_focused_defaults_for_small_precise_searches():
+def test_build_ui_brief_payload_uses_broader_recommended_defaults_for_common_50_candidate_searches():
     payload = build_ui_brief_payload(
         {
             "role_title": "Data Analyst",
@@ -273,10 +273,14 @@ def test_build_ui_brief_payload_uses_focused_defaults_for_small_precise_searches
     brief = payload["brief_config"]
 
     assert brief["brief_search_profile"] == "focused"
+    assert brief["brief_clarifications"]["allow_adjacent_titles"] is True
+    assert brief["brief_clarifications"]["expand_search_when_thin"] is True
     assert payload["internal_fetch_limit"] == 100
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 100
     assert brief["provider_settings"]["reranker"]["top_n"] == 100
     assert brief["provider_settings"]["verification"]["top_n"] == 50
+    assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is True
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
     assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 8
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["team_leadership_pages"] == 6

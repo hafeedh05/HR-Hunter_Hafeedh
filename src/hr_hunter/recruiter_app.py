@@ -1124,6 +1124,7 @@ def _build_brief_follow_up_questions(
     location_count = len(location_targets)
     title_count = len(titles)
     thin_detail = len(required_keywords) < 2 and not industry_keywords and len(document_text) < 160
+    common_volume_search = bool(limit >= 40 and not companies and title_count <= 2 and not executive_brief)
 
     if location_count >= 2:
         questions.append(
@@ -1143,18 +1144,22 @@ def _build_brief_follow_up_questions(
                 "label": "Adjacent Titles",
                 "prompt": "Should HR Hunter include adjacent role-family titles when exact matches look thin?",
                 "help": "This broadens retrieval into near-neighbor roles like Managing Director for CEO or Growth Analyst for Data Analyst.",
-                "recommended_answer": bool(executive_brief or search_profile != FOCUSED_SEARCH_PROFILE),
+                "recommended_answer": bool(
+                    executive_brief or search_profile != FOCUSED_SEARCH_PROFILE or common_volume_search
+                ),
             }
         )
 
-    if location_targets and (limit >= 60 or thin_detail or len(companies) >= 3):
+    if location_targets and (limit >= 40 or thin_detail or len(companies) >= 3 or common_volume_search):
         questions.append(
             {
                 "id": "expand_search_when_thin",
                 "label": "Market Expansion",
                 "prompt": "If exact matches are scarce, should HR Hunter widen into discovery slices and nearby public evidence?",
                 "help": "This helps hard briefs reach target volume, but it trades some precision for breadth.",
-                "recommended_answer": bool(search_profile == EXPLORATORY_SEARCH_PROFILE or executive_brief),
+                "recommended_answer": bool(
+                    search_profile == EXPLORATORY_SEARCH_PROFILE or executive_brief or common_volume_search
+                ),
             }
         )
 
