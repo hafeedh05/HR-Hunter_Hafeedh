@@ -366,9 +366,11 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         family_query_counts: Dict[str, int],
         family_query_budgets: Dict[str, int],
     ) -> bool:
+        if family not in family_query_budgets:
+            return True
         budget = family_query_budgets.get(family, 0)
         if budget <= 0:
-            return True
+            return False
         return family_query_counts.get(family, 0) < budget
 
     def _adjacent_query_terms(self, slice_config: SearchSlice) -> str:

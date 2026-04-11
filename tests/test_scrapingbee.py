@@ -264,6 +264,39 @@ def test_scrapingbee_dry_run_enforces_family_and_run_budgets() -> None:
     assert "team_leadership_pages" in query_budget["family_budget_exhausted"]
 
 
+def test_scrapingbee_zero_family_budget_disables_family() -> None:
+    provider = ScrapingBeeGoogleProvider(
+        {
+            "query_family_budgets": {
+                "speaker_bio_pages": 0,
+                "profile_like_public_pages": 1,
+            },
+        }
+    )
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-zero-budget-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "industry_keywords": ["FMCG"],
+            "required_keywords": ["brand", "category"],
+            "geography": {"location_name": "Drogheda", "country": "Ireland"},
+        }
+    )
+    strict_slice = next(
+        slice_config for slice_config in build_search_slices(brief) if slice_config.search_mode == "strict"
+    )
+
+    result = asyncio.run(provider.run(brief, [strict_slice], limit=10, dry_run=True))
+    query_budget = result.diagnostics["query_budget"]
+
+    assert "speaker_bio_pages" in query_budget["family_budget_exhausted"]
+    assert query_budget["executed_per_family"].get("speaker_bio_pages", 0) == 0
+    assert query_budget["skipped_per_family"]["speaker_bio_pages"] >= 1
+    assert query_budget["executed_per_family"]["profile_like_public_pages"] == 1
+
+
 def test_scrapingbee_builds_companyless_strict_query_plans() -> None:
     provider = ScrapingBeeGoogleProvider({})
     brief = build_search_brief(

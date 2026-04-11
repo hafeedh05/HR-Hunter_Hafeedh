@@ -282,8 +282,10 @@ def test_build_ui_brief_payload_uses_broader_recommended_defaults_for_common_50_
     assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is True
     assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
     assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
-    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 8
-    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["team_leadership_pages"] == 6
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 12
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["trade_directory_pages"] == 5
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["industry_association_pages"] == 4
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["award_industry_pages"] == 0
 
 
 def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():
@@ -311,8 +313,11 @@ def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():
     assert brief["provider_settings"]["retrieval"]["max_geo_groups"] >= 4
     assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is True
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] >= 200
-    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] >= 14
-    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["team_leadership_pages"] >= 10
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 9
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["trade_directory_pages"] == 4
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["team_leadership_pages"] == 2
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["speaker_bio_pages"] == 0
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["award_industry_pages"] == 0
 
 
 def test_build_ui_brief_payload_top_up_round_respects_explicit_opt_outs():

@@ -1045,6 +1045,26 @@ FOCUSED_QUERY_FAMILY_BUDGETS = {
     "industry_association_pages": 1,
     "trade_directory_pages": 1,
 }
+FOCUSED_NON_EXECUTIVE_QUERY_FAMILY_BUDGETS = {
+    "profile_like_public_pages": 12,
+    "team_leadership_pages": 5,
+    "trade_directory_pages": 5,
+    "industry_association_pages": 4,
+    "org_chart_profile_pages": 3,
+    "appointment_news_pages": 1,
+    "speaker_bio_pages": 1,
+    "award_industry_pages": 0,
+}
+FOCUSED_NON_EXECUTIVE_TOP_UP_QUERY_FAMILY_BUDGETS = {
+    "profile_like_public_pages": 9,
+    "trade_directory_pages": 4,
+    "industry_association_pages": 3,
+    "team_leadership_pages": 2,
+    "org_chart_profile_pages": 1,
+    "appointment_news_pages": 1,
+    "speaker_bio_pages": 0,
+    "award_industry_pages": 0,
+}
 EXECUTIVE_ROLE_HINTS = (
     "ceo",
     "chief executive officer",
@@ -1065,6 +1085,21 @@ def _is_executive_brief(role_title: str, titles: List[str]) -> bool:
         if str(value).strip()
         for hint in EXECUTIVE_ROLE_HINTS
     )
+
+
+def _default_query_family_budgets(
+    *,
+    search_profile: str,
+    executive_brief: bool,
+    top_up_round: int,
+) -> Dict[str, int]:
+    if search_profile != FOCUSED_SEARCH_PROFILE:
+        return {}
+    if executive_brief:
+        return dict(FOCUSED_QUERY_FAMILY_BUDGETS)
+    if top_up_round > 0:
+        return dict(FOCUSED_NON_EXECUTIVE_TOP_UP_QUERY_FAMILY_BUDGETS)
+    return dict(FOCUSED_NON_EXECUTIVE_QUERY_FAMILY_BUDGETS)
 
 
 def _derive_search_profile(
@@ -1195,6 +1230,8 @@ def _resolve_top_up_expansion_strategy(
     *,
     top_up_round: int,
     search_profile: str,
+    executive_brief: bool,
+    has_explicit_query_family_budgets: bool,
     raw_brief_clarifications: Dict[str, Any],
     explicit_geo_fanout: bool | None,
     allow_adjacent_titles: bool,
@@ -1256,19 +1293,30 @@ def _resolve_top_up_expansion_strategy(
     if top_up_round >= 1:
         scrapingbee_parallel_requests = max(scrapingbee_parallel_requests, 10 if top_up_round >= 2 else 8)
         scrapingbee_max_queries = max(scrapingbee_max_queries, max(120, limit * (3 if top_up_round == 1 else 4)))
-        budgets["org_chart_profile_pages"] = max(budgets.get("org_chart_profile_pages", 0), 10)
-        budgets["profile_like_public_pages"] = max(
-            budgets.get("profile_like_public_pages", 0),
-            10 if top_up_round == 1 else 14,
-        )
-        budgets["team_leadership_pages"] = max(
-            budgets.get("team_leadership_pages", 0),
-            8 if top_up_round == 1 else 10,
-        )
-        budgets["appointment_news_pages"] = max(
-            budgets.get("appointment_news_pages", 0),
-            5 if top_up_round == 1 else 7,
-        )
+        if has_explicit_query_family_budgets:
+            pass
+        elif executive_brief:
+            budgets["org_chart_profile_pages"] = max(budgets.get("org_chart_profile_pages", 0), 10)
+            budgets["profile_like_public_pages"] = max(
+                budgets.get("profile_like_public_pages", 0),
+                10 if top_up_round == 1 else 14,
+            )
+            budgets["team_leadership_pages"] = max(
+                budgets.get("team_leadership_pages", 0),
+                8 if top_up_round == 1 else 10,
+            )
+            budgets["appointment_news_pages"] = max(
+                budgets.get("appointment_news_pages", 0),
+                5 if top_up_round == 1 else 7,
+            )
+        elif expand_search_when_thin:
+            budgets = _default_query_family_budgets(
+                search_profile=search_profile,
+                executive_brief=False,
+                top_up_round=top_up_round,
+            )
+            strategy["auto_broadened"] = True
+            strategy["steps"].append("shifted top-up queries toward profile-heavy discovery for non-executive roles")
 
     return {
         "allow_adjacent_titles": allow_adjacent_titles,
@@ -1473,6 +1521,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         anchors = merged_anchors
 
     titles = unique_preserving_order([*titles, *breakdown.get("titles", []), role_title])
+    executive_brief = _is_executive_brief(role_title, titles)
     required_keywords = unique_preserving_order([*must_have, *breakdown.get("required_keywords", [])])
     preferred_keywords = unique_preserving_order([*nice_to_have, *breakdown.get("preferred_keywords", [])])
     industry_keywords = unique_preserving_order([*industry_keywords, *breakdown.get("industry_keywords", [])])
@@ -1689,11 +1738,18 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         for family, value in dict(payload_query_family_budgets or tuned_query_family_budgets).items()
         if str(family).strip()
     }
+    has_explicit_query_family_budgets = bool(payload_query_family_budgets or tuned_query_family_budgets)
     if not resolved_query_family_budgets and search_profile == FOCUSED_SEARCH_PROFILE:
-        resolved_query_family_budgets = dict(FOCUSED_QUERY_FAMILY_BUDGETS)
+        resolved_query_family_budgets = _default_query_family_budgets(
+            search_profile=search_profile,
+            executive_brief=executive_brief,
+            top_up_round=top_up_round,
+        )
     top_up_strategy = _resolve_top_up_expansion_strategy(
         top_up_round=top_up_round,
         search_profile=search_profile,
+        executive_brief=executive_brief,
+        has_explicit_query_family_budgets=has_explicit_query_family_budgets,
         raw_brief_clarifications=raw_brief_clarifications,
         explicit_geo_fanout=explicit_geo_fanout,
         allow_adjacent_titles=allow_adjacent_titles,
