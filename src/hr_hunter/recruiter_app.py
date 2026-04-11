@@ -1145,6 +1145,11 @@ def _human_join(values: List[str]) -> str:
     return f"{', '.join(cleaned[:-1])}, or {cleaned[-1]}"
 
 
+def _preview_values(values: List[str], *, limit: int = 3) -> List[str]:
+    cleaned = [str(value).strip() for value in values if str(value).strip()]
+    return cleaned[:limit]
+
+
 def _recommended_allow_adjacent_titles(
     *,
     search_profile: str,
@@ -1159,6 +1164,50 @@ def _recommended_allow_adjacent_titles(
     if executive_brief:
         return bool(search_profile == EXPLORATORY_SEARCH_PROFILE and not companies and location_count >= 2)
     return bool(search_profile != FOCUSED_SEARCH_PROFILE or common_volume_search)
+
+
+def _has_explicit_company_scope(company_match_mode: str) -> bool:
+    return str(company_match_mode or "both").strip().lower() in {"current_only", "past_only"}
+
+
+def _recommended_exact_company_scope(
+    *,
+    search_profile: str,
+    executive_brief: bool,
+    company_count: int,
+) -> bool:
+    if company_count <= 0:
+        return False
+    if executive_brief:
+        return True
+    if search_profile == FOCUSED_SEARCH_PROFILE and company_count <= 4:
+        return True
+    return False
+
+
+def _recommended_strict_market_scope(
+    *,
+    search_profile: str,
+    executive_brief: bool,
+    common_volume_search: bool,
+    company_count: int,
+    location_targets: List[str],
+    countries: List[str],
+    cities: List[str],
+) -> bool:
+    if not location_targets:
+        return False
+    if executive_brief:
+        return True
+    if company_count > 0 and (cities or len(countries) <= 2):
+        return True
+    if common_volume_search:
+        return False
+    if cities:
+        return True
+    if search_profile == FOCUSED_SEARCH_PROFILE and len(countries) <= 2:
+        return True
+    return False
 
 
 def _default_query_family_budgets(
@@ -1220,8 +1269,11 @@ def _build_brief_follow_up_questions(
     *,
     role_title: str,
     titles: List[str],
+    countries: List[str],
+    cities: List[str],
     location_targets: List[str],
     companies: List[str],
+    company_match_mode: str,
     required_keywords: List[str],
     industry_keywords: List[str],
     document_text: str,
@@ -1233,6 +1285,7 @@ def _build_brief_follow_up_questions(
     location_count = len(location_targets)
     title_count = len(titles)
     explicit_title_scope = _has_explicit_title_scope(titles)
+    explicit_company_scope = _has_explicit_company_scope(company_match_mode)
     thin_detail = len(required_keywords) < 2 and not industry_keywords and len(document_text) < 160
     common_volume_search = bool(limit >= 40 and not companies and title_count <= 2 and not executive_brief)
 
@@ -1278,6 +1331,65 @@ def _build_brief_follow_up_questions(
             }
         )
 
+    if companies and not explicit_company_scope:
+        company_scope_prompt = (
+            "Should HR Hunter stay on the exact companies you entered, instead of widening into former employers "
+            "or adjacent competitor companies?"
+        )
+        company_scope_help = (
+            "Choose Yes to keep retrieval on current-company targets only. Choose No if former-company or peer-company "
+            "signals should still count."
+        )
+        company_examples = _preview_values(companies, limit=3)
+        if company_examples:
+            company_scope_prompt = (
+                f"Should HR Hunter treat {_human_join(company_examples)} as exact current-company targets, "
+                "instead of widening into former employers or adjacent competitors?"
+            )
+        questions.append(
+            {
+                "id": "exact_company_scope",
+                "label": "Company Scope",
+                "prompt": company_scope_prompt,
+                "help": company_scope_help,
+                "recommended_answer": _recommended_exact_company_scope(
+                    search_profile=search_profile,
+                    executive_brief=executive_brief,
+                    company_count=len(companies),
+                ),
+            }
+        )
+
+    market_scope_needed = bool(location_targets and (cities or len(countries) >= 2 or executive_brief))
+    if market_scope_needed:
+        location_examples = _preview_values([*cities, *countries], limit=3)
+        market_scope_prompt = (
+            "Should HR Hunter stay inside the exact countries and cities you entered, instead of widening into nearby "
+            "markets when results look thin?"
+        )
+        if location_examples:
+            market_scope_prompt = (
+                f"Should HR Hunter stay inside {_human_join(location_examples)} only, instead of widening into nearby "
+                "markets when results look thin?"
+            )
+        questions.append(
+            {
+                "id": "strict_market_scope",
+                "label": "Market Scope",
+                "prompt": market_scope_prompt,
+                "help": "Choose Yes for strict market fidelity. Choose No if nearby cities or countries can be used as spillover.",
+                "recommended_answer": _recommended_strict_market_scope(
+                    search_profile=search_profile,
+                    executive_brief=executive_brief,
+                    common_volume_search=common_volume_search,
+                    company_count=len(companies),
+                    location_targets=location_targets,
+                    countries=countries,
+                    cities=cities,
+                ),
+            }
+        )
+
     if location_targets and (limit >= 40 or thin_detail or len(companies) >= 3 or common_volume_search):
         questions.append(
             {
@@ -1319,6 +1431,8 @@ def _resolve_brief_clarifications(
     for clarification_id in (
         "prioritize_first_location",
         "allow_adjacent_titles",
+        "exact_company_scope",
+        "strict_market_scope",
         "expand_search_when_thin",
     ):
         if clarification_id in resolved_values:
@@ -1657,8 +1771,11 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     brief_follow_up_questions = _build_brief_follow_up_questions(
         role_title=role_title,
         titles=titles,
+        countries=countries,
+        cities=cities,
         location_targets=location_targets,
         companies=companies,
+        company_match_mode=str(payload.get("company_match_mode", "both") or "both"),
         required_keywords=required_keywords,
         industry_keywords=industry_keywords,
         document_text=job_description,
@@ -1679,9 +1796,29 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             companies=companies,
             location_count=len(location_targets),
         )
+    if "exact_company_scope" not in brief_clarifications:
+        brief_clarifications["exact_company_scope"] = _recommended_exact_company_scope(
+            search_profile=search_profile,
+            executive_brief=executive_brief,
+            company_count=len(companies),
+        )
+    if "strict_market_scope" not in brief_clarifications:
+        brief_clarifications["strict_market_scope"] = _recommended_strict_market_scope(
+            search_profile=search_profile,
+            executive_brief=executive_brief,
+            common_volume_search=common_volume_search,
+            company_count=len(companies),
+            location_targets=location_targets,
+            countries=countries,
+            cities=cities,
+        )
     prioritize_first_location = bool(brief_clarifications.get("prioritize_first_location"))
     allow_adjacent_titles = bool(brief_clarifications.get("allow_adjacent_titles"))
+    exact_company_scope = bool(brief_clarifications.get("exact_company_scope"))
+    strict_market_scope = bool(brief_clarifications.get("strict_market_scope"))
     expand_search_when_thin = bool(brief_clarifications.get("expand_search_when_thin", search_profile != FOCUSED_SEARCH_PROFILE))
+    if exact_company_scope and companies:
+        payload["company_match_mode"] = "current_only"
     if prioritize_first_location and location_targets:
         geography_country = countries[0] if countries else geography_country
         if cities:
@@ -1845,6 +1982,9 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if explicit_include_discovery_slices is not None
         else (tuned_include_discovery_slices if tuned_include_discovery_slices is not None else expand_search_when_thin)
     )
+    if exact_company_scope and companies:
+        resolved_include_history_slices = False
+        resolved_include_discovery_slices = False
     resolved_geo_fanout = (
         explicit_geo_fanout
         if explicit_geo_fanout is not None
@@ -1896,6 +2036,12 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if explicit_include_discovery_slices is not None
         else (tuned_include_discovery_slices if tuned_include_discovery_slices is not None else expand_search_when_thin)
     )
+    if exact_company_scope and companies:
+        resolved_include_history_slices = False
+        resolved_include_discovery_slices = False
+    if strict_market_scope and location_targets:
+        resolved_geo_fanout = False
+        include_country_only_queries = False
     resolved_query_family_budgets = {
         str(family).strip(): max(0, int(value))
         for family, value in dict(top_up_strategy["query_family_budgets"]).items()

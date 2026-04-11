@@ -115,6 +115,52 @@ def test_assess_ui_brief_quality_asks_explicit_ceo_title_scope_question():
     assert title_scope_question["recommended_answer"] is False
 
 
+def test_assess_ui_brief_quality_asks_exact_company_scope_question():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Chief Executive Officer (CEO)",
+            "titles": ["Chief Executive Officer"],
+            "countries": ["United Arab Emirates"],
+            "company_targets": ["Marina Home Interiors", "The One"],
+            "must_have_keywords": ["P&L", "Retail Operations"],
+            "job_description": "Need a premium retail chief executive from a named target company with GCC exposure.",
+            "limit": 120,
+        }
+    )
+
+    quality = assess_ui_brief_quality(payload["brief_config"])
+    company_scope_question = next(
+        question for question in quality["follow_up_questions"] if question["id"] == "exact_company_scope"
+    )
+
+    assert company_scope_question["label"] == "Company Scope"
+    assert "Marina Home Interiors" in company_scope_question["prompt"]
+    assert company_scope_question["recommended_answer"] is True
+
+
+def test_assess_ui_brief_quality_asks_market_scope_question_for_multimarket_brief():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Regional Marketing Manager",
+            "titles": ["Regional Marketing Manager"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "cities": ["Dubai", "Riyadh"],
+            "must_have_keywords": ["Performance Marketing", "Paid Media"],
+            "job_description": "Need a regional marketing leader who can run multi-market growth programs across GCC cities.",
+            "limit": 80,
+        }
+    )
+
+    quality = assess_ui_brief_quality(payload["brief_config"])
+    market_scope_question = next(
+        question for question in quality["follow_up_questions"] if question["id"] == "strict_market_scope"
+    )
+
+    assert market_scope_question["label"] == "Market Scope"
+    assert "Dubai" in market_scope_question["prompt"]
+    assert market_scope_question["recommended_answer"] is False
+
+
 def test_build_app_bootstrap_exposes_supported_ui_options():
     bootstrap = build_app_bootstrap()
     defaults = bootstrap["defaults"]
@@ -366,6 +412,37 @@ def test_build_ui_brief_payload_does_not_auto_broaden_when_titles_are_already_ex
     assert brief["brief_clarifications"]["allow_adjacent_titles"] is False
     assert brief["expand_title_keywords"] is False
     assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is False
+
+
+def test_build_ui_brief_payload_applies_exact_company_and_market_scope_clarifications():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Chief Executive Officer (CEO)",
+            "titles": ["Chief Executive Officer"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "cities": ["Dubai", "Riyadh"],
+            "company_targets": ["Marina Home Interiors", "The One"],
+            "must_have_keywords": ["P&L", "Retail Operations"],
+            "job_description": "Need a premium retail chief executive with GCC scope and current target-company alignment.",
+            "limit": 150,
+            "brief_clarifications": {
+                "allow_adjacent_titles": False,
+                "exact_company_scope": True,
+                "strict_market_scope": True,
+                "expand_search_when_thin": True,
+            },
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["brief_clarifications"]["exact_company_scope"] is True
+    assert brief["brief_clarifications"]["strict_market_scope"] is True
+    assert brief["company_match_mode"] == "current_only"
+    assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is False
+    assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
+    assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
 
 
 def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():
