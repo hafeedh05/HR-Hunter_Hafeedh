@@ -311,6 +311,15 @@ def _require_admin_user(request: "Request") -> Dict[str, Any]:
     return user
 
 
+def _job_actor_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": str(payload.get("recruiter_id", "")).strip(),
+        "full_name": str(payload.get("recruiter_name", "")).strip(),
+        "team_id": str(payload.get("team_id", "")).strip(),
+        "is_admin": bool(payload.get("recruiter_is_admin")),
+    }
+
+
 def _summarize_target_geography(ui_payload: Dict[str, Any], brief: Any) -> str:
     brief_config = ui_payload.get("brief_config", {}) if isinstance(ui_payload, dict) else {}
     ui_meta = brief_config.get("ui_meta", {}) if isinstance(brief_config, dict) else {}
@@ -524,12 +533,7 @@ def create_app() -> "FastAPI":
             )
             project_id = str(payload.get("project_id", "")).strip()
             target_geography = _summarize_target_geography(ui_payload, brief)
-            actor = {
-                "id": str(payload.get("recruiter_id", "")).strip(),
-                "full_name": str(payload.get("recruiter_name", "")).strip(),
-                "team_id": str(payload.get("team_id", "")).strip(),
-                "is_admin": False,
-            }
+            actor = _job_actor_from_payload(payload)
             last_progress_write = 0.0
             latest_telemetry: Dict[str, Any] = {
                 "stage": "running",
@@ -1705,6 +1709,7 @@ def create_app() -> "FastAPI":
         payload["recruiter_id"] = user["id"]
         payload["recruiter_name"] = user["full_name"]
         payload["team_id"] = user.get("team_id", "")
+        payload["recruiter_is_admin"] = bool(user.get("is_admin"))
         job = enqueue_job("search", payload)
         _spawn_background_job(job["job_id"], lambda job_id=job["job_id"], payload=payload: _search_job_runner(job_id, payload))
         return job
