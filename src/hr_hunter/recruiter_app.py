@@ -1186,6 +1186,98 @@ def _resolve_brief_clarifications(
     return resolved_values, resolved_questions
 
 
+def _resolve_top_up_expansion_strategy(
+    *,
+    top_up_round: int,
+    search_profile: str,
+    raw_brief_clarifications: Dict[str, Any],
+    explicit_geo_fanout: bool | None,
+    allow_adjacent_titles: bool,
+    expand_search_when_thin: bool,
+    resolved_geo_fanout: bool,
+    include_country_only_queries: bool,
+    max_geo_groups: int,
+    scrapingbee_parallel_requests: int,
+    scrapingbee_max_queries: int,
+    query_family_budgets: Dict[str, int],
+    limit: int,
+    location_targets: List[str],
+) -> Dict[str, Any]:
+    strategy = {
+        "round": top_up_round,
+        "auto_broadened": False,
+        "steps": [],
+    }
+    if top_up_round <= 0 or search_profile != FOCUSED_SEARCH_PROFILE:
+        return {
+            "allow_adjacent_titles": allow_adjacent_titles,
+            "expand_search_when_thin": expand_search_when_thin,
+            "resolved_geo_fanout": resolved_geo_fanout,
+            "include_country_only_queries": include_country_only_queries,
+            "max_geo_groups": max_geo_groups,
+            "scrapingbee_parallel_requests": scrapingbee_parallel_requests,
+            "scrapingbee_max_queries": scrapingbee_max_queries,
+            "query_family_budgets": dict(query_family_budgets),
+            "strategy": strategy,
+        }
+
+    explicit_adjacent_titles = _coerce_bool(raw_brief_clarifications.get("allow_adjacent_titles"))
+    explicit_expand_search = _coerce_bool(raw_brief_clarifications.get("expand_search_when_thin"))
+    explicit_prioritize_location = _coerce_bool(raw_brief_clarifications.get("prioritize_first_location"))
+
+    budgets = dict(query_family_budgets)
+
+    if explicit_expand_search is None and not expand_search_when_thin:
+        expand_search_when_thin = True
+        strategy["auto_broadened"] = True
+        strategy["steps"].append("enabled discovery slices after a thin focused first pass")
+
+    if expand_search_when_thin:
+        if not include_country_only_queries:
+            include_country_only_queries = True
+            strategy["auto_broadened"] = True
+            strategy["steps"].append("added country-level public profile queries")
+        if explicit_geo_fanout is None and explicit_prioritize_location is None and not resolved_geo_fanout and location_targets:
+            resolved_geo_fanout = True
+            strategy["auto_broadened"] = True
+            strategy["steps"].append("expanded geography fanout for top-up discovery")
+        max_geo_groups = max(max_geo_groups, min(6, max(3, len(location_targets) + 2)))
+
+    if top_up_round >= 2 and explicit_adjacent_titles is None and not allow_adjacent_titles:
+        allow_adjacent_titles = True
+        strategy["auto_broadened"] = True
+        strategy["steps"].append("opened adjacent title families after repeated thin rounds")
+
+    if top_up_round >= 1:
+        scrapingbee_parallel_requests = max(scrapingbee_parallel_requests, 10 if top_up_round >= 2 else 8)
+        scrapingbee_max_queries = max(scrapingbee_max_queries, max(120, limit * (3 if top_up_round == 1 else 4)))
+        budgets["org_chart_profile_pages"] = max(budgets.get("org_chart_profile_pages", 0), 10)
+        budgets["profile_like_public_pages"] = max(
+            budgets.get("profile_like_public_pages", 0),
+            10 if top_up_round == 1 else 14,
+        )
+        budgets["team_leadership_pages"] = max(
+            budgets.get("team_leadership_pages", 0),
+            8 if top_up_round == 1 else 10,
+        )
+        budgets["appointment_news_pages"] = max(
+            budgets.get("appointment_news_pages", 0),
+            5 if top_up_round == 1 else 7,
+        )
+
+    return {
+        "allow_adjacent_titles": allow_adjacent_titles,
+        "expand_search_when_thin": expand_search_when_thin,
+        "resolved_geo_fanout": resolved_geo_fanout,
+        "include_country_only_queries": include_country_only_queries,
+        "max_geo_groups": max_geo_groups,
+        "scrapingbee_parallel_requests": scrapingbee_parallel_requests,
+        "scrapingbee_max_queries": scrapingbee_max_queries,
+        "query_family_budgets": budgets,
+        "strategy": strategy,
+    }
+
+
 def assess_ui_brief_quality(brief_config: Dict[str, Any]) -> Dict[str, Any]:
     role_title = str(brief_config.get("role_title", "")).strip()
     geography = brief_config.get("geography", {})
@@ -1413,8 +1505,9 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         limit=limit,
         search_profile=search_profile,
     )
+    raw_brief_clarifications = dict(payload.get("brief_clarifications", {})) if isinstance(payload.get("brief_clarifications"), dict) else {}
     brief_clarifications, brief_follow_up_questions = _resolve_brief_clarifications(
-        payload.get("brief_clarifications"),
+        raw_brief_clarifications,
         brief_follow_up_questions,
     )
     prioritize_first_location = bool(brief_clarifications.get("prioritize_first_location"))
@@ -1582,6 +1675,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if explicit_geo_fanout is not None
         else not (search_profile == FOCUSED_SEARCH_PROFILE and len(location_targets) <= 2)
     )
+    resolved_max_geo_groups = max(3, _coerce_int(payload.get("max_geo_groups")) or tuned_max_geo_groups or default_geo_groups)
     include_country_only_queries = expand_search_when_thin or len(countries) <= 1
     if search_profile == FOCUSED_SEARCH_PROFILE and not expand_search_when_thin:
         include_country_only_queries = False
@@ -1592,6 +1686,39 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
     if not resolved_query_family_budgets and search_profile == FOCUSED_SEARCH_PROFILE:
         resolved_query_family_budgets = dict(FOCUSED_QUERY_FAMILY_BUDGETS)
+    top_up_strategy = _resolve_top_up_expansion_strategy(
+        top_up_round=top_up_round,
+        search_profile=search_profile,
+        raw_brief_clarifications=raw_brief_clarifications,
+        explicit_geo_fanout=explicit_geo_fanout,
+        allow_adjacent_titles=allow_adjacent_titles,
+        expand_search_when_thin=expand_search_when_thin,
+        resolved_geo_fanout=resolved_geo_fanout,
+        include_country_only_queries=include_country_only_queries,
+        max_geo_groups=resolved_max_geo_groups,
+        scrapingbee_parallel_requests=scrapingbee_parallel_requests,
+        scrapingbee_max_queries=scrapingbee_max_queries,
+        query_family_budgets=resolved_query_family_budgets,
+        limit=limit,
+        location_targets=location_targets,
+    )
+    allow_adjacent_titles = bool(top_up_strategy["allow_adjacent_titles"])
+    expand_search_when_thin = bool(top_up_strategy["expand_search_when_thin"])
+    resolved_geo_fanout = bool(top_up_strategy["resolved_geo_fanout"])
+    include_country_only_queries = bool(top_up_strategy["include_country_only_queries"])
+    resolved_max_geo_groups = max(3, int(top_up_strategy["max_geo_groups"]))
+    scrapingbee_parallel_requests = max(1, int(top_up_strategy["scrapingbee_parallel_requests"]))
+    scrapingbee_max_queries = max(1, int(top_up_strategy["scrapingbee_max_queries"]))
+    resolved_include_discovery_slices = (
+        explicit_include_discovery_slices
+        if explicit_include_discovery_slices is not None
+        else (tuned_include_discovery_slices if tuned_include_discovery_slices is not None else expand_search_when_thin)
+    )
+    resolved_query_family_budgets = {
+        str(family).strip(): max(0, int(value))
+        for family, value in dict(top_up_strategy["query_family_budgets"]).items()
+        if str(family).strip()
+    }
     providers_settings = {
         "retrieval": {
             "company_chunk_size": int(payload.get("company_chunk_size", tuned_company_chunk_size or 5) or 5),
@@ -1601,7 +1728,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "include_history_slices": resolved_include_history_slices,
             "include_discovery_slices": resolved_include_discovery_slices,
             "geo_fanout_enabled": resolved_geo_fanout,
-            "max_geo_groups": max(3, _coerce_int(payload.get("max_geo_groups")) or tuned_max_geo_groups or default_geo_groups),
+            "max_geo_groups": resolved_max_geo_groups,
             "discovery_keyword_chunk_size": int(payload.get("discovery_keyword_chunk_size", tuned_discovery_chunk_size or 6) or 6),
             "market_keyword_chunk_size": int(payload.get("market_keyword_chunk_size", tuned_market_chunk_size or 5) or 5),
             "history_query_terms": unique_preserving_order(
@@ -1641,7 +1768,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                 or 12,
             ),
             "geo_fanout_enabled": resolved_geo_fanout,
-            "max_geo_groups": max(3, _coerce_int(payload.get("max_geo_groups")) or tuned_max_geo_groups or default_geo_groups),
+            "max_geo_groups": resolved_max_geo_groups,
             "company_slice_location_group_limit": max(
                 0,
                 _coerce_int(payload.get("company_slice_location_group_limit"))
@@ -1731,6 +1858,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "brief_search_profile": search_profile,
         "brief_clarifications": brief_clarifications,
         "brief_follow_up_questions": brief_follow_up_questions,
+        "top_up_round": top_up_round,
+        "top_up_strategy": top_up_strategy["strategy"],
         "result_target_min": max(5, min(limit, 20)),
         "result_target_max": max(limit, 40),
         "max_profiles": max(limit, 80),
@@ -1767,6 +1896,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "search_tuning": search_tuning,
             "search_profile": search_profile,
             "brief_clarifications": brief_clarifications,
+            "top_up_round": top_up_round,
+            "top_up_strategy": top_up_strategy["strategy"],
             "keyword_tracks": {
                 "portfolio_keywords": portfolio_keywords,
                 "commercial_keywords": commercial_keywords,

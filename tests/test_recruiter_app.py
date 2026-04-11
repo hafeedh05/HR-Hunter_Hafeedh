@@ -282,6 +282,66 @@ def test_build_ui_brief_payload_uses_focused_defaults_for_small_precise_searches
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["team_leadership_pages"] == 6
 
 
+def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst"],
+            "cities": ["Dubai"],
+            "countries": ["United Arab Emirates"],
+            "must_have_keywords": ["SQL", "Python"],
+            "job_description": "Need SQL, Python, BI reporting, dashboards, and stakeholder support.",
+            "limit": 50,
+            "top_up_round": 2,
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["top_up_round"] == 2
+    assert brief["top_up_strategy"]["auto_broadened"] is True
+    assert brief["expand_title_keywords"] is True
+    assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is True
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
+    assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is True
+    assert brief["provider_settings"]["retrieval"]["max_geo_groups"] >= 4
+    assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is True
+    assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] >= 200
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] >= 14
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["team_leadership_pages"] >= 10
+
+
+def test_build_ui_brief_payload_top_up_round_respects_explicit_opt_outs():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst"],
+            "cities": ["Dubai"],
+            "countries": ["United Arab Emirates"],
+            "must_have_keywords": ["SQL", "Python"],
+            "job_description": "Need SQL, Python, BI reporting, dashboards, and stakeholder support.",
+            "limit": 50,
+            "top_up_round": 3,
+            "geo_fanout_enabled": False,
+            "brief_clarifications": {
+                "allow_adjacent_titles": False,
+                "expand_search_when_thin": False,
+            },
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["top_up_round"] == 3
+    assert brief["top_up_strategy"]["auto_broadened"] is False
+    assert brief["expand_title_keywords"] is False
+    assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is False
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is False
+    assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
+    assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
+    assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] >= 200
+
+
 def test_resolve_job_description_source_prefers_uploaded_text_and_keeps_notes():
     source = resolve_job_description_source(
         typed_text="Focus on retail and GCC exposure.",
