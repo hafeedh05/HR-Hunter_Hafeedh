@@ -485,11 +485,20 @@ def test_list_project_runs_recovers_summary_from_saved_report(tmp_path: Path):
                 "2026-04-07T09:00:00+00:00",
             ),
         )
+        connection.execute(
+            "UPDATE projects SET latest_run_id = ?, latest_run_at = ? WHERE id = ?",
+            (report.run_id, "2026-04-07T09:00:00+00:00", project["id"]),
+        )
 
     runs = list_project_runs(admin, project_id=project["id"], db_path=db_path)
+    project_summaries = list_projects(admin, db_path=db_path)
+    project_summary = next(item for item in project_summaries if item["id"] == project["id"])
 
     assert runs[0]["summary"]["verified_count"] == 1
     assert runs[0]["summary"]["candidate_count"] == 1
+    assert project_summary["latest_run_summary"]["verified_count"] == 1
+    assert project_summary["latest_run_candidate_count"] == 1
+    assert project_summary["latest_run_status"] == "completed"
 
 
 def test_rotating_user_totp_invalidates_old_code(tmp_path: Path):

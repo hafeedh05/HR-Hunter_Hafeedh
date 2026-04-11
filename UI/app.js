@@ -64,6 +64,10 @@ const state = {
   currentRuns: [],
   currentReviews: [],
   currentBreakdown: null,
+  briefQuality: null,
+  briefClarifications: {},
+  briefQualityHandle: null,
+  briefQualityRequestId: 0,
   uploadedJobDescription: {
     name: "",
     text: "",
@@ -96,10 +100,11 @@ function emptyUploadedJobDescription() {
 }
 
 class TokenField {
-  constructor(root, suggestions = []) {
+  constructor(root, suggestions = [], options = {}) {
     this.root = root;
     this.tokens = [];
     this.suggestions = suggestions;
+    this.onChange = typeof options.onChange === "function" ? options.onChange : null;
     this.root.innerHTML = "";
     this.input = document.createElement("input");
     this.input.className = "token-input";
@@ -141,6 +146,7 @@ class TokenField {
       }
     });
     this.render();
+    this.onChange?.();
   }
 
   addFromInput() {
@@ -159,13 +165,22 @@ class TokenField {
     this.add(Array.isArray(values) ? values.join(",") : values);
   }
 
-  getTokens() {
-    return [...this.tokens];
+  getTokens(options = {}) {
+    const tokens = [...this.tokens];
+    if (options.includePending) {
+      this.parseValue(this.input.value).forEach((value) => {
+        if (!tokens.some((token) => token.toLowerCase() === value.toLowerCase())) {
+          tokens.push(value);
+        }
+      });
+    }
+    return tokens;
   }
 
   remove(value) {
     this.tokens = this.tokens.filter((token) => token !== value);
     this.render();
+    this.onChange?.();
   }
 
   render() {
@@ -734,6 +749,7 @@ function applyBreakdownToForm(breakdown, options = {}) {
   if (years.max !== null && years.max !== undefined && !document.getElementById("max-years").value) {
     document.getElementById("max-years").value = years.max;
   }
+  scheduleBriefQualityRefresh();
 }
 
 function clearUploadedJobDescription() {
@@ -747,22 +763,23 @@ function clearUploadedJobDescription() {
     renderBreakdown();
   }
   renderUploadedJdSummary();
+  scheduleBriefQualityRefresh();
   setStatus("Uploaded JD file removed.", "success", "The typed description will be used the next time you run JD Breakdown.");
 }
 
 function initialiseTokenFields() {
   const config = state.config || {};
   state.tokenFields = {
-    titles: new TokenField(document.getElementById("titles-field")),
-    countries: new TokenField(document.getElementById("countries-field"), config.countries || []),
-    continents: new TokenField(document.getElementById("continents-field"), config.continents || []),
-    cities: new TokenField(document.getElementById("cities-field")),
-    companies: new TokenField(document.getElementById("companies-field")),
-    mustHave: new TokenField(document.getElementById("must-have-field")),
-    niceToHave: new TokenField(document.getElementById("nice-to-have-field")),
-    industry: new TokenField(document.getElementById("industry-field")),
-    excludeTitles: new TokenField(document.getElementById("exclude-titles-field")),
-    excludeCompanies: new TokenField(document.getElementById("exclude-companies-field")),
+    titles: new TokenField(document.getElementById("titles-field"), [], { onChange: notifyBriefInputsChanged }),
+    countries: new TokenField(document.getElementById("countries-field"), config.countries || [], { onChange: notifyBriefInputsChanged }),
+    continents: new TokenField(document.getElementById("continents-field"), config.continents || [], { onChange: notifyBriefInputsChanged }),
+    cities: new TokenField(document.getElementById("cities-field"), [], { onChange: notifyBriefInputsChanged }),
+    companies: new TokenField(document.getElementById("companies-field"), [], { onChange: notifyBriefInputsChanged }),
+    mustHave: new TokenField(document.getElementById("must-have-field"), [], { onChange: notifyBriefInputsChanged }),
+    niceToHave: new TokenField(document.getElementById("nice-to-have-field"), [], { onChange: notifyBriefInputsChanged }),
+    industry: new TokenField(document.getElementById("industry-field"), [], { onChange: notifyBriefInputsChanged }),
+    excludeTitles: new TokenField(document.getElementById("exclude-titles-field"), [], { onChange: notifyBriefInputsChanged }),
+    excludeCompanies: new TokenField(document.getElementById("exclude-companies-field"), [], { onChange: notifyBriefInputsChanged }),
   };
 }
 
@@ -826,8 +843,11 @@ function resetProjectForm() {
   Object.values(state.tokenFields).forEach((field) => field.setTokens([]));
   renderMemberPicker(state.user ? [state.user.id] : []);
   state.currentBreakdown = null;
+  state.briefClarifications = {};
+  state.briefQuality = null;
   renderBreakdown();
   renderAnchorGrid();
+  renderBriefGuidance();
 }
 
 function startNewProject() {
@@ -854,19 +874,23 @@ function startNewProject() {
   setStatus("New project form ready.", "default", "Fill the hunt brief, then save the project.");
 }
 
-function buildUiMeta() {
-  Object.values(state.tokenFields).forEach((field) => field?.commitPending?.());
+function buildUiMeta(options = {}) {
+  const commitPending = options.commitPending !== false;
+  const includePending = Boolean(options.includePending);
+  if (commitPending) {
+    Object.values(state.tokenFields).forEach((field) => field?.commitPending?.());
+  }
   return {
-    titles: state.tokenFields.titles.getTokens(),
-    countries: state.tokenFields.countries.getTokens(),
-    continents: state.tokenFields.continents.getTokens(),
-    cities: state.tokenFields.cities.getTokens(),
-    company_targets: state.tokenFields.companies.getTokens(),
-    must_have_keywords: state.tokenFields.mustHave.getTokens(),
-    nice_to_have_keywords: state.tokenFields.niceToHave.getTokens(),
-    industry_keywords: state.tokenFields.industry.getTokens(),
-    exclude_title_keywords: state.tokenFields.excludeTitles.getTokens(),
-    exclude_company_keywords: state.tokenFields.excludeCompanies.getTokens(),
+    titles: state.tokenFields.titles.getTokens({ includePending }),
+    countries: state.tokenFields.countries.getTokens({ includePending }),
+    continents: state.tokenFields.continents.getTokens({ includePending }),
+    cities: state.tokenFields.cities.getTokens({ includePending }),
+    company_targets: state.tokenFields.companies.getTokens({ includePending }),
+    must_have_keywords: state.tokenFields.mustHave.getTokens({ includePending }),
+    nice_to_have_keywords: state.tokenFields.niceToHave.getTokens({ includePending }),
+    industry_keywords: state.tokenFields.industry.getTokens({ includePending }),
+    exclude_title_keywords: state.tokenFields.excludeTitles.getTokens({ includePending }),
+    exclude_company_keywords: state.tokenFields.excludeCompanies.getTokens({ includePending }),
     years_mode: document.getElementById("years-mode").value,
     years_value: document.getElementById("years-value").value,
     years_tolerance: document.getElementById("years-tolerance").value,
@@ -882,13 +906,14 @@ function buildUiMeta() {
     uploaded_job_description_extension: state.uploadedJobDescription?.extension || "",
     uploaded_job_description_parser: state.uploadedJobDescription?.parser || "",
     anchors: currentAnchorValues(),
+    brief_clarifications: { ...state.briefClarifications },
   };
 }
 
-function buildBriefPayload() {
+function buildBriefPayload(options = {}) {
   collectSettingsFromInputs();
   const roleTitle = document.getElementById("role-title").value.trim();
-  const uiMeta = buildUiMeta();
+  const uiMeta = buildUiMeta(options);
   const candidateLimit = Math.max(1, safeNumber(uiMeta.candidate_limit, state.settings.limit || 20));
   return {
     role_title: roleTitle,
@@ -915,6 +940,7 @@ function buildBriefPayload() {
     uploaded_job_description_text: uiMeta.uploaded_job_description_text,
     jd_breakdown: state.currentBreakdown,
     anchors: uiMeta.anchors,
+    brief_clarifications: uiMeta.brief_clarifications,
     providers: state.settings.providers,
     limit: candidateLimit,
     csv_export_limit: candidateLimit,
@@ -998,6 +1024,165 @@ function assessHuntReadiness(briefPayload) {
     ? "Brief details look sufficient for search."
     : `Hunt details are not enough yet. Missing: ${missing.join(", ") || "more role detail"}. Add at least two detail sections (for example JD text + must-have skills).`;
   return { ok, score, message };
+}
+
+function searchProfileLabel(profile) {
+  if (profile === "focused") return "Focused";
+  if (profile === "exploratory") return "Exploratory";
+  return "Balanced";
+}
+
+function hasMeaningfulBriefInput(briefPayload) {
+  if (!briefPayload) return false;
+  return Boolean(
+    String(briefPayload.role_title || "").trim()
+    || (Array.isArray(briefPayload.titles) && briefPayload.titles.length)
+    || (Array.isArray(briefPayload.countries) && briefPayload.countries.length)
+    || (Array.isArray(briefPayload.continents) && briefPayload.continents.length)
+    || (Array.isArray(briefPayload.cities) && briefPayload.cities.length)
+    || (Array.isArray(briefPayload.company_targets) && briefPayload.company_targets.length)
+    || (Array.isArray(briefPayload.must_have_keywords) && briefPayload.must_have_keywords.length)
+    || String(briefPayload.job_description || "").trim()
+    || String(briefPayload.uploaded_job_description_text || "").trim()
+  );
+}
+
+function currentBriefClarification(question) {
+  const questionId = String(question?.id || "").trim();
+  const explicit = Object.prototype.hasOwnProperty.call(state.briefClarifications, questionId);
+  const resolved = Boolean(question?.resolved_answer);
+  return {
+    explicit,
+    value: explicit ? Boolean(state.briefClarifications[questionId]) : resolved,
+  };
+}
+
+function renderBriefGuidance() {
+  const root = document.getElementById("brief-guidance-panel");
+  if (!root) return;
+  const previewPayload = buildBriefPayload({ commitPending: false, includePending: true });
+  if (!hasMeaningfulBriefInput(previewPayload)) {
+    root.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>Start the Hunt Brief</h4>
+        <p>Add a role, geography, and a bit of detail to get yes/no follow-up questions and a search strategy recommendation.</p>
+      </div>
+    `;
+    return;
+  }
+  if (state.briefQuality?.error) {
+    root.innerHTML = `<p class="muted">Guidance is temporarily unavailable. You can still save the brief and run search.</p>`;
+    return;
+  }
+  if (!state.briefQuality) {
+    root.innerHTML = `<p class="muted">Reviewing the current brief and recommended search strategy...</p>`;
+    return;
+  }
+
+  const quality = state.briefQuality;
+  const questions = Array.isArray(quality.follow_up_questions) ? quality.follow_up_questions : [];
+  const issues = Array.isArray(quality.issues) ? quality.issues : [];
+  const suggestions = Array.isArray(quality.suggestions) ? quality.suggestions : [];
+  const toneClass = quality.ok ? "brief-guidance-ready" : "brief-guidance-warning";
+  const questionMarkup = questions.length
+    ? questions.map((question) => {
+      const selection = currentBriefClarification(question);
+      const recommendedLabel = Boolean(question.recommended_answer) ? "Yes" : "No";
+      return `
+        <article class="brief-question-card">
+          <div class="brief-question-copy">
+            <strong>${escapeHtml(question.label || "Clarify the brief")}</strong>
+            <p>${escapeHtml(question.prompt || "")}</p>
+            <small class="muted">${escapeHtml(question.help || "")}</small>
+          </div>
+          <div class="brief-question-actions">
+            <button
+              type="button"
+              class="filter-pill clarification-choice ${selection.value === true ? "active" : ""}"
+              data-brief-question="${escapeHtml(question.id)}"
+              data-brief-answer="yes"
+            >Yes</button>
+            <button
+              type="button"
+              class="filter-pill clarification-choice ${selection.value === false ? "active" : ""}"
+              data-brief-question="${escapeHtml(question.id)}"
+              data-brief-answer="no"
+            >No</button>
+          </div>
+          <p class="muted small">
+            ${selection.explicit ? "Using your override." : `Recommended default: ${escapeHtml(recommendedLabel)}.`}
+          </p>
+        </article>
+      `;
+    }).join("")
+    : `<p class="muted small">No extra yes/no clarifications are needed for this brief.</p>`;
+  const issueMarkup = issues.length
+    ? `<div class="chip-row">${issues.map((issue) => `<span class="info-chip chip-warn">${escapeHtml(issue)}</span>`).join("")}</div>`
+    : "";
+  const suggestionMarkup = suggestions.length
+    ? `<ul class="brief-guidance-list">${suggestions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+    : "";
+
+  root.innerHTML = `
+    <section class="brief-guidance-shell ${toneClass}">
+      <div class="brief-guidance-head">
+        <div>
+          <p class="eyebrow">Search Strategy</p>
+          <h4>${escapeHtml(searchProfileLabel(quality.search_profile || "balanced"))} Profile</h4>
+        </div>
+        <div class="chip-row">
+          <span class="info-chip"><strong>Readiness</strong> ${escapeHtml(String(quality.score || 0))}</span>
+          <span class="info-chip"><strong>Mode</strong> ${escapeHtml(searchProfileLabel(quality.search_profile || "balanced"))}</span>
+        </div>
+      </div>
+      <p>${escapeHtml(quality.message || "Brief guidance is ready.")}</p>
+      ${issueMarkup}
+      ${suggestionMarkup}
+      <div class="brief-question-grid">
+        ${questionMarkup}
+      </div>
+    </section>
+  `;
+}
+
+async function refreshBriefQuality() {
+  if (!state.user) return null;
+  const previewPayload = buildBriefPayload({ commitPending: false, includePending: true });
+  if (!hasMeaningfulBriefInput(previewPayload)) {
+    state.briefQuality = null;
+    renderBriefGuidance();
+    return null;
+  }
+  const requestId = state.briefQualityRequestId + 1;
+  state.briefQualityRequestId = requestId;
+  try {
+    const payload = await fetchJSON("/app/brief-quality", {
+      method: "POST",
+      body: previewPayload,
+      timeoutMs: 5000,
+    });
+    if (requestId !== state.briefQualityRequestId) return null;
+    state.briefQuality = payload?.quality || null;
+  } catch (error) {
+    if (requestId !== state.briefQualityRequestId) return null;
+    state.briefQuality = { error: error.message };
+  }
+  renderBriefGuidance();
+  return state.briefQuality;
+}
+
+function scheduleBriefQualityRefresh(delayMs = 260) {
+  if (state.briefQualityHandle) {
+    window.clearTimeout(state.briefQualityHandle);
+  }
+  state.briefQualityHandle = window.setTimeout(() => {
+    state.briefQualityHandle = null;
+    refreshBriefQuality();
+  }, delayMs);
+}
+
+function notifyBriefInputsChanged() {
+  scheduleBriefQualityRefresh();
 }
 
 function summarizeTargetGeographyFromTokens({ targetGeography = "", countries = [], continents = [], cities = [] } = {}) {
@@ -1093,6 +1278,7 @@ function formValuesFromProject(project) {
     uploadedJobDescriptionParser: meta.uploaded_job_description_parser || "",
     anchors: meta.anchors || brief.anchors || {},
     breakdown: brief.jd_breakdown || null,
+    briefClarifications: meta.brief_clarifications || brief.brief_clarifications || {},
   };
 }
 
@@ -1132,8 +1318,10 @@ function populateProjectForm(project) {
   state.tokenFields.excludeCompanies.setTokens(values.excludeCompanies);
   renderMemberPicker(values.assignedRecruiterIds.length ? values.assignedRecruiterIds : (state.user ? [state.user.id] : []));
   state.currentBreakdown = values.breakdown;
+  state.briefClarifications = { ...(values.briefClarifications || {}) };
   renderBreakdown();
   renderAnchorGrid(values.anchors);
+  scheduleBriefQualityRefresh();
 }
 
 function renderProjectSummary() {
@@ -1155,12 +1343,10 @@ function renderProjectSummary() {
           <h4>${escapeHtml(state.selectedProject.name)}</h4>
           <p class="muted">${escapeHtml(state.selectedProject.client_name || "No client set")} | ${escapeHtml(state.selectedProject.role_title || "No role title")}</p>
         </div>
-        <span class="status-pill status-${escapeHtml(state.selectedProject.status)}">${escapeHtml(titleCaseWords(state.selectedProject.status))}</span>
+        <span class="status-pill status-${escapeHtml(state.selectedProject.status)}">${escapeHtml(projectStatusLabel(state.selectedProject.status))}</span>
       </div>
       <div class="chip-row">
-        ${state.selectedProject.target_geography ? `<span class="info-chip">${escapeHtml(state.selectedProject.target_geography)}</span>` : ""}
-        <span class="info-chip">${escapeHtml(String(state.selectedProject.run_count || 0))} Runs</span>
-        <span class="info-chip">${escapeHtml(String(state.selectedProject.latest_run_candidate_count || 0))} Latest Candidates</span>
+        ${projectMetricChips(state.selectedProject)}
       </div>
       <p class="muted">${escapeHtml(state.selectedProject.notes || "No project notes yet.")}</p>
       <div class="stack-list compact-stack">
@@ -1178,9 +1364,47 @@ function renderProjectSummary() {
     document.getElementById("summary-open-candidates").addEventListener("click", () => switchTab("candidates"));
   }
 
-function projectCardMarkup(project, selected) {
+function projectStatusLabel(status) {
+  if (status === "active") return "Open Project";
+  if (status === "on_hold") return "On Hold";
+  if (status === "closed") return "Closed";
+  return titleCaseWords(status || "active");
+}
+
+function latestRunSummary(project) {
+  return (project && typeof project.latest_run_summary === "object" && project.latest_run_summary) || {};
+}
+
+function projectMetricChips(project) {
+  if (!project) return "";
+  const chips = [];
   const runCount = safeNumber(project.run_count);
   const latestCandidates = safeNumber(project.latest_run_candidate_count);
+  const summary = latestRunSummary(project);
+  const verifiedCount = safeNumber(summary.verified_count);
+  const reviewCount = safeNumber(summary.review_count);
+  const yieldStatus = String(summary.quality_diagnostics?.yield_status || "").toLowerCase();
+
+  if (project.target_geography) {
+    chips.push(`<span class="info-chip">${escapeHtml(project.target_geography)}</span>`);
+  }
+  chips.push(`<span class="info-chip">${escapeHtml(String(runCount))} Runs</span>`);
+  if (runCount > 0 || latestCandidates > 0) {
+    chips.push(`<span class="info-chip">${escapeHtml(String(latestCandidates))} Latest Candidates</span>`);
+  }
+  if (verifiedCount > 0) {
+    chips.push(`<span class="info-chip chip-good">${escapeHtml(String(verifiedCount))} Verified</span>`);
+  }
+  if (reviewCount > 0) {
+    chips.push(`<span class="info-chip ${verifiedCount > 0 ? "" : "chip-warn"}">${escapeHtml(String(reviewCount))} Review</span>`);
+  }
+  if (yieldStatus === "low" && latestCandidates > 0) {
+    chips.push(`<span class="info-chip chip-warn">Low Yield</span>`);
+  }
+  return chips.join("");
+}
+
+function projectCardMarkup(project, selected) {
   return `
     <button type="button" class="project-card ${selected ? "selected" : ""}" data-project-id="${escapeHtml(project.id)}">
       <div class="project-card-top">
@@ -1188,12 +1412,10 @@ function projectCardMarkup(project, selected) {
           <strong>${escapeHtml(project.name)}</strong>
           <p>${escapeHtml(project.client_name || "No client")} | ${escapeHtml(project.role_title || "No role")}</p>
         </div>
-        <span class="status-pill status-${escapeHtml(project.status)}">${escapeHtml(titleCaseWords(project.status))}</span>
+        <span class="status-pill status-${escapeHtml(project.status)}">${escapeHtml(projectStatusLabel(project.status))}</span>
       </div>
       <div class="chip-row">
-        ${project.target_geography ? `<span class="info-chip">${escapeHtml(project.target_geography)}</span>` : ""}
-        <span class="info-chip">${runCount} Runs</span>
-        <span class="info-chip">${latestCandidates} Latest Candidates</span>
+        ${projectMetricChips(project)}
       </div>
       <small class="muted">Updated ${escapeHtml(formatTimestamp(project.latest_run_at || project.updated_at))}</small>
     </button>
@@ -3352,8 +3574,10 @@ function loadDemoBrief() {
   state.tokenFields.niceToHave.setTokens(preset.nice_to_have_keywords || []);
   state.tokenFields.industry.setTokens(preset.industry_keywords || []);
   state.currentBreakdown = preset.jd_breakdown || null;
+  state.briefClarifications = { ...(preset.brief_clarifications || {}) };
   renderBreakdown();
   renderAnchorGrid(preset.anchors || {});
+  scheduleBriefQualityRefresh();
   switchTab("recruiter");
   setStatus(
     "Demo brief loaded.",
@@ -3467,8 +3691,47 @@ function bindEvents() {
     state.candidateSearchQuery = event.target.value.trim();
     renderCandidates();
   });
+  [
+    "project-name",
+    "client-name",
+    "project-status",
+    "role-title",
+    "target-geography",
+    "project-notes",
+    "years-mode",
+    "years-value",
+    "years-tolerance",
+    "min-years",
+    "max-years",
+    "radius-miles",
+    "candidate-limit",
+    "company-match-mode",
+    "employment-status-mode",
+    "job-description",
+  ].forEach((id) => {
+    const input = document.getElementById(id);
+    if (!input) return;
+    const eventName = input.tagName === "SELECT" ? "change" : "input";
+    input.addEventListener(eventName, notifyBriefInputsChanged);
+  });
   document.getElementById("jd-upload-input").addEventListener("change", handleJdUpload);
   document.getElementById("breakdown-button").addEventListener("click", runBreakdown);
+  document.getElementById("brief-guidance-panel").addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const questionId = String(target.dataset.briefQuestion || "").trim();
+    const answer = String(target.dataset.briefAnswer || "").trim().toLowerCase();
+    if (!questionId || !["yes", "no"].includes(answer)) return;
+    const nextValue = answer === "yes";
+    const currentValue = state.briefClarifications[questionId];
+    if (Object.prototype.hasOwnProperty.call(state.briefClarifications, questionId) && Boolean(currentValue) === nextValue) {
+      delete state.briefClarifications[questionId];
+    } else {
+      state.briefClarifications[questionId] = nextValue;
+    }
+    renderBriefGuidance();
+    scheduleBriefQualityRefresh(80);
+  });
   document.getElementById("top-save-button").addEventListener("click", async () => {
     try {
       await saveProject();
@@ -3563,8 +3826,10 @@ async function initialiseApp() {
   renderProviderOptions();
   renderAnchorGrid();
   renderUploadedJdSummary();
+  renderBriefGuidance();
   populateSettingsFields();
   await restoreSession();
+  scheduleBriefQualityRefresh(80);
 }
 
 window.addEventListener("DOMContentLoaded", () => {

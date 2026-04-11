@@ -299,8 +299,10 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
 
     titles = unique_preserving_order(config.get("titles", []))
     company_targets = unique_preserving_order(config.get("company_targets", []))
+    configured_title_keywords = unique_preserving_order(config.get("title_keywords", []))
+    expand_title_keywords = bool(config.get("expand_title_keywords", True))
     title_keywords = unique_preserving_order(
-        config.get("title_keywords", []) + infer_title_keywords(titles)
+        configured_title_keywords + (infer_title_keywords(titles) if expand_title_keywords else [])
     )
 
     geography_config = config.get("geography", {})

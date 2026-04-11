@@ -1452,6 +1452,16 @@ def create_app() -> "FastAPI":
             "breakdown": breakdown,
         }
 
+    @app.post("/app/brief-quality")
+    async def app_brief_quality(request: Request, payload: Dict[str, Any]) -> Dict[str, Any]:
+        _require_app_user(request)
+        try:
+            ui_payload = build_ui_brief_payload(payload)
+            quality = assess_ui_brief_quality(ui_payload["brief_config"])
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"quality": quality}
+
     @app.post("/app/search")
     async def app_search(request: Request, payload: Dict[str, Any]) -> Dict[str, Any]:
         user = _require_app_user(request)

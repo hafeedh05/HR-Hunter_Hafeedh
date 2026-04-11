@@ -1032,6 +1032,150 @@ def _resolve_year_bounds(
     return resolved_min, resolved_max
 
 
+FOCUSED_SEARCH_PROFILE = "focused"
+BALANCED_SEARCH_PROFILE = "balanced"
+EXPLORATORY_SEARCH_PROFILE = "exploratory"
+EXECUTIVE_ROLE_HINTS = (
+    "ceo",
+    "chief executive officer",
+    "chief",
+    "president",
+    "managing director",
+    "general manager",
+    "vice president",
+    "vp",
+)
+
+
+def _is_executive_brief(role_title: str, titles: List[str]) -> bool:
+    targets = [role_title, *titles]
+    return any(
+        hint in normalize_text(value)
+        for value in targets
+        if str(value).strip()
+        for hint in EXECUTIVE_ROLE_HINTS
+    )
+
+
+def _derive_search_profile(
+    *,
+    role_title: str,
+    titles: List[str],
+    location_targets: List[str],
+    company_targets: List[str],
+    required_keywords: List[str],
+    preferred_keywords: List[str],
+    industry_keywords: List[str],
+    document_text: str,
+    limit: int,
+) -> str:
+    detail_signals = sum(
+        1
+        for signal in (
+            len(required_keywords) >= 2,
+            bool(preferred_keywords),
+            bool(industry_keywords),
+            bool(company_targets),
+            len(document_text) >= 120,
+        )
+        if signal
+    )
+    executive_brief = _is_executive_brief(role_title, titles)
+    location_count = len(location_targets)
+    title_count = len(titles)
+
+    if (
+        limit <= 60
+        and location_count <= 2
+        and title_count <= 3
+        and detail_signals >= 1
+        and not executive_brief
+    ):
+        return FOCUSED_SEARCH_PROFILE
+    if limit >= 180 or location_count >= 4 or title_count >= 5 or executive_brief:
+        return EXPLORATORY_SEARCH_PROFILE
+    return BALANCED_SEARCH_PROFILE
+
+
+def _build_brief_follow_up_questions(
+    *,
+    role_title: str,
+    titles: List[str],
+    location_targets: List[str],
+    companies: List[str],
+    required_keywords: List[str],
+    industry_keywords: List[str],
+    document_text: str,
+    limit: int,
+    search_profile: str,
+) -> List[Dict[str, Any]]:
+    questions: List[Dict[str, Any]] = []
+    executive_brief = _is_executive_brief(role_title, titles)
+    location_count = len(location_targets)
+    title_count = len(titles)
+    thin_detail = len(required_keywords) < 2 and not industry_keywords and len(document_text) < 160
+
+    if location_count >= 2:
+        questions.append(
+            {
+                "id": "prioritize_first_location",
+                "label": "Primary Market",
+                "prompt": "Should the first country or city you entered be treated as the primary market?",
+                "help": "Use this when the search should lean harder on the lead market instead of splitting attention evenly.",
+                "recommended_answer": bool(limit <= 120 and search_profile != EXPLORATORY_SEARCH_PROFILE),
+            }
+        )
+
+    if role_title and title_count <= 2:
+        questions.append(
+            {
+                "id": "allow_adjacent_titles",
+                "label": "Adjacent Titles",
+                "prompt": "Should HR Hunter include adjacent role-family titles when exact matches look thin?",
+                "help": "This broadens retrieval into near-neighbor roles like Managing Director for CEO or Growth Analyst for Data Analyst.",
+                "recommended_answer": bool(executive_brief or search_profile != FOCUSED_SEARCH_PROFILE),
+            }
+        )
+
+    if location_targets and (limit >= 60 or thin_detail or len(companies) >= 3):
+        questions.append(
+            {
+                "id": "expand_search_when_thin",
+                "label": "Market Expansion",
+                "prompt": "If exact matches are scarce, should HR Hunter widen into discovery slices and nearby public evidence?",
+                "help": "This helps hard briefs reach target volume, but it trades some precision for breadth.",
+                "recommended_answer": bool(search_profile == EXPLORATORY_SEARCH_PROFILE or executive_brief),
+            }
+        )
+
+    return questions
+
+
+def _resolve_brief_clarifications(
+    raw_clarifications: Any,
+    follow_up_questions: List[Dict[str, Any]],
+) -> tuple[Dict[str, bool], List[Dict[str, Any]]]:
+    raw_values = dict(raw_clarifications) if isinstance(raw_clarifications, dict) else {}
+    resolved_values: Dict[str, bool] = {}
+    resolved_questions: List[Dict[str, Any]] = []
+    for question in follow_up_questions:
+        question_id = str(question.get("id", "")).strip()
+        if not question_id:
+            continue
+        explicit_value = _coerce_bool(raw_values.get(question_id))
+        recommended = bool(question.get("recommended_answer"))
+        resolved = recommended if explicit_value is None else explicit_value
+        resolved_values[question_id] = resolved
+        resolved_questions.append(
+            {
+                **question,
+                "resolved_answer": resolved,
+                "using_recommended": explicit_value is None,
+            }
+        )
+    return resolved_values, resolved_questions
+
+
 def assess_ui_brief_quality(brief_config: Dict[str, Any]) -> Dict[str, Any]:
     role_title = str(brief_config.get("role_title", "")).strip()
     geography = brief_config.get("geography", {})
@@ -1070,6 +1214,13 @@ def assess_ui_brief_quality(brief_config: Dict[str, Any]) -> Dict[str, Any]:
     document_text = str(brief_config.get("document_text", "")).strip()
     min_years = _coerce_int(brief_config.get("minimum_years_experience"))
     max_years = _coerce_int(brief_config.get("maximum_years_experience"))
+    search_profile = str(brief_config.get("brief_search_profile", BALANCED_SEARCH_PROFILE) or BALANCED_SEARCH_PROFILE)
+    follow_up_questions = brief_config.get("brief_follow_up_questions", [])
+    if not isinstance(follow_up_questions, list):
+        follow_up_questions = []
+    brief_clarifications = brief_config.get("brief_clarifications", {})
+    if not isinstance(brief_clarifications, dict):
+        brief_clarifications = {}
 
     score = 0
     issues: List[str] = []
@@ -1129,7 +1280,11 @@ def assess_ui_brief_quality(brief_config: Dict[str, Any]) -> Dict[str, Any]:
 
     ok = bool(role_title and geo_present and detail_signals >= 2 and score >= 5)
     if ok:
-        message = "Brief details look sufficient for search."
+        message = (
+            "Brief details look sufficient for search."
+            if not follow_up_questions
+            else "Brief details look sufficient for search. A couple of yes/no clarifications can make targeting tighter."
+        )
     else:
         message = (
             "Hunt details are not enough yet. Add role title, geography, and at least two detail sections "
@@ -1142,6 +1297,10 @@ def assess_ui_brief_quality(brief_config: Dict[str, Any]) -> Dict[str, Any]:
         "issues": unique_preserving_order(issues),
         "suggestions": unique_preserving_order(suggestions),
         "message": message,
+        "search_profile": search_profile,
+        "needs_clarification": bool(follow_up_questions),
+        "follow_up_questions": follow_up_questions,
+        "brief_clarifications": brief_clarifications,
     }
 
 
@@ -1222,6 +1381,43 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     feedback_db = resolve_feedback_db_path(payload.get("feedback_db"))
     model_dir = resolve_ranker_model_dir(payload.get("model_dir"))
     limit = max(1, int(payload.get("limit", 20) or 20))
+    search_profile = _derive_search_profile(
+        role_title=role_title,
+        titles=titles,
+        location_targets=location_targets,
+        company_targets=companies,
+        required_keywords=required_keywords,
+        preferred_keywords=preferred_keywords,
+        industry_keywords=industry_keywords,
+        document_text=job_description,
+        limit=limit,
+    )
+    brief_follow_up_questions = _build_brief_follow_up_questions(
+        role_title=role_title,
+        titles=titles,
+        location_targets=location_targets,
+        companies=companies,
+        required_keywords=required_keywords,
+        industry_keywords=industry_keywords,
+        document_text=job_description,
+        limit=limit,
+        search_profile=search_profile,
+    )
+    brief_clarifications, brief_follow_up_questions = _resolve_brief_clarifications(
+        payload.get("brief_clarifications"),
+        brief_follow_up_questions,
+    )
+    prioritize_first_location = bool(brief_clarifications.get("prioritize_first_location"))
+    allow_adjacent_titles = bool(brief_clarifications.get("allow_adjacent_titles", True))
+    expand_search_when_thin = bool(brief_clarifications.get("expand_search_when_thin", search_profile != FOCUSED_SEARCH_PROFILE))
+    if prioritize_first_location and location_targets:
+        geography_country = countries[0] if countries else geography_country
+        if cities:
+            geography_location = cities[0]
+        elif countries:
+            geography_location = countries[0]
+        else:
+            geography_location = location_targets[0]
     internal_fetch_override = _coerce_int(payload.get("internal_fetch_limit_override"))
     if internal_fetch_override is None:
         internal_fetch_override = _coerce_int(search_tuning.get("internal_fetch_limit_override"))
@@ -1229,6 +1425,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         limit,
         internal_fetch_override if internal_fetch_override is not None else compute_internal_fetch_limit(limit),
     )
+    if search_profile == FOCUSED_SEARCH_PROFILE and internal_fetch_override is None:
+        internal_fetch_limit = min(internal_fetch_limit, max(limit * 2, limit + 50))
     csv_export_limit = max(1, int(payload.get("csv_export_limit", limit) or limit))
     reranker_enabled = bool(payload.get("reranker_enabled", True))
     learned_ranker_enabled = bool(payload.get("learned_ranker_enabled", False))
@@ -1251,12 +1449,16 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         max(reranker_floor, int(reranker_requested_top_n or reranker_floor)),
         min(internal_fetch_limit, max(limit, 320)),
     )
+    if search_profile == FOCUSED_SEARCH_PROFILE:
+        reranker_top_n = min(reranker_top_n, max(limit * 2, 80))
     scrapingbee_parallel_requests = max(
         4,
         _coerce_int(payload.get("provider_parallel_requests"))
         or _coerce_int(search_tuning.get("provider_parallel_requests"))
         or (16 if limit >= 220 else (12 if limit >= 120 else 8)),
     )
+    if search_profile == FOCUSED_SEARCH_PROFILE:
+        scrapingbee_parallel_requests = min(scrapingbee_parallel_requests, 8)
     scrapingbee_pages_per_query = max(
         1,
         min(
@@ -1274,7 +1476,13 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         or _coerce_int(search_tuning.get("scrapingbee_max_queries"))
         or compute_provider_max_queries(limit),
     )
+    if search_profile == FOCUSED_SEARCH_PROFILE:
+        scrapingbee_max_queries = min(scrapingbee_max_queries, max(90, limit * 2))
     default_geo_groups = 8 if limit >= 220 else (6 if limit >= 120 else 8)
+    if search_profile == FOCUSED_SEARCH_PROFILE:
+        default_geo_groups = min(default_geo_groups, max(2, len(location_targets) or 2))
+    elif prioritize_first_location and location_targets:
+        default_geo_groups = min(default_geo_groups, max(3, min(len(location_targets) + 1, 6)))
     tuned_company_chunk_size = _coerce_int(search_tuning.get("company_chunk_size"))
     tuned_max_geo_groups = _coerce_int(search_tuning.get("max_geo_groups"))
     tuned_discovery_chunk_size = _coerce_int(search_tuning.get("discovery_keyword_chunk_size"))
@@ -1318,6 +1526,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         else:
             verification_top_n = limit
     verification_top_n = min(internal_fetch_limit, max(0, verification_top_n))
+    if search_profile == FOCUSED_SEARCH_PROFILE:
+        verification_top_n = min(verification_top_n, max(limit, 50))
     verification_parallel_candidates = max(
         1,
         _coerce_int(payload.get("verification_parallel_candidates"))
@@ -1342,23 +1552,36 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         or tuned_verification_company_location_probe_queries
         or 0,
     )
+    explicit_include_history_slices = _coerce_bool(payload.get("include_history_slices"))
+    explicit_include_discovery_slices = _coerce_bool(payload.get("include_discovery_slices"))
+    explicit_geo_fanout = _coerce_bool(payload.get("geo_fanout_enabled"))
+    resolved_include_history_slices = (
+        explicit_include_history_slices
+        if explicit_include_history_slices is not None
+        else (tuned_include_history_slices if tuned_include_history_slices is not None else True)
+    )
+    resolved_include_discovery_slices = (
+        explicit_include_discovery_slices
+        if explicit_include_discovery_slices is not None
+        else (tuned_include_discovery_slices if tuned_include_discovery_slices is not None else expand_search_when_thin)
+    )
+    resolved_geo_fanout = (
+        explicit_geo_fanout
+        if explicit_geo_fanout is not None
+        else not (search_profile == FOCUSED_SEARCH_PROFILE and len(location_targets) <= 2)
+    )
+    include_country_only_queries = expand_search_when_thin or len(countries) <= 1
+    if search_profile == FOCUSED_SEARCH_PROFILE and not expand_search_when_thin:
+        include_country_only_queries = False
     providers_settings = {
         "retrieval": {
             "company_chunk_size": int(payload.get("company_chunk_size", tuned_company_chunk_size or 5) or 5),
             "results_per_slice": max(internal_fetch_limit, int(payload.get("results_per_slice", 40) or 40)),
             "include_strict_slice": True,
-            "include_broad_slice": True,
-            "include_history_slices": (
-                _coerce_bool(payload.get("include_history_slices"))
-                if _coerce_bool(payload.get("include_history_slices")) is not None
-                else (tuned_include_history_slices if tuned_include_history_slices is not None else True)
-            ),
-            "include_discovery_slices": (
-                _coerce_bool(payload.get("include_discovery_slices"))
-                if _coerce_bool(payload.get("include_discovery_slices")) is not None
-                else (tuned_include_discovery_slices if tuned_include_discovery_slices is not None else True)
-            ),
-            "geo_fanout_enabled": bool(payload.get("geo_fanout_enabled", True)),
+            "include_broad_slice": allow_adjacent_titles,
+            "include_history_slices": resolved_include_history_slices,
+            "include_discovery_slices": resolved_include_discovery_slices,
+            "geo_fanout_enabled": resolved_geo_fanout,
             "max_geo_groups": max(3, _coerce_int(payload.get("max_geo_groups")) or tuned_max_geo_groups or default_geo_groups),
             "discovery_keyword_chunk_size": int(payload.get("discovery_keyword_chunk_size", tuned_discovery_chunk_size or 6) or 6),
             "market_keyword_chunk_size": int(payload.get("market_keyword_chunk_size", tuned_market_chunk_size or 5) or 5),
@@ -1398,7 +1621,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                 or _coerce_int(search_tuning.get("max_company_terms_per_query"))
                 or 12,
             ),
-            "geo_fanout_enabled": bool(payload.get("geo_fanout_enabled", True)),
+            "geo_fanout_enabled": resolved_geo_fanout,
             "max_geo_groups": max(3, _coerce_int(payload.get("max_geo_groups")) or tuned_max_geo_groups or default_geo_groups),
             "company_slice_location_group_limit": max(
                 0,
@@ -1406,7 +1629,13 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                 or tuned_company_slice_location_group_limit
                 or 0,
             ),
-            "geo_group_size": max(1, _coerce_int(payload.get("geo_group_size")) or tuned_geo_group_size or 2),
+            "geo_group_size": max(
+                1,
+                _coerce_int(payload.get("geo_group_size"))
+                or tuned_geo_group_size
+                or (1 if prioritize_first_location or search_profile == FOCUSED_SEARCH_PROFILE else 2),
+            ),
+            "include_country_only_queries": include_country_only_queries,
             "stagnation_query_window": max(
                 0,
                 _coerce_int(payload.get("stagnation_query_window"))
@@ -1452,6 +1681,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "brief_summary": "\n".join(summary_lines).strip(),
         "document_text": job_description,
         "titles": titles,
+        "expand_title_keywords": allow_adjacent_titles,
         "company_targets": companies,
         "geography": {
             "location_name": geography_location,
@@ -1479,6 +1709,9 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "employment_status_mode": employment_status_mode,
         "jd_breakdown": breakdown,
         "anchors": anchors,
+        "brief_search_profile": search_profile,
+        "brief_clarifications": brief_clarifications,
+        "brief_follow_up_questions": brief_follow_up_questions,
         "result_target_min": max(5, min(limit, 20)),
         "result_target_max": max(limit, 40),
         "max_profiles": max(limit, 80),
@@ -1513,6 +1746,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "uploaded_job_description_text": uploaded_job_description_text,
             "anchors": anchors,
             "search_tuning": search_tuning,
+            "search_profile": search_profile,
+            "brief_clarifications": brief_clarifications,
             "keyword_tracks": {
                 "portfolio_keywords": portfolio_keywords,
                 "commercial_keywords": commercial_keywords,

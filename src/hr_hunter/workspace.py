@@ -691,6 +691,18 @@ def _project_summary_from_row(row: Any, members: List[Dict[str, Any]]) -> Dict[s
     except Exception:
         brief_payload = {}
     column_names = set(row.keys())
+    latest_run_summary = {}
+    latest_run_candidate_count = int(row["latest_run_candidate_count"] or 0) if "latest_run_candidate_count" in column_names else 0
+    if "latest_run_summary_json" in column_names:
+        try:
+            latest_run_summary = json.loads(row["latest_run_summary_json"] or "{}")
+        except Exception:
+            latest_run_summary = {}
+        latest_run_summary = _run_summary_from_artifact(
+            latest_run_summary,
+            candidate_count=latest_run_candidate_count,
+            report_json_path=str(row["latest_run_report_json_path"] or ""),
+        )
     return {
         "id": row["id"],
         "name": row["name"],
@@ -704,11 +716,15 @@ def _project_summary_from_row(row: Any, members: List[Dict[str, Any]]) -> Dict[s
         "latest_brief_json": brief_payload,
         "latest_run_id": row["latest_run_id"] or "",
         "latest_run_at": row["latest_run_at"] or "",
+        "latest_run_status": (row["latest_run_status"] or "") if "latest_run_status" in column_names else "",
+        "latest_run_execution_backend": (row["latest_run_execution_backend"] or "") if "latest_run_execution_backend" in column_names else "",
+        "latest_run_accepted_count": int(row["latest_run_accepted_count"] or 0) if "latest_run_accepted_count" in column_names else 0,
+        "latest_run_summary": latest_run_summary,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "assigned_recruiters": members,
         "run_count": int(row["run_count"] or 0) if "run_count" in column_names else 0,
-        "latest_run_candidate_count": int(row["latest_run_candidate_count"] or 0) if "latest_run_candidate_count" in column_names else 0,
+        "latest_run_candidate_count": latest_run_candidate_count,
     }
 
 
@@ -740,13 +756,23 @@ def list_projects(
             f"""
             SELECT
                 p.*,
-                COUNT(DISTINCT sr.id) AS run_count,
-                MAX(CASE WHEN sr.id = p.latest_run_id THEN COALESCE(sr.candidate_count, 0) ELSE 0 END) AS latest_run_candidate_count
+                COALESCE(run_counts.run_count, 0) AS run_count,
+                COALESCE(sr_latest.candidate_count, 0) AS latest_run_candidate_count,
+                COALESCE(sr_latest.accepted_count, 0) AS latest_run_accepted_count,
+                COALESCE(sr_latest.summary_json, '{{}}') AS latest_run_summary_json,
+                COALESCE(sr_latest.report_json_path, '') AS latest_run_report_json_path,
+                COALESCE(sr_latest.status, '') AS latest_run_status,
+                COALESCE(sr_latest.execution_backend, '') AS latest_run_execution_backend
             FROM projects p
-            LEFT JOIN search_runs sr ON sr.mandate_id = p.id
+            LEFT JOIN (
+                SELECT mandate_id, COUNT(*) AS run_count
+                FROM search_runs
+                GROUP BY mandate_id
+            ) run_counts ON run_counts.mandate_id = p.id
+            LEFT JOIN search_runs sr_latest
+                ON sr_latest.mandate_id = p.id AND sr_latest.id = p.latest_run_id
             {access_clause}
             {filter_clause}
-            GROUP BY p.id
             ORDER BY
                 CASE p.status WHEN 'active' THEN 0 WHEN 'on_hold' THEN 1 ELSE 2 END,
                 COALESCE(NULLIF(p.latest_run_at, ''), p.updated_at) DESC,
@@ -803,7 +829,13 @@ def get_project(
         ).fetchone()
         latest_run_stats = connection.execute(
             """
-            SELECT COALESCE(candidate_count, 0) AS candidate_count
+            SELECT
+                COALESCE(candidate_count, 0) AS candidate_count,
+                COALESCE(accepted_count, 0) AS accepted_count,
+                COALESCE(summary_json, '{}') AS summary_json,
+                COALESCE(report_json_path, '') AS report_json_path,
+                COALESCE(status, '') AS status,
+                COALESCE(execution_backend, '') AS execution_backend
             FROM search_runs
             WHERE mandate_id = ? AND id = ?
             LIMIT 1
@@ -813,6 +845,21 @@ def get_project(
     project = _project_summary_from_row(row, members)
     project["run_count"] = int(run_stats["run_count"] or 0)
     project["latest_run_candidate_count"] = int((latest_run_stats["candidate_count"] if latest_run_stats else 0) or 0)
+    project["latest_run_accepted_count"] = int((latest_run_stats["accepted_count"] if latest_run_stats else 0) or 0)
+    project["latest_run_status"] = str((latest_run_stats["status"] if latest_run_stats else "") or "")
+    project["latest_run_execution_backend"] = str((latest_run_stats["execution_backend"] if latest_run_stats else "") or "")
+    if latest_run_stats:
+        try:
+            latest_run_summary = json.loads(latest_run_stats["summary_json"] or "{}")
+        except Exception:
+            latest_run_summary = {}
+        project["latest_run_summary"] = _run_summary_from_artifact(
+            latest_run_summary,
+            candidate_count=project["latest_run_candidate_count"],
+            report_json_path=str(latest_run_stats["report_json_path"] or ""),
+        )
+    else:
+        project["latest_run_summary"] = {}
     return project
 
 

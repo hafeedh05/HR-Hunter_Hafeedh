@@ -1,5 +1,6 @@
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.recruiter_app import (
+    assess_ui_brief_quality,
     build_app_bootstrap,
     build_ui_brief_payload,
     compute_internal_fetch_limit,
@@ -65,6 +66,29 @@ def test_build_ui_brief_payload_maps_company_mode_and_location_targets():
     assert brief.anchor_weights["company_match"] > 0
     assert brief.provider_settings["registry_memory"]["enabled"] is True
     assert brief.provider_settings["retrieval"]["include_history_slices"] is True
+
+
+def test_assess_ui_brief_quality_recommends_follow_up_questions_for_ambiguous_brief():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Regional Marketing Manager",
+            "titles": ["Regional Marketing Manager"],
+            "countries": ["United Arab Emirates", "Saudi Arabia", "Qatar"],
+            "must_have_keywords": ["Performance Marketing", "Paid Media"],
+            "job_description": "Need someone who can lead regional digital acquisition, media mix, and multi-market campaign planning.",
+            "limit": 80,
+        }
+    )
+
+    quality = assess_ui_brief_quality(payload["brief_config"])
+    question_ids = {question["id"] for question in quality["follow_up_questions"]}
+
+    assert quality["ok"] is True
+    assert quality["needs_clarification"] is True
+    assert quality["search_profile"] == "balanced"
+    assert "prioritize_first_location" in question_ids
+    assert "allow_adjacent_titles" in question_ids
+    assert "expand_search_when_thin" in question_ids
 
 
 def test_build_app_bootstrap_exposes_supported_ui_options():
@@ -185,6 +209,37 @@ def test_build_ui_brief_payload_supports_keyword_tracks_and_search_tuning_from_b
     assert brief["provider_settings"]["verification"]["parallel_candidates"] == 8
 
 
+def test_build_ui_brief_payload_applies_brief_clarifications_and_focused_tuning():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "must_have_keywords": ["SQL", "Python"],
+            "job_description": "Need a hands-on analyst with SQL, Python, dashboards, and stakeholder reporting.",
+            "limit": 50,
+            "brief_clarifications": {
+                "prioritize_first_location": True,
+                "allow_adjacent_titles": False,
+                "expand_search_when_thin": False,
+            },
+        }
+    )
+
+    brief = payload["brief_config"]
+    search_brief = build_search_brief(brief)
+
+    assert payload["internal_fetch_limit"] == 100
+    assert brief["brief_search_profile"] == "focused"
+    assert brief["geography"]["country"] == "United Arab Emirates"
+    assert brief["expand_title_keywords"] is False
+    assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is False
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is False
+    assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
+    assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 100
+    assert search_brief.title_keywords == []
+
+
 def test_build_ui_brief_payload_respects_internal_fetch_override():
     payload = build_ui_brief_payload(
         {
@@ -201,6 +256,27 @@ def test_build_ui_brief_payload_respects_internal_fetch_override():
     assert payload["brief_config"]["provider_settings"]["retrieval"]["results_per_slice"] == 600
     assert payload["brief_config"]["provider_settings"]["registry_memory"]["limit"] == 600
     assert payload["brief_config"]["provider_settings"]["reranker"]["top_n"] == 220
+
+
+def test_build_ui_brief_payload_uses_focused_defaults_for_small_precise_searches():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst"],
+            "countries": ["United Arab Emirates"],
+            "must_have_keywords": ["SQL", "Python"],
+            "job_description": "Need SQL, Python, BI reporting, and stakeholder support.",
+            "limit": 50,
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["brief_search_profile"] == "focused"
+    assert payload["internal_fetch_limit"] == 100
+    assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 100
+    assert brief["provider_settings"]["reranker"]["top_n"] == 100
+    assert brief["provider_settings"]["verification"]["top_n"] == 50
 
 
 def test_resolve_job_description_source_prefers_uploaded_text_and_keeps_notes():
