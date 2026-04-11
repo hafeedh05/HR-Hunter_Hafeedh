@@ -695,6 +695,9 @@ def create_app() -> "FastAPI":
             def _on_pipeline_progress(event: Dict[str, Any]) -> None:
                 stage = str(event.get("stage", "")).strip().lower() or "running"
                 previous_stage = str(latest_telemetry.get("stage", "")).strip().lower() or "running"
+                previous_round = int(latest_telemetry.get("round", 0) or 0)
+                round_number = int(event.get("round", previous_round) or previous_round)
+                round_reset = round_number > previous_round and stage == "retrieval"
                 stage_label_map = {
                     "retrieval": "Retrieval",
                     "dedupe": "Dedupe",
@@ -703,9 +706,9 @@ def create_app() -> "FastAPI":
                     "finalizing": "Finalizing",
                     "running": "Running",
                 }
-                previous_queries_total = int(latest_telemetry.get("queries_total", 0) or 0)
-                previous_queries_completed = int(latest_telemetry.get("queries_completed", 0) or 0)
-                previous_raw_found = int(latest_telemetry.get("raw_found", 0) or 0)
+                previous_queries_total = 0 if round_reset else int(latest_telemetry.get("queries_total", 0) or 0)
+                previous_queries_completed = 0 if round_reset else int(latest_telemetry.get("queries_completed", 0) or 0)
+                previous_raw_found = 0 if round_reset else int(latest_telemetry.get("raw_found", 0) or 0)
                 previous_unique = int(latest_telemetry.get("unique_after_dedupe", 0) or 0)
                 previous_reranked = int(latest_telemetry.get("reranked_count", 0) or 0)
                 previous_rerank_target = int(latest_telemetry.get("rerank_target", 0) or 0)
@@ -748,7 +751,6 @@ def create_app() -> "FastAPI":
                     previous_finalized,
                     int(event.get("finalized_count", previous_finalized) or 0),
                 )
-                round_number = int(event.get("round", latest_telemetry.get("round", 0)) or 0)
                 estimated_total_seconds = int(event.get("estimated_total_seconds", latest_telemetry.get("estimated_total_seconds", 0)) or 0)
                 if stage in {"rerank", "verifying", "finalizing"}:
                     queries_in_flight = 0
