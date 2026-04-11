@@ -1,4 +1,9 @@
-from hr_hunter.api import _job_actor_from_payload
+from hr_hunter.api import (
+    _finalize_report_for_limit,
+    _job_actor_from_payload,
+    _resolve_pipeline_progress_percent,
+)
+from hr_hunter.models import CandidateProfile, SearchRunReport
 
 
 def test_job_actor_from_payload_preserves_admin_flag():
@@ -17,3 +22,53 @@ def test_job_actor_from_payload_preserves_admin_flag():
         "team_id": "leadership",
         "is_admin": True,
     }
+
+
+def test_resolve_pipeline_progress_percent_stays_monotonic_across_stages():
+    assert _resolve_pipeline_progress_percent(
+        stage="verifying",
+        explicit_percent=92,
+        previous_percent=95,
+        queries_completed=13,
+        queries_total=13,
+    ) == 95
+    assert _resolve_pipeline_progress_percent(
+        stage="finalizing",
+        explicit_percent=97,
+        previous_percent=98,
+        queries_completed=13,
+        queries_total=13,
+    ) == 98
+
+
+def test_finalize_report_for_limit_keeps_raw_found_above_unique_pool():
+    report = SearchRunReport(
+        run_id="run-test",
+        brief_id="brief-test",
+        dry_run=False,
+        generated_at="2026-04-11T00:00:00+00:00",
+        provider_results=[],
+        candidates=[
+            CandidateProfile(full_name=f"Candidate {index}", verification_status="reject")
+            for index in range(60)
+        ],
+        summary={
+            "pipeline_metrics": {
+                "queries_completed": 13,
+                "queries_total": 13,
+                "raw_found": 28,
+                "unique_after_dedupe": 117,
+                "rerank_target": 100,
+                "reranked_count": 100,
+                "finalized_count": 60,
+            }
+        },
+    )
+
+    finalized = _finalize_report_for_limit(report, requested_limit=50, internal_fetch_limit=100)
+    pipeline_metrics = finalized.summary["pipeline_metrics"]
+
+    assert len(finalized.candidates) == 50
+    assert pipeline_metrics["unique_after_dedupe"] == 117
+    assert pipeline_metrics["raw_found"] == 117
+    assert pipeline_metrics["finalized_count"] == 50

@@ -149,11 +149,15 @@ def _finalize_report_for_limit(report, *, requested_limit: int, internal_fetch_l
     rerank_target = max(rerank_target, reranked_count)
     rerank_target = min(rerank_target, unique_after_dedupe)
     reranked_count = min(reranked_count, rerank_target) if rerank_target > 0 else reranked_count
+    raw_found = max(
+        unique_after_dedupe,
+        max(0, int(pipeline_metrics.get("raw_found", 0) or 0)),
+    )
     pipeline_metrics.update(
         {
             "queries_completed": max(0, int(pipeline_metrics.get("queries_completed", 0) or 0)),
             "queries_total": max(0, int(pipeline_metrics.get("queries_total", 0) or 0)),
-            "raw_found": max(0, int(pipeline_metrics.get("raw_found", 0) or 0)),
+            "raw_found": raw_found,
             "unique_after_dedupe": unique_after_dedupe,
             "rerank_target": rerank_target,
             "reranked_count": reranked_count,
@@ -169,6 +173,34 @@ def _merge_ranked_report_candidates(report, supplemental_report):
     report.provider_results = [*report.provider_results, *supplemental_report.provider_results]
     report.candidates = sort_candidates(dedupe_candidates([*report.candidates, *supplemental_report.candidates]))
     return report
+
+
+def _resolve_pipeline_progress_percent(
+    *,
+    stage: str,
+    explicit_percent: Any,
+    previous_percent: int,
+    queries_completed: int,
+    queries_total: int,
+) -> int:
+    resolved_percent = explicit_percent
+    if resolved_percent is None:
+        if stage == "retrieval" and queries_total > 0:
+            resolved_percent = max(5, min(70, int(round((queries_completed / max(1, queries_total)) * 65 + 5))))
+        elif stage == "dedupe":
+            resolved_percent = 72
+        elif stage == "rerank":
+            resolved_percent = 84
+        elif stage == "verifying":
+            resolved_percent = 92
+        elif stage == "finalizing":
+            resolved_percent = 95
+        else:
+            resolved_percent = previous_percent or 5
+    percent = int(max(0, min(99, int(resolved_percent))))
+    if stage not in {"completed", "failed"}:
+        percent = max(max(0, int(previous_percent or 0)), percent)
+    return percent
 
 
 def _enforce_private_api_auth(request: "Request") -> None:
@@ -725,10 +757,14 @@ def create_app() -> "FastAPI":
                     queries_in_flight = 0
                 else:
                     queries_in_flight = int(latest_telemetry.get("queries_in_flight", 0) or 0)
-                raw_found = max(previous_raw_found, int(event.get("raw_found", previous_raw_found) or 0))
                 unique_after_dedupe = max(
                     previous_unique,
                     int(event.get("unique_after_dedupe", previous_unique) or 0),
+                )
+                raw_found = max(
+                    previous_raw_found,
+                    int(event.get("raw_found", previous_raw_found) or 0),
+                    unique_after_dedupe,
                 )
                 reranked_count = max(
                     previous_reranked,
@@ -755,20 +791,13 @@ def create_app() -> "FastAPI":
                 if stage in {"rerank", "verifying", "finalizing"}:
                     queries_in_flight = 0
 
-                explicit_percent = event.get("percent")
-                if explicit_percent is None:
-                    if stage == "retrieval" and queries_total > 0:
-                        explicit_percent = max(5, min(70, int(round((queries_completed / max(1, queries_total)) * 65 + 5))))
-                    elif stage == "dedupe":
-                        explicit_percent = 72
-                    elif stage == "rerank":
-                        explicit_percent = 84
-                    elif stage == "verifying":
-                        explicit_percent = 92
-                    elif stage == "finalizing":
-                        explicit_percent = 95
-                    else:
-                        explicit_percent = int(latest_telemetry.get("percent", 5) or 5)
+                explicit_percent = _resolve_pipeline_progress_percent(
+                    stage=stage,
+                    explicit_percent=event.get("percent"),
+                    previous_percent=int(latest_telemetry.get("percent", 5) or 5),
+                    queries_completed=queries_completed,
+                    queries_total=queries_total,
+                )
 
                 _push_progress(
                     {
@@ -785,7 +814,7 @@ def create_app() -> "FastAPI":
                         "stage_elapsed_seconds": event.get("stage_elapsed_seconds"),
                         "estimated_total_seconds": estimated_total_seconds,
                         "round": round_number,
-                        "percent": int(max(0, min(99, int(explicit_percent)))),
+                        "percent": explicit_percent,
                         "message": str(event.get("message", latest_telemetry.get("message", "")) or ""),
                     },
                     checkpoint_patch={"event": "progress"},
