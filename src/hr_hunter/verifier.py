@@ -517,6 +517,8 @@ class PublicEvidenceVerifier:
         self,
         candidate: CandidateProfile,
         brief: SearchBrief,
+        *,
+        client: httpx.AsyncClient | None = None,
     ) -> tuple[List[EvidenceRecord], int]:
         if not self.is_configured():
             return [], 0
@@ -531,58 +533,67 @@ class PublicEvidenceVerifier:
                 evidence[seed_key] = seed_record
 
         queries = self.build_queries(candidate, brief)
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            for query in queries:
-                for page in range(1, self.pages_per_query + 1):
-                    try:
-                        response = await self.client.search(
-                            client,
-                            query,
-                            page=page,
-                            country_code=self.country_code,
-                            language=self.language,
-                            light_request=self.light_request,
-                        )
-                        request_count += 1
-                    except httpx.HTTPError:
-                        continue
-                    if response.status_code >= 400:
-                        continue
-                    payload = response.json()
-                    for result in payload.get("organic_results", [])[: self.results_per_query]:
+        location_queries = self.build_company_location_queries(candidate, brief) if self._location_is_imprecise(candidate, brief) else []
+        search_specs = [
+            ("profile", query, page)
+            for query in queries
+            for page in range(1, self.pages_per_query + 1)
+        ]
+        search_specs.extend(
+            ("company_location", query, page)
+            for query in location_queries
+            for page in range(1, self.pages_per_query + 1)
+        )
+
+        async def run_search(kind: str, query: str, page: int) -> tuple[str, str, httpx.Response | None]:
+            try:
+                response = await active_client.search(
+                    active_http_client,
+                    query,
+                    page=page,
+                    country_code=self.country_code,
+                    language=self.language,
+                    light_request=self.light_request,
+                )
+            except httpx.HTTPError:
+                return kind, query, None
+            return kind, query, response
+
+        active_client = self.client
+        active_http_client = client
+        owns_client = active_http_client is None
+        if owns_client:
+            limits = httpx.Limits(
+                max_keepalive_connections=max(10, self.parallel_candidates * 2),
+                max_connections=max(20, self.parallel_candidates * 4),
+            )
+            active_http_client = httpx.AsyncClient(timeout=30.0, limits=limits)
+
+        try:
+            results = await asyncio.gather(*(run_search(kind, query, page) for kind, query, page in search_specs))
+            for kind, query, response in results:
+                if response is None:
+                    continue
+                request_count += 1
+                if response.status_code >= 400:
+                    continue
+                payload = response.json()
+                for result in payload.get("organic_results", [])[: self.results_per_query]:
+                    if kind == "company_location":
+                        record = self.build_company_location_record(candidate, brief, query, result)
+                        if not (record.company_match and record.location_match):
+                            continue
+                    else:
                         record = self.build_record(candidate, brief, query, result)
                         if not (record.name_match or record.company_match or record.title_matches):
                             continue
-                        key = record.source_url or f"{record.source_domain}:{record.title}"
-                        existing = evidence.get(key)
-                        if existing is None or record.confidence > existing.confidence:
-                            evidence[key] = record
-            if self._location_is_imprecise(candidate, brief):
-                for query in self.build_company_location_queries(candidate, brief):
-                    for page in range(1, self.pages_per_query + 1):
-                        try:
-                            response = await self.client.search(
-                                client,
-                                query,
-                                page=page,
-                                country_code=self.country_code,
-                                language=self.language,
-                                light_request=self.light_request,
-                            )
-                            request_count += 1
-                        except httpx.HTTPError:
-                            continue
-                        if response.status_code >= 400:
-                            continue
-                        payload = response.json()
-                        for result in payload.get("organic_results", [])[: self.results_per_query]:
-                            record = self.build_company_location_record(candidate, brief, query, result)
-                            if not (record.company_match and record.location_match):
-                                continue
-                            key = record.source_url or f"{record.source_domain}:{record.title}"
-                            existing = evidence.get(key)
-                            if existing is None or record.confidence > existing.confidence:
-                                evidence[key] = record
+                    key = record.source_url or f"{record.source_domain}:{record.title}"
+                    existing = evidence.get(key)
+                    if existing is None or record.confidence > existing.confidence:
+                        evidence[key] = record
+        finally:
+            if owns_client and active_http_client is not None:
+                await active_http_client.aclose()
         ordered = sorted(
             evidence.values(),
             key=lambda record: (
@@ -915,6 +926,10 @@ class PublicEvidenceVerifier:
         checked_count = 0
         semaphore = asyncio.Semaphore(self.parallel_candidates)
         progress_lock = asyncio.Lock()
+        limits = httpx.Limits(
+            max_keepalive_connections=max(20, self.parallel_candidates * 4),
+            max_connections=max(40, self.parallel_candidates * max(4, self.queries_per_candidate * 4)),
+        )
 
         async def emit_progress() -> None:
             if not progress_callback:
@@ -939,7 +954,11 @@ class PublicEvidenceVerifier:
             used_requests = 0
             async with semaphore:
                 try:
-                    evidence_records, used_requests = await self.collect_evidence(candidate, brief)
+                    evidence_records, used_requests = await self.collect_evidence(
+                        candidate,
+                        brief,
+                        client=shared_client,
+                    )
                 except Exception:
                     evidence_records, used_requests = [], 0
                 self.apply_evidence(candidate, brief, evidence_records)
@@ -954,7 +973,8 @@ class PublicEvidenceVerifier:
                 await emit_progress()
 
         await emit_progress()
-        await asyncio.gather(*(verify_one(candidate) for candidate in candidates[:total]))
+        async with httpx.AsyncClient(timeout=30.0, limits=limits) as shared_client:
+            await asyncio.gather(*(verify_one(candidate) for candidate in candidates[:total]))
         return {
             "candidates_checked": total,
             "requests_used": request_count,
