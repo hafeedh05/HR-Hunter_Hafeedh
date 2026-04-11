@@ -2,6 +2,7 @@ from hr_hunter.api import (
     _finalize_report_for_limit,
     _job_actor_from_payload,
     _resolve_pipeline_progress_percent,
+    _should_stop_after_stagnant_top_up,
 )
 from hr_hunter.models import CandidateProfile, SearchRunReport
 
@@ -72,3 +73,21 @@ def test_finalize_report_for_limit_keeps_raw_found_above_unique_pool():
     assert pipeline_metrics["unique_after_dedupe"] == 117
     assert pipeline_metrics["raw_found"] == 117
     assert pipeline_metrics["finalized_count"] == 50
+
+
+def test_should_stop_after_stagnant_top_up_when_near_target():
+    assert _should_stop_after_stagnant_top_up(
+        requested_limit=50,
+        updated_unique_count=40,
+        top_up_rounds=1,
+        stagnant_rounds=1,
+    ) is True
+
+
+def test_should_not_stop_after_single_stagnant_top_up_when_gap_is_still_large():
+    assert _should_stop_after_stagnant_top_up(
+        requested_limit=50,
+        updated_unique_count=28,
+        top_up_rounds=1,
+        stagnant_rounds=1,
+    ) is False

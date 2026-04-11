@@ -169,6 +169,23 @@ def _finalize_report_for_limit(report, *, requested_limit: int, internal_fetch_l
     return report
 
 
+def _should_stop_after_stagnant_top_up(
+    *,
+    requested_limit: int,
+    updated_unique_count: int,
+    top_up_rounds: int,
+    stagnant_rounds: int,
+) -> bool:
+    if stagnant_rounds >= 2:
+        return True
+    if top_up_rounds <= 0:
+        return False
+    requested = max(1, int(requested_limit or 1))
+    remaining_needed = max(0, requested - max(0, int(updated_unique_count or 0)))
+    near_target_remaining = max(10, int(round(requested * 0.05)))
+    return remaining_needed <= near_target_remaining
+
+
 def _merge_ranked_report_candidates(report, supplemental_report):
     report.provider_results = [*report.provider_results, *supplemental_report.provider_results]
     report.candidates = sort_candidates(dedupe_candidates([*report.candidates, *supplemental_report.candidates]))
@@ -530,11 +547,21 @@ def create_app() -> "FastAPI":
             updated_unique_count = len(report.candidates)
             if round_growth <= 0 or updated_unique_count <= current_unique_count:
                 stagnant_rounds += 1
+                if _should_stop_after_stagnant_top_up(
+                    requested_limit=requested,
+                    updated_unique_count=updated_unique_count,
+                    top_up_rounds=top_up_rounds,
+                    stagnant_rounds=stagnant_rounds,
+                ):
+                    source_exhausted = True
+                    remaining_needed = max(0, requested - updated_unique_count)
+                    if remaining_needed <= max(10, int(round(requested * 0.05))):
+                        top_up_notes.append(
+                            "Stopped after a stagnant top-up round because the remaining gap was small and no new unique candidates appeared."
+                        )
+                    break
             else:
                 stagnant_rounds = 0
-            if stagnant_rounds >= 2:
-                source_exhausted = True
-                break
             current_unique_count = updated_unique_count
 
         if top_up_rounds:
