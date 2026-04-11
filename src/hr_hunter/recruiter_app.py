@@ -1075,6 +1075,17 @@ EXECUTIVE_ROLE_HINTS = (
     "vice president",
     "vp",
 )
+TITLE_SCOPE_EXAMPLE_MAP = (
+    ("chief executive officer", ["President", "Managing Director", "General Manager"]),
+    ("ceo", ["President", "Managing Director", "General Manager"]),
+    ("chief marketing officer", ["President", "Managing Director", "General Manager"]),
+    ("cmo", ["VP Marketing", "Marketing Director", "Head of Marketing"]),
+    ("chief technology officer", ["VP Engineering", "Engineering Director", "Head of Engineering"]),
+    ("cto", ["VP Engineering", "Engineering Director", "Head of Engineering"]),
+    ("digital marketing manager", ["Performance Marketing Manager", "Growth Marketing Manager", "Acquisition Marketing Manager"]),
+    ("marketing manager", ["Performance Marketing Manager", "Growth Marketing Manager", "Demand Generation Manager"]),
+    ("data analyst", ["Business Analyst", "Commercial Analyst", "Insights Analyst"]),
+)
 
 
 def _is_executive_brief(role_title: str, titles: List[str]) -> bool:
@@ -1085,6 +1096,69 @@ def _is_executive_brief(role_title: str, titles: List[str]) -> bool:
         if str(value).strip()
         for hint in EXECUTIVE_ROLE_HINTS
     )
+
+
+def _canonical_title_scope_value(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return normalize_text(re.sub(r"\([^)]*\)", " ", raw))
+
+
+def _has_explicit_title_scope(titles: List[str]) -> bool:
+    explicit_titles = unique_preserving_order(
+        [_canonical_title_scope_value(str(title)) for title in titles if _canonical_title_scope_value(str(title))]
+    )
+    return len(explicit_titles) > 1
+
+
+def _title_scope_examples(role_title: str, titles: List[str]) -> List[str]:
+    normalized_scope = " ".join(
+        normalize_text(value)
+        for value in [role_title, *titles]
+        if str(value).strip()
+    )
+    existing_titles = {
+        _canonical_title_scope_value(value)
+        for value in [role_title, *titles]
+        if _canonical_title_scope_value(value)
+    }
+    for title_hint, examples in TITLE_SCOPE_EXAMPLE_MAP:
+        if title_hint not in normalized_scope:
+            continue
+        return [
+            example
+            for example in examples
+            if normalize_text(example) not in existing_titles
+        ]
+    return []
+
+
+def _human_join(values: List[str]) -> str:
+    cleaned = [str(value).strip() for value in values if str(value).strip()]
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned[0]
+    if len(cleaned) == 2:
+        return f"{cleaned[0]} or {cleaned[1]}"
+    return f"{', '.join(cleaned[:-1])}, or {cleaned[-1]}"
+
+
+def _recommended_allow_adjacent_titles(
+    *,
+    search_profile: str,
+    executive_brief: bool,
+    common_volume_search: bool,
+    explicit_title_scope: bool,
+    companies: List[str],
+    location_count: int,
+) -> bool:
+    if explicit_title_scope:
+        return False
+    if executive_brief:
+        return bool(search_profile == EXPLORATORY_SEARCH_PROFILE and not companies and location_count >= 2)
+    return bool(search_profile != FOCUSED_SEARCH_PROFILE or common_volume_search)
 
 
 def _default_query_family_budgets(
@@ -1158,6 +1232,7 @@ def _build_brief_follow_up_questions(
     executive_brief = _is_executive_brief(role_title, titles)
     location_count = len(location_targets)
     title_count = len(titles)
+    explicit_title_scope = _has_explicit_title_scope(titles)
     thin_detail = len(required_keywords) < 2 and not industry_keywords and len(document_text) < 160
     common_volume_search = bool(limit >= 40 and not companies and title_count <= 2 and not executive_brief)
 
@@ -1172,15 +1247,33 @@ def _build_brief_follow_up_questions(
             }
         )
 
-    if role_title and title_count <= 2:
+    if role_title and title_count <= 2 and not explicit_title_scope:
+        title_scope_examples = _title_scope_examples(role_title, titles)
+        title_scope_prompt = "Should HR Hunter include adjacent role-family titles when exact matches look thin?"
+        title_scope_help = (
+            "Choose No to stay exact-title only. Choose Yes if closely related market titles should count."
+        )
+        if title_scope_examples:
+            title_scope_prompt = (
+                f"You mentioned {role_title}. Should HR Hunter also include "
+                f"{_human_join(title_scope_examples[:3])} when the remit is genuinely equivalent?"
+            )
+            title_scope_help = (
+                "Choose No to stay exact-title only. Choose Yes if those market-equivalent titles should count."
+            )
         questions.append(
             {
                 "id": "allow_adjacent_titles",
-                "label": "Adjacent Titles",
-                "prompt": "Should HR Hunter include adjacent role-family titles when exact matches look thin?",
-                "help": "This broadens retrieval into near-neighbor roles like Managing Director for CEO or Growth Analyst for Data Analyst.",
-                "recommended_answer": bool(
-                    executive_brief or search_profile != FOCUSED_SEARCH_PROFILE or common_volume_search
+                "label": "Title Scope",
+                "prompt": title_scope_prompt,
+                "help": title_scope_help,
+                "recommended_answer": _recommended_allow_adjacent_titles(
+                    search_profile=search_profile,
+                    executive_brief=executive_brief,
+                    common_volume_search=common_volume_search,
+                    explicit_title_scope=explicit_title_scope,
+                    companies=companies,
+                    location_count=location_count,
                 ),
             }
         )
@@ -1559,6 +1652,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         document_text=job_description,
         limit=limit,
     )
+    explicit_title_scope = _has_explicit_title_scope(titles)
+    common_volume_search = bool(limit >= 40 and not companies and len(titles) <= 2 and not executive_brief)
     brief_follow_up_questions = _build_brief_follow_up_questions(
         role_title=role_title,
         titles=titles,
@@ -1575,8 +1670,17 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         raw_brief_clarifications,
         brief_follow_up_questions,
     )
+    if "allow_adjacent_titles" not in brief_clarifications:
+        brief_clarifications["allow_adjacent_titles"] = _recommended_allow_adjacent_titles(
+            search_profile=search_profile,
+            executive_brief=executive_brief,
+            common_volume_search=common_volume_search,
+            explicit_title_scope=explicit_title_scope,
+            companies=companies,
+            location_count=len(location_targets),
+        )
     prioritize_first_location = bool(brief_clarifications.get("prioritize_first_location"))
-    allow_adjacent_titles = bool(brief_clarifications.get("allow_adjacent_titles", True))
+    allow_adjacent_titles = bool(brief_clarifications.get("allow_adjacent_titles"))
     expand_search_when_thin = bool(brief_clarifications.get("expand_search_when_thin", search_profile != FOCUSED_SEARCH_PROFILE))
     if prioritize_first_location and location_targets:
         geography_country = countries[0] if countries else geography_country

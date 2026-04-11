@@ -91,6 +91,30 @@ def test_assess_ui_brief_quality_recommends_follow_up_questions_for_ambiguous_br
     assert "expand_search_when_thin" in question_ids
 
 
+def test_assess_ui_brief_quality_asks_explicit_ceo_title_scope_question():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Chief Executive Officer (CEO)",
+            "titles": ["Chief Executive Officer"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "company_targets": ["Marina Home Interiors"],
+            "must_have_keywords": ["P&L", "Retail Operations"],
+            "job_description": "Need a real GCC retail chief executive with full P&L ownership and store network leadership.",
+            "limit": 120,
+        }
+    )
+
+    quality = assess_ui_brief_quality(payload["brief_config"])
+    title_scope_question = next(
+        question for question in quality["follow_up_questions"] if question["id"] == "allow_adjacent_titles"
+    )
+
+    assert title_scope_question["label"] == "Title Scope"
+    assert "Managing Director" in title_scope_question["prompt"]
+    assert "President" in title_scope_question["prompt"]
+    assert title_scope_question["recommended_answer"] is False
+
+
 def test_build_app_bootstrap_exposes_supported_ui_options():
     bootstrap = build_app_bootstrap()
     defaults = bootstrap["defaults"]
@@ -319,6 +343,29 @@ def test_build_ui_brief_payload_uses_broader_recommended_defaults_for_common_50_
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["trade_directory_pages"] == 5
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["industry_association_pages"] == 4
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["award_industry_pages"] == 0
+
+
+def test_build_ui_brief_payload_does_not_auto_broaden_when_titles_are_already_explicit():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Chief Executive Officer (CEO)",
+            "titles": ["Chief Executive Officer", "Managing Director", "President"],
+            "countries": ["United Arab Emirates"],
+            "company_targets": ["Marina Home Interiors"],
+            "must_have_keywords": ["P&L", "Retail Operations"],
+            "job_description": "Need a premium retail chief executive with GCC experience.",
+            "limit": 150,
+        }
+    )
+
+    brief = payload["brief_config"]
+    quality = assess_ui_brief_quality(brief)
+    question_ids = {question["id"] for question in quality["follow_up_questions"]}
+
+    assert "allow_adjacent_titles" not in question_ids
+    assert brief["brief_clarifications"]["allow_adjacent_titles"] is False
+    assert brief["expand_title_keywords"] is False
+    assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is False
 
 
 def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():
