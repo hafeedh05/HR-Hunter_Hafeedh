@@ -810,10 +810,14 @@ def create_app() -> "FastAPI":
                             max(1, int(latest_telemetry.get("target", requested_limit) or requested_limit or 1)),
                         ),
                     )
-                finalized_count = max(
+                raw_finalized_count = max(
                     previous_finalized,
                     int(event.get("finalized_count", previous_finalized) or 0),
                 )
+                if stage in {"retrieval", "dedupe", "rerank", "verifying"}:
+                    finalized_count = min(previous_finalized, max(0, requested_limit))
+                else:
+                    finalized_count = min(raw_finalized_count, max(0, requested_limit))
                 estimated_total_seconds = int(event.get("estimated_total_seconds", latest_telemetry.get("estimated_total_seconds", 0)) or 0)
                 if stage in {"rerank", "verifying", "finalizing"}:
                     queries_in_flight = 0

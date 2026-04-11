@@ -209,6 +209,39 @@ def test_build_ui_brief_payload_supports_keyword_tracks_and_search_tuning_from_b
     assert brief["provider_settings"]["verification"]["parallel_candidates"] == 8
 
 
+def test_build_ui_brief_payload_preserves_zero_verification_probe_overrides():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Chief Executive Officer (CEO)",
+            "titles": ["Chief Executive Officer", "Managing Director"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "company_targets": ["Marina Home Interiors", "The One"],
+            "limit": 300,
+            "job_description": "Need a premium retail executive with real P&L and GCC leadership experience.",
+            "jd_breakdown": {
+                "summary": "Target role: CEO.",
+                "titles": ["Chief Executive Officer"],
+                "required_keywords": ["P&L ownership"],
+                "preferred_keywords": ["premium retail"],
+                "industry_keywords": ["home furnishings"],
+                "key_experience_points": ["GCC retail leadership."],
+                "years": {"mode": "at_least", "value": 9, "min": 9, "max": None, "tolerance": 0},
+                "search_tuning": {
+                    "verification_parallel_candidates": 24,
+                    "verification_location_probe_queries": 0,
+                    "verification_company_location_probe_queries": 0,
+                },
+            },
+        }
+    )
+
+    verification = payload["brief_config"]["provider_settings"]["verification"]
+
+    assert verification["parallel_candidates"] == 24
+    assert verification["location_probe_queries"] == 0
+    assert verification["company_location_probe_queries"] == 0
+
+
 def test_build_ui_brief_payload_applies_brief_clarifications_and_focused_tuning():
     payload = build_ui_brief_payload(
         {

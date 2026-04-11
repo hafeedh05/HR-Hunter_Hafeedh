@@ -1708,17 +1708,23 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         or tuned_verification_queries_per_candidate
         or 2,
     )
+    verification_location_probe_queries_value = _coerce_int(payload.get("verification_location_probe_queries"))
+    if verification_location_probe_queries_value is None:
+        verification_location_probe_queries_value = tuned_verification_location_probe_queries
     verification_location_probe_queries = max(
         0,
-        _coerce_int(payload.get("verification_location_probe_queries"))
-        or tuned_verification_location_probe_queries
-        or 1,
+        1 if verification_location_probe_queries_value is None else verification_location_probe_queries_value,
     )
+    verification_company_location_probe_queries_value = _coerce_int(
+        payload.get("verification_company_location_probe_queries")
+    )
+    if verification_company_location_probe_queries_value is None:
+        verification_company_location_probe_queries_value = tuned_verification_company_location_probe_queries
     verification_company_location_probe_queries = max(
         0,
-        _coerce_int(payload.get("verification_company_location_probe_queries"))
-        or tuned_verification_company_location_probe_queries
-        or 0,
+        0
+        if verification_company_location_probe_queries_value is None
+        else verification_company_location_probe_queries_value,
     )
     explicit_include_history_slices = _coerce_bool(payload.get("include_history_slices"))
     explicit_include_discovery_slices = _coerce_bool(payload.get("include_discovery_slices"))
@@ -2041,25 +2047,23 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Chief Executive Officer",
                     "Managing Director",
                     "President",
-                    "General Manager",
                 ],
                 "countries": [
                     "United Arab Emirates",
                     "Saudi Arabia",
                     "Kuwait",
                     "Qatar",
-                    "United Kingdom",
-                    "India",
+                    "Bahrain",
                 ],
                 "continents": [],
                 "cities": [
                     "Dubai",
+                    "Abu Dhabi",
                     "Riyadh",
+                    "Jeddah",
                     "Kuwait City",
                     "Doha",
-                    "London",
-                    "Mumbai",
-                    "New Delhi",
+                    "Manama",
                 ],
                 "company_targets": [
                     "Marina Home Interiors",
@@ -2067,8 +2071,6 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Al Huzaifa",
                     "IDdesign",
                     "BoConcept",
-                    "Maisons du Monde",
-                    "Roche Bobois",
                     "Crate & Barrel",
                     "West Elm",
                     "Pottery Barn",
@@ -2076,7 +2078,7 @@ def build_app_bootstrap() -> Dict[str, Any]:
                 "company_match_mode": "both",
                 "employment_status_mode": "any",
                 "years_mode": "at_least",
-                "years_value": 10,
+                "years_value": 9,
                 "years_tolerance": 0,
                 "max_profiles": 300,
                 "must_have_keywords": [
@@ -2084,14 +2086,14 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Retail Operations",
                     "Store Network",
                     "Omnichannel",
-                    "Multi-country",
+                    "GCC",
                 ],
                 "nice_to_have_keywords": [
                     "Home Furnishings",
                     "Furniture Retail",
                     "Premium Retail",
-                    "Design-Led Consumer",
-                    "Market Expansion",
+                    "Home Decor",
+                    "Regional Expansion",
                     "Brand Scaling",
                     "Founder-Led Transition",
                     "Board Governance",
@@ -2100,35 +2102,33 @@ def build_app_bootstrap() -> Dict[str, Any]:
                 "industry_keywords": [
                     "home furnishings",
                     "furniture retail",
-                    "interior design",
                     "premium retail",
                     "home decor",
-                    "design-led consumer",
                 ],
                 "job_description": (
-                    "Marina Home Interiors is a Dubai-headquartered premium home furnishings and design-led retail "
-                    "business. We are hiring a Chief Executive Officer to lead profitable regional growth across a "
-                    "store-led and omnichannel model. The brief is for a genuine chief executive, managing director, "
-                    "president, or general manager from premium home, furniture, interiors, lifestyle, or adjacent "
-                    "design-led consumer retail. Priority evidence is ownership of full P&L, retail operations, store "
-                    "network leadership, omnichannel trading, and multi-country market expansion. Board exposure and "
-                    "founder-led transition experience are valuable. Fluent English is required and Arabic is a plus."
+                    "Marina Home Interiors is a Dubai-headquartered premium home furnishings retailer. We are hiring "
+                    "a Chief Executive Officer to drive profitable GCC growth across a store-led and omnichannel "
+                    "model. The brief is for a genuine chief executive, managing director, or president from premium "
+                    "home, furniture, or adjacent lifestyle retail with strong public evidence of full P&L ownership, "
+                    "retail operations leadership, store-network execution, and regional expansion across Gulf "
+                    "markets. Board exposure, founder-led transition experience, fluent English, and Arabic are all "
+                    "valuable."
                 ),
                 "brief_clarifications": {
                     "prioritize_first_location": True,
                     "allow_adjacent_titles": False,
-                    "expand_search_when_thin": True,
+                    "expand_search_when_thin": False,
                 },
                 "jd_breakdown": {
                     **extract_job_description_breakdown(
                         (
-                            "Marina Home Interiors is a Dubai-headquartered premium home furnishings and design-led retail "
-                            "business. We are hiring a Chief Executive Officer to lead profitable regional growth across a "
-                            "store-led and omnichannel model. The brief is for a genuine chief executive, managing director, "
-                            "president, or general manager from premium home, furniture, interiors, lifestyle, or adjacent "
-                            "design-led consumer retail. Priority evidence is ownership of full P&L, retail operations, store "
-                            "network leadership, omnichannel trading, and multi-country market expansion. Board exposure and "
-                            "founder-led transition experience are valuable. Fluent English is required and Arabic is a plus."
+                            "Marina Home Interiors is a Dubai-headquartered premium home furnishings retailer. We are hiring "
+                            "a Chief Executive Officer to drive profitable GCC growth across a store-led and omnichannel "
+                            "model. The brief is for a genuine chief executive, managing director, or president from premium "
+                            "home, furniture, or adjacent lifestyle retail with strong public evidence of full P&L ownership, "
+                            "retail operations leadership, store-network execution, and regional expansion across Gulf "
+                            "markets. Board exposure, founder-led transition experience, fluent English, and Arabic are all "
+                            "valuable."
                         ),
                         role_title="Chief Executive Officer (CEO)",
                     ),
@@ -2136,14 +2136,13 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         "Chief Executive Officer",
                         "Managing Director",
                         "President",
-                        "General Manager",
                     ],
                     "required_keywords": [
                         "p&l",
                         "retail operations",
                         "store network",
                         "omnichannel",
-                        "multi-country",
+                        "gcc",
                     ],
                     "preferred_keywords": [
                         "home furnishings",
@@ -2152,19 +2151,18 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         "board governance",
                         "founder-led transition",
                         "brand scaling",
+                        "home decor",
                     ],
                     "industry_keywords": [
                         "home furnishings",
                         "furniture retail",
-                        "interior design retail",
                         "premium retail",
                         "home decor",
-                        "design-led consumer",
                     ],
                     "years": {
                         "mode": "at_least",
-                        "value": 10,
-                        "min": 10,
+                        "value": 9,
+                        "min": 9,
                         "max": None,
                         "tolerance": 0,
                     },
@@ -2179,7 +2177,7 @@ def build_app_bootstrap() -> Dict[str, Any]:
                             "p&l",
                             "profitability",
                             "revenue growth",
-                            "market expansion",
+                            "regional expansion",
                         ],
                         "leadership_keywords": [
                             "board governance",
@@ -2188,36 +2186,37 @@ def build_app_bootstrap() -> Dict[str, Any]:
                             "stakeholder management",
                         ],
                         "scope_keywords": [
-                            "multi-country",
                             "GCC",
+                            "UAE",
+                            "Saudi Arabia",
                             "regional",
-                            "international",
                         ],
                     },
                     "search_tuning": {
-                        "internal_fetch_limit_override": 420,
-                        "reranker_top_n": 220,
-                        "provider_parallel_requests": 20,
-                        "scrapingbee_max_queries": 56,
-                        "max_geo_groups": 4,
+                        "internal_fetch_limit_override": 360,
+                        "reranker_top_n": 180,
+                        "provider_parallel_requests": 24,
+                        "scrapingbee_max_queries": 48,
+                        "max_geo_groups": 3,
                         "geo_group_size": 1,
-                        "company_chunk_size": 5,
-                        "company_slice_location_group_limit": 2,
-                        "max_company_terms_per_query": 8,
-                        "stagnation_query_window": 12,
-                        "stagnation_min_results": 300,
+                        "company_chunk_size": 4,
+                        "company_slice_location_group_limit": 1,
+                        "max_company_terms_per_query": 6,
+                        "stagnation_query_window": 10,
+                        "stagnation_min_results": 260,
                         "include_history_slices": True,
                         "include_discovery_slices": True,
                         "verification_top_n": 140,
-                        "verification_parallel_candidates": 10,
+                        "verification_parallel_candidates": 28,
+                        "verification_location_probe_queries": 0,
                         "query_family_budgets": {
-                            "team_leadership_pages": 10,
-                            "appointment_news_pages": 8,
+                            "team_leadership_pages": 8,
+                            "appointment_news_pages": 6,
                             "speaker_bio_pages": 4,
                             "award_industry_pages": 0,
                             "industry_association_pages": 2,
-                            "trade_directory_pages": 2,
-                            "org_chart_profile_pages": 10,
+                            "trade_directory_pages": 0,
+                            "org_chart_profile_pages": 8,
                             "profile_like_public_pages": 14,
                         },
                     },
