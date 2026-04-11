@@ -602,6 +602,21 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                             continue
 
                         if not combined_company_terms:
+                            self._append_query_plan(
+                                plans,
+                                seen_fingerprints,
+                                slice_config,
+                                family,
+                                variant,
+                                self._combine_query_parts(
+                                    f"({title_terms})",
+                                    f"({query_terms})" if query_terms else "",
+                                    location_clause,
+                                    family_clause,
+                                    query_filters,
+                                    site_filters,
+                                ),
+                            )
                             continue
                         self._append_query_plan(
                             plans,

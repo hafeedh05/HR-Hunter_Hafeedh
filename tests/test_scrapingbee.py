@@ -264,6 +264,36 @@ def test_scrapingbee_dry_run_enforces_family_and_run_budgets() -> None:
     assert "team_leadership_pages" in query_budget["family_budget_exhausted"]
 
 
+def test_scrapingbee_builds_companyless_strict_query_plans() -> None:
+    provider = ScrapingBeeGoogleProvider({})
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-companyless-strict-test",
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst"],
+            "company_targets": [],
+            "required_keywords": ["SQL", "Python"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+            "provider_settings": {
+                "retrieval": {
+                    "include_broad_slice": False,
+                    "include_discovery_slices": False,
+                    "include_history_slices": False,
+                }
+            },
+        }
+    )
+    strict_slice = next(
+        slice_config for slice_config in build_search_slices(brief) if slice_config.search_mode == "strict"
+    )
+
+    plans = provider._build_query_plans(brief, strict_slice)
+
+    assert plans
+    assert all('"Data Analyst"' in plan["search"] for plan in plans)
+    assert all('"Dubai"' in plan["search"] or '"United Arab Emirates"' in plan["search"] for plan in plans)
+
+
 def test_scrapingbee_early_stop_keeps_query_completion_telemetry() -> None:
     provider = ScrapingBeeGoogleProvider({"parallel_requests": 1, "pages_per_query": 1})
     provider.client = _FakeScrapingBeeClient(
@@ -282,7 +312,7 @@ def test_scrapingbee_early_stop_keeps_query_completion_telemetry() -> None:
             "id": "scrapingbee-telemetry-test",
             "role_title": "Data Analyst",
             "titles": ["Data Analyst"],
-            "company_targets": ["Careem"],
+            "company_targets": [],
             "required_keywords": ["SQL", "Python"],
             "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
             "provider_settings": {
