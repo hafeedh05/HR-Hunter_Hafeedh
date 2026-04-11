@@ -1223,6 +1223,17 @@ def _resolve_brief_clarifications(
                 "using_recommended": explicit_value is None,
             }
         )
+    for clarification_id in (
+        "prioritize_first_location",
+        "allow_adjacent_titles",
+        "expand_search_when_thin",
+    ):
+        if clarification_id in resolved_values:
+            continue
+        explicit_value = _coerce_bool(raw_values.get(clarification_id))
+        if explicit_value is None:
+            continue
+        resolved_values[clarification_id] = explicit_value
     return resolved_values, resolved_questions
 
 
@@ -2028,190 +2039,197 @@ def build_app_bootstrap() -> Dict[str, Any]:
                 "role_title": "Chief Executive Officer (CEO)",
                 "titles": [
                     "Chief Executive Officer",
-                    "Group CEO",
                     "Managing Director",
                     "President",
-                    "Regional CEO",
-                    "Business Unit CEO",
-                    "CEO",
+                    "General Manager",
                 ],
                 "countries": [
                     "United Arab Emirates",
                     "Saudi Arabia",
-                    "Qatar",
                     "Kuwait",
-                    "Oman",
-                    "Bahrain",
-                    "Egypt",
-                    "India",
+                    "Qatar",
                     "United Kingdom",
-                    "France",
-                    "Italy",
+                    "India",
                 ],
                 "continents": [],
                 "cities": [
                     "Dubai",
-                    "Abu Dhabi",
                     "Riyadh",
-                    "Jeddah",
-                    "Doha",
                     "Kuwait City",
-                    "Muscat",
-                    "Manama",
-                    "Cairo",
+                    "Doha",
+                    "London",
                     "Mumbai",
                     "New Delhi",
-                    "Bengaluru",
-                    "London",
-                    "Paris",
-                    "Milan",
                 ],
                 "company_targets": [
                     "Marina Home Interiors",
                     "The One",
                     "Al Huzaifa",
-                    "Pan Emirates",
-                    "Home Centre",
-                    "Home Box",
-                    "Landmark Group",
                     "IDdesign",
-                    "Pottery Barn",
-                    "West Elm",
-                    "Crate & Barrel",
-                    "Williams-Sonoma",
-                    "RH",
-                    "Roche Bobois",
                     "BoConcept",
                     "Maisons du Monde",
-                    "Zara Home",
+                    "Roche Bobois",
+                    "Crate & Barrel",
+                    "West Elm",
+                    "Pottery Barn",
                 ],
                 "company_match_mode": "both",
                 "employment_status_mode": "any",
                 "years_mode": "at_least",
-                "years_value": 12,
+                "years_value": 10,
                 "years_tolerance": 0,
                 "max_profiles": 300,
                 "must_have_keywords": [
-                    "P&L Ownership",
-                    "Multi-country Leadership",
+                    "P&L",
                     "Retail Operations",
-                    "Executive Team Leadership",
-                    "Board / Founder Stakeholder Management",
-                    "Business Scaling",
+                    "Store Network",
+                    "Omnichannel",
+                    "Multi-country",
                 ],
                 "nice_to_have_keywords": [
                     "Home Furnishings",
+                    "Furniture Retail",
                     "Premium Retail",
-                    "Interior Design Retail",
-                    "Omnichannel",
+                    "Design-Led Consumer",
                     "Market Expansion",
-                    "Turnaround",
-                    "Arabic",
-                    "MBA",
+                    "Brand Scaling",
                     "Founder-Led Transition",
-                    "P&L",
+                    "Board Governance",
+                    "Arabic",
                 ],
                 "industry_keywords": [
                     "home furnishings",
                     "furniture retail",
-                    "premium retail",
                     "interior design",
-                    "luxury retail",
+                    "premium retail",
                     "home decor",
-                    "consumer",
+                    "design-led consumer",
                 ],
                 "job_description": (
                     "Marina Home Interiors is a Dubai-headquartered premium home furnishings and design-led retail "
-                    "business operating across the GCC with additional exposure in Egypt and India. We are hiring a "
-                    "Chief Executive Officer to lead the next stage of profitable growth as the founder transitions "
-                    "into a board-led governance model. The mandate requires a senior operator with genuine CEO, "
-                    "Managing Director, President, or divisional P&L leadership experience in premium retail, home "
-                    "furnishings, furniture, interiors, lifestyle, or adjacent design-led consumer businesses. The "
-                    "CEO must be able to drive revenue growth, store and omnichannel performance, operating cadence, "
-                    "executive team leadership, board and shareholder communication, and multi-country market "
-                    "expansion while protecting brand quality and customer experience. Experience in founder-led, "
-                    "family-owned, or transformation situations is valuable. Fluent English is required and Arabic is "
-                    "a strong advantage."
+                    "business. We are hiring a Chief Executive Officer to lead profitable regional growth across a "
+                    "store-led and omnichannel model. The brief is for a genuine chief executive, managing director, "
+                    "president, or general manager from premium home, furniture, interiors, lifestyle, or adjacent "
+                    "design-led consumer retail. Priority evidence is ownership of full P&L, retail operations, store "
+                    "network leadership, omnichannel trading, and multi-country market expansion. Board exposure and "
+                    "founder-led transition experience are valuable. Fluent English is required and Arabic is a plus."
                 ),
+                "brief_clarifications": {
+                    "prioritize_first_location": True,
+                    "allow_adjacent_titles": False,
+                    "expand_search_when_thin": True,
+                },
                 "jd_breakdown": {
                     **extract_job_description_breakdown(
                         (
                             "Marina Home Interiors is a Dubai-headquartered premium home furnishings and design-led retail "
-                            "business operating across the GCC with additional exposure in Egypt and India. We are hiring a "
-                            "Chief Executive Officer to lead the next stage of profitable growth as the founder transitions "
-                            "into a board-led governance model. The mandate requires a senior operator with genuine CEO, "
-                            "Managing Director, President, or divisional P&L leadership experience in premium retail, home "
-                            "furnishings, furniture, interiors, lifestyle, or adjacent design-led consumer businesses. The "
-                            "CEO must be able to drive revenue growth, store and omnichannel performance, operating cadence, "
-                            "executive team leadership, board and shareholder communication, and multi-country market "
-                            "expansion while protecting brand quality and customer experience. Experience in founder-led, "
-                            "family-owned, or transformation situations is valuable. Fluent English is required and Arabic is "
-                            "a strong advantage."
+                            "business. We are hiring a Chief Executive Officer to lead profitable regional growth across a "
+                            "store-led and omnichannel model. The brief is for a genuine chief executive, managing director, "
+                            "president, or general manager from premium home, furniture, interiors, lifestyle, or adjacent "
+                            "design-led consumer retail. Priority evidence is ownership of full P&L, retail operations, store "
+                            "network leadership, omnichannel trading, and multi-country market expansion. Board exposure and "
+                            "founder-led transition experience are valuable. Fluent English is required and Arabic is a plus."
                         ),
                         role_title="Chief Executive Officer (CEO)",
                     ),
+                    "titles": [
+                        "Chief Executive Officer",
+                        "Managing Director",
+                        "President",
+                        "General Manager",
+                    ],
+                    "required_keywords": [
+                        "p&l",
+                        "retail operations",
+                        "store network",
+                        "omnichannel",
+                        "multi-country",
+                    ],
+                    "preferred_keywords": [
+                        "home furnishings",
+                        "furniture retail",
+                        "premium retail",
+                        "board governance",
+                        "founder-led transition",
+                        "brand scaling",
+                    ],
+                    "industry_keywords": [
+                        "home furnishings",
+                        "furniture retail",
+                        "interior design retail",
+                        "premium retail",
+                        "home decor",
+                        "design-led consumer",
+                    ],
+                    "years": {
+                        "mode": "at_least",
+                        "value": 10,
+                        "min": 10,
+                        "max": None,
+                        "tolerance": 0,
+                    },
                     "keyword_tracks": {
                         "portfolio_keywords": [
                             "home furnishings",
                             "store network",
                             "omnichannel",
-                            "brand scaling",
+                            "furniture retail",
                         ],
                         "commercial_keywords": [
-                            "P&L ownership",
+                            "p&l",
                             "profitability",
                             "revenue growth",
                             "market expansion",
                         ],
                         "leadership_keywords": [
                             "board governance",
-                            "executive team leadership",
                             "founder-led transition",
+                            "executive leadership",
                             "stakeholder management",
                         ],
                         "scope_keywords": [
                             "multi-country",
+                            "GCC",
                             "regional",
                             "international",
-                            "GCC",
                         ],
                     },
                     "search_tuning": {
-                        "internal_fetch_limit_override": 480,
-                        "reranker_top_n": 240,
+                        "internal_fetch_limit_override": 420,
+                        "reranker_top_n": 220,
                         "provider_parallel_requests": 20,
-                        "scrapingbee_max_queries": 72,
-                        "max_geo_groups": 6,
+                        "scrapingbee_max_queries": 56,
+                        "max_geo_groups": 4,
                         "geo_group_size": 1,
-                        "company_chunk_size": 3,
-                        "company_slice_location_group_limit": 3,
-                        "max_company_terms_per_query": 10,
+                        "company_chunk_size": 5,
+                        "company_slice_location_group_limit": 2,
+                        "max_company_terms_per_query": 8,
                         "stagnation_query_window": 12,
-                        "stagnation_min_results": 360,
+                        "stagnation_min_results": 300,
                         "include_history_slices": True,
                         "include_discovery_slices": True,
-                        "verification_top_n": 120,
-                        "verification_parallel_candidates": 8,
+                        "verification_top_n": 140,
+                        "verification_parallel_candidates": 10,
                         "query_family_budgets": {
-                            "team_leadership_pages": 18,
-                            "appointment_news_pages": 12,
-                            "speaker_bio_pages": 8,
-                            "award_industry_pages": 4,
-                            "industry_association_pages": 4,
-                            "trade_directory_pages": 4,
-                            "org_chart_profile_pages": 16,
-                            "profile_like_public_pages": 16,
+                            "team_leadership_pages": 10,
+                            "appointment_news_pages": 8,
+                            "speaker_bio_pages": 4,
+                            "award_industry_pages": 0,
+                            "industry_association_pages": 2,
+                            "trade_directory_pages": 2,
+                            "org_chart_profile_pages": 10,
+                            "profile_like_public_pages": 14,
                         },
                     },
                 },
                 "anchors": {
-                    "title": "preferred",
+                    "title": "critical",
                     "skills": "preferred",
-                    "location": "preferred",
-                    "company": "preferred",
+                    "location": "important",
+                    "company": "important",
                     "years": "preferred",
-                    "industry": "preferred",
-                    "function": "preferred",
+                    "industry": "important",
+                    "function": "important",
                     "semantic": "preferred",
                 },
             },

@@ -351,6 +351,38 @@ def test_build_ui_brief_payload_top_up_round_respects_explicit_opt_outs():
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] >= 200
 
 
+def test_build_ui_brief_payload_preserves_explicit_clarifications_without_follow_up_question():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Chief Executive Officer (CEO)",
+            "titles": [
+                "Chief Executive Officer",
+                "Managing Director",
+                "President",
+                "General Manager",
+            ],
+            "countries": ["United Arab Emirates", "Saudi Arabia", "United Kingdom"],
+            "cities": ["Dubai", "Riyadh", "London"],
+            "must_have_keywords": ["P&L", "Retail Operations", "Omnichannel"],
+            "job_description": "Need a premium retail chief executive with multi-country leadership and store network ownership.",
+            "limit": 300,
+            "brief_clarifications": {
+                "prioritize_first_location": True,
+                "allow_adjacent_titles": False,
+                "expand_search_when_thin": True,
+            },
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["brief_clarifications"]["prioritize_first_location"] is True
+    assert brief["brief_clarifications"]["allow_adjacent_titles"] is False
+    assert brief["brief_clarifications"]["expand_search_when_thin"] is True
+    assert brief["expand_title_keywords"] is False
+    assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is False
+
+
 def test_resolve_job_description_source_prefers_uploaded_text_and_keeps_notes():
     source = resolve_job_description_source(
         typed_text="Focus on retail and GCC exposure.",
