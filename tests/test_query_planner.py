@@ -165,3 +165,28 @@ def test_query_planner_keeps_exact_title_slices_without_company_targets() -> Non
     assert len(slices) == 1
     assert slices[0].search_mode == "strict"
     assert slices[0].companies == []
+
+
+def test_query_planner_skips_history_slices_without_company_targets() -> None:
+    brief = build_search_brief(
+        {
+            "id": "planner-no-company-history-test",
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst"],
+            "company_targets": [],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+            "provider_settings": {
+                "retrieval": {
+                    "include_strict_slice": True,
+                    "include_broad_slice": False,
+                    "include_discovery_slices": False,
+                    "include_history_slices": True,
+                    "history_query_terms": ["formerly", "previously"],
+                }
+            },
+        }
+    )
+
+    slices = build_search_slices(brief)
+
+    assert [slice_config.search_mode for slice_config in slices] == ["strict"]

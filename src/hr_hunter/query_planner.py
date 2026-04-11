@@ -67,7 +67,7 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
                     limit=slice_limit,
                 )
             )
-        if include_history_slices:
+        if include_history_slices and companies:
             slices.append(
                 SearchSlice(
                     id=f"history-{index}",

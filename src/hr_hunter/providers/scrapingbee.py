@@ -197,6 +197,7 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         self.request_timeout_seconds = float(settings.get("request_timeout_seconds", 30.0))
         self.max_retries = int(settings.get("max_retries", 2))
         self.retry_backoff_seconds = float(settings.get("retry_backoff_seconds", 2.0))
+        self.stop_grace_period_seconds = max(0.0, float(settings.get("stop_grace_period_seconds", 1.0) or 1.0))
         self.parallel_requests = max(1, int(settings.get("parallel_requests", 8) or 8))
         self.include_country_only_queries = bool(settings.get("include_country_only_queries", True))
         self.include_relaxed_queries = bool(settings.get("include_relaxed_queries", True))
@@ -1248,17 +1249,32 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                         )
                         if stop_waiter and stop_waiter in done:
                             done.remove(stop_waiter)
-                            for task in pending_tasks:
-                                if task.done():
+                            completed_after_stop = set(done)
+                            remaining_tasks = {task for task in pending_tasks if task not in completed_after_stop}
+                            if remaining_tasks:
+                                # Give active page fetches a short grace window to finish so we keep
+                                # monotonic query telemetry, but do not let a hung request stall the run.
+                                grace_done, still_pending = await asyncio.wait(
+                                    remaining_tasks,
+                                    timeout=self.stop_grace_period_seconds,
+                                )
+                                completed_after_stop.update(grace_done)
+                                if still_pending:
+                                    for task in still_pending:
+                                        task.cancel()
+                                    cancelled_results = await asyncio.gather(
+                                        *still_pending,
+                                        return_exceptions=True,
+                                    )
+                                    for result in cancelled_results:
+                                        if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
+                                            raise result
+                            for task in completed_after_stop:
+                                if task.cancelled():
                                     continue
-                                task.cancel()
-                            cancelled_results = await asyncio.gather(
-                                *pending_tasks,
-                                return_exceptions=True,
-                            )
-                            for result in cancelled_results:
-                                if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
-                                    raise result
+                                exception = task.exception()
+                                if exception:
+                                    raise exception
                             pending_tasks.clear()
                             break
                         for task in done:

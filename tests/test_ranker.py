@@ -8,8 +8,10 @@ from hr_hunter.ranker import (
     LEARNED_RANKER_FEATURES,
     apply_learned_ranker,
     build_learned_feature_map,
+    rank_candidate,
     train_learned_ranker,
 )
+from hr_hunter.scoring import score_candidate
 
 
 class _FakeBooster:
@@ -151,3 +153,55 @@ def test_train_learned_ranker_writes_artifacts(tmp_path: Path) -> None:
     assert Path(result["metadata_path"]).exists()
     assert result["training_row_count"] == 4
     assert result["query_count"] == 2
+
+
+def test_focused_precision_brief_rejects_weak_partial_matches() -> None:
+    brief = build_search_brief(
+        {
+            "id": "focused-ranker-brief",
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+            "required_keywords": ["SQL", "Python"],
+            "provider_settings": {
+                "retrieval": {
+                    "include_broad_slice": False,
+                    "include_discovery_slices": False,
+                    "include_history_slices": False,
+                }
+            },
+            "anchors": {
+                "title": "critical",
+                "skills": "critical",
+                "location": "important",
+            },
+        }
+    )
+
+    strong = score_candidate(
+        CandidateProfile(
+            full_name="Strong Match",
+            current_title="Data Analyst",
+            current_company="Careem",
+            location_name="Dubai, United Arab Emirates",
+            linkedin_url="https://www.linkedin.com/in/strong-match",
+            summary="Hands-on SQL and Python analyst with dashboard reporting experience.",
+        ),
+        brief,
+    )
+    weak = score_candidate(
+        CandidateProfile(
+            full_name="Weak Match",
+            current_title="Business Analyst",
+            current_company="Careem",
+            location_name="United Arab Emirates",
+            linkedin_url="https://www.linkedin.com/in/weak-match",
+            summary="Excel reporting and stakeholder support specialist.",
+        ),
+        brief,
+    )
+
+    assert strong.score > weak.score
+    assert strong.verification_status in {"verified", "review"}
+    assert weak.verification_status == "reject"
+    assert "required_skills_missing" in weak.cap_reasons or "required_skills_partial" in weak.cap_reasons

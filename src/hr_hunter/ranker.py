@@ -13,7 +13,7 @@ from hr_hunter.models import CandidateProfile, SearchBrief
 from hr_hunter.state import record_model_version
 
 
-RANKING_MODEL_VERSION = "heuristic-anchor-ranker-v1"
+RANKING_MODEL_VERSION = "heuristic-anchor-ranker-v2"
 LEARNED_RANKING_MODEL_PREFIX = "lightgbm-lambdarank"
 LEARNED_RANKER_MODEL_FILENAME = "model.txt"
 LEARNED_RANKER_METADATA_FILENAME = "metadata.json"
@@ -110,6 +110,23 @@ def _weighted_anchor_scores(
     return round(sum(anchor_scores.values()), 2), anchor_scores
 
 
+def _is_focused_precision_brief(brief: SearchBrief) -> bool:
+    retrieval_settings = dict(brief.provider_settings.get("retrieval", {}) or {})
+    normalized_locations = {
+        normalize_text(str(value))
+        for value in [*brief.location_targets, brief.geography.location_name, brief.geography.country]
+        if normalize_text(str(value))
+    }
+    return (
+        not bool(retrieval_settings.get("include_broad_slice", True))
+        and not bool(retrieval_settings.get("include_discovery_slices", True))
+        and (not bool(retrieval_settings.get("include_history_slices", False)) or not brief.company_targets)
+        and bool(brief.titles)
+        and len(brief.titles) <= 3
+        and len(normalized_locations) <= 4
+    )
+
+
 def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResult:
     base_score, anchor_scores = _weighted_anchor_scores(features.feature_scores, brief.anchor_weights)
     score = base_score
@@ -132,6 +149,14 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
     broad_location_scope = len(normalized_location_targets) >= 6
     outside_location_penalty = 10.0 if broad_location_scope else 25.0
     imprecise_location_penalty = 4.0 if broad_location_scope else 10.0
+    focused_precision_brief = _is_focused_precision_brief(brief)
+    has_specific_location_target = any(
+        normalize_text(str(value))
+        and normalize_text(str(value)) != normalize_text(brief.geography.country)
+        for value in [brief.geography.location_name, *brief.location_targets]
+    )
+    skill_overlap_score = float(features.feature_scores.get("skill_overlap", 0.0) or 0.0)
+    current_function_fit_score = float(features.feature_scores.get("current_function_fit", 0.0) or 0.0)
 
     if brief.company_targets:
         if company_mode == "current_only":
@@ -192,6 +217,39 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
         max_score = min(max_score, 69.0)
         cap_reasons.append("current_function_review")
         notes.append("ranker_penalty: off_function_current_role")
+
+    if focused_precision_brief:
+        if not features.current_title_match:
+            score -= 12.0
+            max_score = min(max_score, 45.0)
+            if "title_alignment_required" not in cap_reasons:
+                cap_reasons.append("title_alignment_required")
+            notes.append("ranker_penalty: focused_title_mismatch")
+
+        if brief.required_keywords:
+            if skill_overlap_score <= 0.0:
+                score -= 20.0
+                max_score = min(max_score, 35.0)
+                cap_reasons.append("required_skills_missing")
+                notes.append("ranker_penalty: required_skills_missing")
+            elif skill_overlap_score < 0.5:
+                score -= 10.0
+                max_score = min(max_score, 59.0)
+                cap_reasons.append("required_skills_partial")
+                notes.append("ranker_penalty: required_skills_partial")
+
+        if has_specific_location_target and features.location_bucket in {"country_only", "unknown_location"}:
+            score -= 10.0
+            max_score = min(max_score, 59.0)
+            if "precise_location_required" not in cap_reasons:
+                cap_reasons.append("precise_location_required")
+            notes.append("ranker_penalty: focused_location_precision")
+
+        if current_function_fit_score < 0.45:
+            score -= 12.0
+            max_score = min(max_score, 49.0)
+            cap_reasons.append("current_function_alignment_required")
+            notes.append("ranker_penalty: focused_function_mismatch")
 
     if features.exclude_hits:
         score -= min(36.0, float(len(features.exclude_hits) * 14))

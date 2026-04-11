@@ -1035,6 +1035,16 @@ def _resolve_year_bounds(
 FOCUSED_SEARCH_PROFILE = "focused"
 BALANCED_SEARCH_PROFILE = "balanced"
 EXPLORATORY_SEARCH_PROFILE = "exploratory"
+FOCUSED_QUERY_FAMILY_BUDGETS = {
+    "org_chart_profile_pages": 8,
+    "profile_like_public_pages": 8,
+    "team_leadership_pages": 6,
+    "appointment_news_pages": 4,
+    "speaker_bio_pages": 2,
+    "award_industry_pages": 1,
+    "industry_association_pages": 1,
+    "trade_directory_pages": 1,
+}
 EXECUTIVE_ROLE_HINTS = (
     "ceo",
     "chief executive officer",
@@ -1560,6 +1570,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if explicit_include_history_slices is not None
         else (tuned_include_history_slices if tuned_include_history_slices is not None else True)
     )
+    if search_profile == FOCUSED_SEARCH_PROFILE and not companies:
+        resolved_include_history_slices = False
     resolved_include_discovery_slices = (
         explicit_include_discovery_slices
         if explicit_include_discovery_slices is not None
@@ -1573,6 +1585,13 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     include_country_only_queries = expand_search_when_thin or len(countries) <= 1
     if search_profile == FOCUSED_SEARCH_PROFILE and not expand_search_when_thin:
         include_country_only_queries = False
+    resolved_query_family_budgets = {
+        str(family).strip(): max(0, int(value))
+        for family, value in dict(payload_query_family_budgets or tuned_query_family_budgets).items()
+        if str(family).strip()
+    }
+    if not resolved_query_family_budgets and search_profile == FOCUSED_SEARCH_PROFILE:
+        resolved_query_family_budgets = dict(FOCUSED_QUERY_FAMILY_BUDGETS)
     providers_settings = {
         "retrieval": {
             "company_chunk_size": int(payload.get("company_chunk_size", tuned_company_chunk_size or 5) or 5),
@@ -1650,7 +1669,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             ),
             "query_family_budgets": {
                 str(family).strip(): max(0, int(value))
-                for family, value in dict(payload_query_family_budgets or tuned_query_family_budgets).items()
+                for family, value in resolved_query_family_budgets.items()
                 if str(family).strip()
             },
         },

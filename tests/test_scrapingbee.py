@@ -7,6 +7,29 @@ from hr_hunter.providers.scrapingbee import ScrapingBeeGoogleProvider
 from hr_hunter.query_planner import build_search_slices
 
 
+class _FakeSearchResponse:
+    status_code = 200
+    text = ""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class _FakeScrapingBeeClient:
+    def __init__(self, payload):
+        self._payload = payload
+        self.api_key = "test-key"
+
+    def is_configured(self):
+        return True
+
+    async def search(self, client, search_query, *, page, country_code, language, light_request):
+        return _FakeSearchResponse(self._payload)
+
+
 def test_candidate_parser_skips_non_person_team_pages() -> None:
     provider = ScrapingBeeGoogleProvider({})
     brief = build_search_brief(
@@ -239,6 +262,55 @@ def test_scrapingbee_dry_run_enforces_family_and_run_budgets() -> None:
     assert query_budget["executed_per_family"]["team_leadership_pages"] == 1
     assert query_budget["skipped_per_family"]["team_leadership_pages"] >= 1
     assert "team_leadership_pages" in query_budget["family_budget_exhausted"]
+
+
+def test_scrapingbee_early_stop_keeps_query_completion_telemetry() -> None:
+    provider = ScrapingBeeGoogleProvider({"parallel_requests": 1, "pages_per_query": 1})
+    provider.client = _FakeScrapingBeeClient(
+        {
+            "organic_results": [
+                {
+                    "title": "Jane Doe - Data Analyst",
+                    "description": "Data Analyst at Careem in Dubai, United Arab Emirates. SQL and Python.",
+                    "url": "https://www.linkedin.com/in/jane-doe",
+                }
+            ]
+        }
+    )
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-telemetry-test",
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst"],
+            "company_targets": ["Careem"],
+            "required_keywords": ["SQL", "Python"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+            "provider_settings": {
+                "retrieval": {
+                    "include_broad_slice": False,
+                    "include_discovery_slices": False,
+                    "include_history_slices": False,
+                }
+            },
+        }
+    )
+    strict_slice = next(
+        slice_config for slice_config in build_search_slices(brief) if slice_config.search_mode == "strict"
+    )
+    events = []
+
+    result = asyncio.run(
+        provider.run(
+            brief,
+            [strict_slice],
+            limit=1,
+            dry_run=False,
+            progress_callback=events.append,
+        )
+    )
+
+    assert result.diagnostics["query_budget"]["query_page_completed"] >= 1
+    assert any(int(event.get("queries_completed", 0) or 0) >= 1 for event in events)
 
 
 def test_scrapingbee_builds_history_query_plans() -> None:

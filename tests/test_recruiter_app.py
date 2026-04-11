@@ -277,6 +277,9 @@ def test_build_ui_brief_payload_uses_focused_defaults_for_small_precise_searches
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 100
     assert brief["provider_settings"]["reranker"]["top_n"] == 100
     assert brief["provider_settings"]["verification"]["top_n"] == 50
+    assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 8
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["team_leadership_pages"] == 6
 
 
 def test_resolve_job_description_source_prefers_uploaded_text_and_keeps_notes():
