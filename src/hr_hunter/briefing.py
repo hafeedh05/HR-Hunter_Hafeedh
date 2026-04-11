@@ -115,10 +115,23 @@ def infer_title_keywords(titles: List[str]) -> List[str]:
             keywords.append("trade marketing manager")
         if "marketing" in lowered:
             keywords.append("marketing manager")
+            keywords.append("digital marketing manager")
+            keywords.append("performance marketing manager")
+            keywords.append("growth marketing manager")
+            keywords.append("paid media manager")
+            keywords.append("acquisition marketing manager")
+            keywords.append("demand generation manager")
             keywords.append("product marketing lead")
             keywords.append("shopper marketing manager")
             keywords.append("trade marketing manager")
             keywords.append("marketing innovation lead")
+        if "digital marketing" in lowered:
+            keywords.append("performance marketing manager")
+            keywords.append("growth marketing manager")
+            keywords.append("paid media manager")
+        if "performance marketing" in lowered or "growth marketing" in lowered:
+            keywords.append("digital marketing manager")
+            keywords.append("paid media manager")
         if "product marketing" in lowered:
             keywords.append("product marketing")
             keywords.append("proposition manager")

@@ -157,3 +157,57 @@ def test_build_reporting_summary_adds_low_yield_quality_diagnostics() -> None:
     assert "geo_mismatch" in issue_keys
     assert "parser_confidence" in issue_keys
     assert "market_scarcity" in issue_keys
+
+
+def test_build_reporting_summary_keeps_non_executive_diagnostics_copy_generic() -> None:
+    candidates = [
+        _candidate(
+            name="Reject One",
+            status="reject",
+            score=32.0,
+            current_title_match=False,
+            location_aligned=True,
+            location_bucket="country_only",
+            parser_confidence=0.28,
+            evidence_quality_score=0.22,
+            skill_overlap_score=0.1,
+            current_function_fit=0.18,
+            years_fit_score=0.2,
+            industry_fit_score=0.08,
+            cap_reasons=["title_alignment_required"],
+        ),
+        _candidate(
+            name="Reject Two",
+            status="reject",
+            score=29.0,
+            current_title_match=False,
+            location_aligned=False,
+            location_bucket="outside_target_area",
+            parser_confidence=0.22,
+            evidence_quality_score=0.18,
+            skill_overlap_score=0.08,
+            current_function_fit=0.16,
+            years_fit_score=0.18,
+            industry_fit_score=0.05,
+            cap_reasons=["outside_target_area"],
+        ),
+    ]
+
+    summary = build_reporting_summary(
+        candidates,
+        {
+            "role_title": "Digital Marketing Manager",
+            "target_range": [50, 50],
+            "pipeline_metrics": {
+                "raw_found": 18,
+                "unique_after_dedupe": 8,
+                "finalized_count": len(candidates),
+            },
+        },
+    )
+
+    diagnostics = summary["quality_diagnostics"]
+
+    assert diagnostics["enabled"] is True
+    assert all("executive" not in issue["message"].lower() for issue in diagnostics["issues"])
+    assert all("executive" not in issue["action"].lower() for issue in diagnostics["issues"])

@@ -13,6 +13,19 @@ from hr_hunter.models import CandidateProfile, SearchBrief
 TITLE_FAMILY_KEYWORDS = {
     "brand": ["brand manager", "brand lead", "brand director", "head of brand"],
     "category": ["category manager", "category lead", "category director"],
+    "marketing": [
+        "digital marketing",
+        "growth marketing",
+        "performance marketing",
+        "paid media",
+        "demand generation",
+        "lifecycle marketing",
+        "crm marketing",
+        "marketing manager",
+        "marketing director",
+        "director of marketing",
+        "head of marketing",
+    ],
     "product_marketing": [
         "product marketing",
         "product marketing manager",
@@ -75,9 +88,51 @@ OFF_FUNCTION_KEYWORDS = [
     "specialist",
     "coordinator",
 ]
+KEYWORD_MATCH_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "for",
+    "in",
+    "of",
+    "on",
+    "the",
+    "to",
+    "with",
+}
+SKILL_KEYWORD_VARIANTS = {
+    "ga4": ["google analytics 4", "google analytics"],
+    "google analytics 4": ["ga4", "google analytics"],
+    "meta ads": ["facebook ads", "instagram ads", "paid social"],
+    "google ads": ["google adwords", "search ads", "ppc"],
+    "campaign optimisation": ["campaign optimization", "campaign management"],
+    "campaign optimization": ["campaign optimisation", "campaign management"],
+    "lead generation": ["demand generation", "pipeline generation"],
+    "stakeholder management": ["stakeholder engagement", "cross functional collaboration", "cross-functional collaboration"],
+    "ecommerce": ["e-commerce", "online retail", "marketplace"],
+    "e-commerce": ["ecommerce", "online retail", "marketplace"],
+}
+INDUSTRY_KEYWORD_VARIANTS = {
+    "consumer": ["consumer goods", "b2c", "beauty", "cosmetics", "lifestyle"],
+    "consumer goods": ["consumer", "fmcg", "cpg"],
+    "fmcg": ["consumer goods", "cpg", "consumer"],
+    "cpg": ["consumer goods", "fmcg", "consumer"],
+    "ecommerce": ["e-commerce", "online retail", "marketplace", "digital commerce"],
+    "e-commerce": ["ecommerce", "online retail", "marketplace", "digital commerce"],
+    "home furnishings": ["furniture", "interiors", "home decor", "homeware"],
+    "premium retail": ["luxury retail", "design led retail", "design-led retail"],
+}
 TITLE_ROLE_SIGNAL_MAP = {
     "brand": ["brand"],
     "category": ["category", "category development", "category insights"],
+    "marketing": [
+        "digital marketing",
+        "growth marketing",
+        "performance marketing",
+        "paid media",
+        "demand generation",
+        "marketing",
+    ],
     "product_marketing": ["product marketing"],
     "portfolio": ["portfolio", "commercialization", "proposition"],
     "innovation": ["innovation", "commercialization", "proposition"],
@@ -93,11 +148,12 @@ TITLE_ROLE_SIGNAL_MAP = {
 ADJACENT_TITLE_FAMILY_MAP = {
     "brand": {"category", "innovation", "product_marketing", "shopper_marketing"},
     "category": {"brand", "innovation", "product_marketing", "shopper_marketing"},
+    "marketing": {"product_marketing", "shopper_marketing"},
     "innovation": {"brand", "category", "portfolio", "product", "product_marketing"},
     "portfolio": {"innovation", "product", "product_marketing"},
     "product": {"innovation", "portfolio", "product_marketing"},
-    "product_marketing": {"brand", "category", "portfolio", "product", "shopper_marketing"},
-    "shopper_marketing": {"brand", "category", "product_marketing"},
+    "product_marketing": {"brand", "category", "marketing", "portfolio", "product", "shopper_marketing"},
+    "shopper_marketing": {"brand", "category", "marketing", "product_marketing"},
 }
 SEMANTIC_STOPWORDS = {
     "a",
@@ -496,6 +552,54 @@ def keyword_hits(text_parts: Iterable[str], keywords: Iterable[str]) -> int:
     return hits
 
 
+def _normalized_keyword_variants(keyword: str, variant_map: Dict[str, List[str]]) -> List[str]:
+    normalized = normalize_text(keyword)
+    if not normalized:
+        return []
+    variants = [normalized]
+    variants.extend(normalize_text(value) for value in variant_map.get(normalized, []))
+    if "optimisation" in normalized:
+        variants.append(normalized.replace("optimisation", "optimization"))
+    if "optimization" in normalized:
+        variants.append(normalized.replace("optimization", "optimisation"))
+    if "ecommerce" in normalized:
+        variants.append(normalized.replace("ecommerce", "e commerce"))
+    if "e commerce" in normalized:
+        variants.append(normalized.replace("e commerce", "ecommerce"))
+    return unique_preserving_order([value for value in variants if value])
+
+
+def _keyword_match_strength(
+    haystack: str,
+    haystack_tokens: set[str],
+    keyword: str,
+    *,
+    variant_map: Dict[str, List[str]],
+) -> float:
+    best = 0.0
+    for variant in _normalized_keyword_variants(keyword, variant_map):
+        if variant in haystack:
+            return 1.0
+        variant_tokens = [
+            token
+            for token in variant.split()
+            if token and token not in KEYWORD_MATCH_STOPWORDS
+        ]
+        if not variant_tokens:
+            continue
+        overlap = len(set(variant_tokens).intersection(haystack_tokens))
+        if len(variant_tokens) == 1:
+            if overlap:
+                best = max(best, 0.8)
+            continue
+        ratio = overlap / len(set(variant_tokens))
+        if ratio >= 1.0:
+            best = max(best, 0.85)
+        elif len(variant_tokens) >= 3 and ratio >= 0.67:
+            best = max(best, 0.55)
+    return round(best, 3)
+
+
 def lexical_similarity(brief: SearchBrief, candidate: CandidateProfile, text_parts: List[str]) -> float:
     brief_text = " ".join(
         [
@@ -554,11 +658,16 @@ def evaluate_current_function_fit(
     title_similarity_score: float,
 ) -> tuple[float, bool, List[str], List[str], set[str], set[str]]:
     normalized_title = normalize_text(candidate.current_title)
+    target_role_text = normalize_text(" ".join([brief.role_title, *brief.titles, *brief.title_keywords]))
     target_signals = current_role_signal_phrases(brief)
     has_target_role_signal = any(signal in normalized_title for signal in target_signals if signal)
     family_overlap = candidate_title_families.intersection(target_title_families)
     adjacent_overlap = adjacent_family_overlap(candidate_title_families, target_title_families)
-    disqualifiers = [keyword for keyword in OFF_FUNCTION_KEYWORDS if keyword in normalized_title]
+    disqualifiers = [
+        keyword
+        for keyword in OFF_FUNCTION_KEYWORDS
+        if keyword in normalized_title and keyword not in target_role_text
+    ]
     notes: List[str] = []
 
     if disqualifiers and not has_target_role_signal:
@@ -653,10 +762,18 @@ def evaluate_skill_overlap(candidate: CandidateProfile, brief: SearchBrief, text
     if not required and not optional:
         return 0.5, notes
 
-    required_hits = keyword_hits(text_parts, required)
-    optional_hits = keyword_hits(text_parts, optional)
-    required_ratio = required_hits / len(required) if required else 0.0
-    optional_ratio = optional_hits / len(optional) if optional else 0.0
+    haystack = normalize_text(" ".join(part for part in text_parts if part))
+    haystack_tokens = set(haystack.split())
+    required_scores = [
+        _keyword_match_strength(haystack, haystack_tokens, keyword, variant_map=SKILL_KEYWORD_VARIANTS)
+        for keyword in required
+    ]
+    optional_scores = [
+        _keyword_match_strength(haystack, haystack_tokens, keyword, variant_map=SKILL_KEYWORD_VARIANTS)
+        for keyword in optional
+    ]
+    required_ratio = (sum(required_scores) / len(required_scores)) if required_scores else 0.0
+    optional_ratio = (sum(optional_scores) / len(optional_scores)) if optional_scores else 0.0
 
     if required and optional:
         score = (required_ratio * 0.7) + (optional_ratio * 0.3)
@@ -677,15 +794,28 @@ def evaluate_industry_fit(candidate: CandidateProfile, brief: SearchBrief, text_
         return 0.5, False, notes
 
     current_parts = [candidate.current_title, candidate.current_company, candidate.summary, candidate.industry or ""]
-    current_hits = keyword_hits(current_parts, brief.industry_keywords)
-    history_hits = keyword_hits(text_parts, brief.industry_keywords)
-    if current_hits >= 2:
+    current_haystack = normalize_text(" ".join(part for part in current_parts if part))
+    current_tokens = set(current_haystack.split())
+    history_haystack = normalize_text(" ".join(part for part in text_parts if part))
+    history_tokens = set(history_haystack.split())
+    current_scores = [
+        _keyword_match_strength(current_haystack, current_tokens, keyword, variant_map=INDUSTRY_KEYWORD_VARIANTS)
+        for keyword in brief.industry_keywords
+    ]
+    history_scores = [
+        _keyword_match_strength(history_haystack, history_tokens, keyword, variant_map=INDUSTRY_KEYWORD_VARIANTS)
+        for keyword in brief.industry_keywords
+    ]
+    current_strength = sum(current_scores)
+    history_strength = sum(history_scores)
+    strong_current_hits = sum(1 for score in current_scores if score >= 0.75)
+    if strong_current_hits >= 2 or current_strength >= 1.6:
         notes.append("industry_fit: strong_current")
         return 1.0, True, notes
-    if current_hits == 1:
+    if strong_current_hits >= 1 or current_strength >= 0.85:
         notes.append("industry_fit: current_signal")
         return 0.75, True, notes
-    if history_hits:
+    if any(score >= 0.75 for score in history_scores) or history_strength >= 0.85:
         notes.append("industry_fit: historical_signal")
         return 0.55, True, notes
     notes.append("industry_fit: missing")

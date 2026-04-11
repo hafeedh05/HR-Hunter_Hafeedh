@@ -157,6 +157,7 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
     )
     skill_overlap_score = float(features.feature_scores.get("skill_overlap", 0.0) or 0.0)
     current_function_fit_score = float(features.feature_scores.get("current_function_fit", 0.0) or 0.0)
+    exact_role_anchor = bool(features.current_title_match and current_function_fit_score >= 0.72)
 
     if brief.company_targets:
         if company_mode == "current_only":
@@ -228,13 +229,19 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
 
         if brief.required_keywords:
             if skill_overlap_score <= 0.0:
-                score -= 20.0
-                max_score = min(max_score, 35.0)
-                cap_reasons.append("required_skills_missing")
-                notes.append("ranker_penalty: required_skills_missing")
+                if exact_role_anchor:
+                    score -= 8.0
+                    max_score = min(max_score, 59.0)
+                    cap_reasons.append("required_skills_unconfirmed")
+                    notes.append("ranker_penalty: required_skills_unconfirmed")
+                else:
+                    score -= 20.0
+                    max_score = min(max_score, 35.0)
+                    cap_reasons.append("required_skills_missing")
+                    notes.append("ranker_penalty: required_skills_missing")
             elif skill_overlap_score < 0.5:
-                score -= 10.0
-                max_score = min(max_score, 59.0)
+                score -= 8.0 if exact_role_anchor else 10.0
+                max_score = min(max_score, 69.0 if exact_role_anchor else 59.0)
                 cap_reasons.append("required_skills_partial")
                 notes.append("ranker_penalty: required_skills_partial")
 

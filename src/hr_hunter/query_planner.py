@@ -28,6 +28,9 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
         + brief.commercial_keywords
         + brief.preferred_keywords
     )[:8]
+    strict_skill_keywords = unique_preserving_order(
+        brief.required_keywords + brief.preferred_keywords
+    )[:4]
     discovery_keyword_chunk_size = int(retrieval_settings.get("discovery_keyword_chunk_size", 6))
     market_keyword_chunk_size = int(retrieval_settings.get("market_keyword_chunk_size", 5))
     history_query_terms = unique_preserving_order(
@@ -54,6 +57,19 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
                     limit=slice_limit,
                 )
             )
+            if strict_skill_keywords:
+                slices.append(
+                    SearchSlice(
+                        id=f"strict-skills-{index}",
+                        description="Exact title + must-have precision slice",
+                        companies=companies,
+                        titles=brief.titles,
+                        title_keywords=[],
+                        query_keywords=strict_skill_keywords,
+                        search_mode="strict",
+                        limit=slice_limit,
+                    )
+                )
         if include_broad_slice:
             slices.append(
                 SearchSlice(

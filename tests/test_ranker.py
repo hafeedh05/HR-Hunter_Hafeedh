@@ -205,3 +205,44 @@ def test_focused_precision_brief_rejects_weak_partial_matches() -> None:
     assert strong.verification_status in {"verified", "review"}
     assert weak.verification_status == "reject"
     assert "required_skills_missing" in weak.cap_reasons or "required_skills_partial" in weak.cap_reasons
+
+
+def test_focused_precision_brief_caps_exact_role_without_skill_proof_to_review() -> None:
+    brief = build_search_brief(
+        {
+            "id": "focused-ranker-marketing-brief",
+            "role_title": "Digital Marketing Manager",
+            "titles": ["Digital Marketing Manager"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+            "required_keywords": ["Google Ads", "Meta Ads", "GA4"],
+            "provider_settings": {
+                "retrieval": {
+                    "include_broad_slice": False,
+                    "include_discovery_slices": False,
+                    "include_history_slices": False,
+                }
+            },
+            "anchors": {
+                "title": "critical",
+                "skills": "critical",
+                "location": "important",
+                "function": "important",
+            },
+        }
+    )
+
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Exact Role Sparse Profile",
+            current_title="Digital Marketing Manager",
+            current_company="Samsung",
+            location_name="Dubai, United Arab Emirates",
+            linkedin_url="https://www.linkedin.com/in/exact-role-sparse-profile",
+            summary="Digital Marketing Manager for Samsung Gulf in Dubai.",
+        ),
+        brief,
+    )
+
+    assert candidate.current_function_fit >= 0.72
+    assert candidate.verification_status == "review"
+    assert "required_skills_unconfirmed" in candidate.cap_reasons

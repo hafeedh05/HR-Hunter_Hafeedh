@@ -666,12 +666,12 @@ def build_quality_diagnostics(
                 total=total,
                 severity="high" if title_gap_count / max(1, total) >= 0.45 else "medium",
                 message=(
-                    "A large share of candidates surfaced with adjacent leadership titles rather than clean CEO / "
-                    "Managing Director / President evidence."
+                    "A large share of candidates surfaced with adjacent titles rather than clean role-family matches "
+                    "for the brief."
                 ),
                 action=(
-                    "Tighten the accepted title family around the true executive titles you will actually accept, "
-                    "and remove looser adjacent titles if they are not interviewable."
+                    "Tighten the accepted title family around the roles you will actually interview, and remove "
+                    "looser adjacent titles if they are not genuinely in scope."
                 ),
             )
         )
@@ -702,12 +702,12 @@ def build_quality_diagnostics(
                 total=total,
                 severity="medium",
                 message=(
-                    "A meaningful share of candidates have generic leadership signals but weak overlap on the must-have "
-                    "commercial, operating, or scaling anchors."
+                    "A meaningful share of candidates have broadly relevant profile signals but weak overlap on the "
+                    "must-have skills or operating anchors."
                 ),
                 action=(
-                    "Add 4 to 6 must-have phrases that are hard to fake, such as P&L scope, multi-country retail, "
-                    "omnichannel, executive team leadership, or founder-transition context."
+                    "Add 4 to 6 must-have phrases that are hard to fake, such as owned channels, tools, scope, "
+                    "customer segment, or operating context."
                 ),
             )
         )
@@ -720,12 +720,12 @@ def build_quality_diagnostics(
                 total=total,
                 severity="medium",
                 message=(
-                    "Too few candidates show target-company history or strong premium home / design-led retail industry "
-                    "signals, so the search is leaning on adjacent executives."
+                    "Too few candidates show target-company history or strong industry signals, so the search is "
+                    "leaning on adjacent profiles."
                 ),
                 action=(
-                    "Add more comparable premium home, furniture, interiors, and design-led retail companies instead "
-                    "of broad consumer brands."
+                    "Add more truly comparable companies and industry markers instead of broad sector labels that pull "
+                    "in weak adjacencies."
                 ),
             )
         )
@@ -742,8 +742,8 @@ def build_quality_diagnostics(
                     "even when the profile looks directionally relevant."
                 ),
                 action=(
-                    "Broaden into markets with richer public executive profiles, or relax exact-company expectations so "
-                    "better-documented adjacent executives can surface."
+                    "Broaden into markets with richer public profile coverage, or relax exact-company expectations so "
+                    "better-documented adjacent candidates can surface."
                 ),
             )
         )
@@ -774,12 +774,12 @@ def build_quality_diagnostics(
                 total=total,
                 severity="medium",
                 message=(
-                    "The search is pulling too many adjacent executives with weak title or operating-fit evidence, "
+                    "The search is pulling too many adjacent candidates with weak title or operating-fit evidence, "
                     "which floods the run with rejects."
                 ),
                 action=(
                     "Narrow the title family, strengthen must-have anchors, or trim weak discovery keywords so the run "
-                    "stays executive-quality."
+                    "stays high-signal."
                 ),
             )
         )
@@ -792,11 +792,11 @@ def build_quality_diagnostics(
                 total=max(1, target),
                 severity="high" if verified_rate < 0.2 else "medium",
                 message=(
-                    "The market did not produce enough unique in-scope executives to honestly support a much higher "
+                    "The market did not produce enough unique in-scope candidates to honestly support a much higher "
                     "verified count."
                 ),
                 action=(
-                    "Expand the highest-priority geos, allow one adjacent executive title, or accept that the verified "
+                    "Expand the highest-priority geos, allow one adjacent role family, or accept that the verified "
                     "ceiling is lower for this market."
                 ),
             )

@@ -167,6 +167,34 @@ def test_query_planner_keeps_exact_title_slices_without_company_targets() -> Non
     assert slices[0].companies == []
 
 
+def test_query_planner_adds_strict_skill_slice_for_focused_brief() -> None:
+    brief = build_search_brief(
+        {
+            "id": "planner-focused-skills-test",
+            "role_title": "Digital Marketing Manager",
+            "titles": ["Digital Marketing Manager"],
+            "company_targets": [],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+            "required_keywords": ["Google Ads", "Meta Ads", "GA4"],
+            "preferred_keywords": ["Lead Generation"],
+            "provider_settings": {
+                "retrieval": {
+                    "include_strict_slice": True,
+                    "include_broad_slice": False,
+                    "include_discovery_slices": False,
+                    "include_history_slices": False,
+                }
+            },
+        }
+    )
+
+    slices = build_search_slices(brief)
+
+    assert [slice_config.id for slice_config in slices] == ["strict-1", "strict-skills-1"]
+    assert slices[1].search_mode == "strict"
+    assert slices[1].query_keywords == ["Google Ads", "Meta Ads", "GA4", "Lead Generation"]
+
+
 def test_query_planner_skips_history_slices_without_company_targets() -> None:
     brief = build_search_brief(
         {

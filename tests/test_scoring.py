@@ -342,6 +342,42 @@ def test_score_candidate_can_require_not_currently_employed() -> None:
     assert available_scored.score > employed_scored.score
 
 
+def test_score_candidate_keeps_digital_marketing_role_in_scope_for_marketing_brief() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-digital-marketing-fit-test",
+            "role_title": "Digital Marketing Manager",
+            "titles": ["Digital Marketing Manager"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+            "required_keywords": ["Google Ads", "Meta Ads", "GA4"],
+            "preferred_keywords": ["Lead Generation"],
+            "industry_keywords": ["consumer", "ecommerce"],
+            "minimum_years_experience": 4,
+            "maximum_years_experience": 10,
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Benefit Beauty Growth",
+        current_title="Digital Marketing Manager",
+        current_company="Benefit Cosmetics",
+        location_name="Dubai, United Arab Emirates",
+        summary=(
+            "Digital marketing manager leading Facebook Ads, Google Analytics 4, paid social, lead generation, "
+            "and cross-functional collaboration for a beauty ecommerce business."
+        ),
+        experience=[{"start_date": "2018-01-01"}],
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_function_fit >= 0.72
+    assert "digital" not in getattr(scored, "disqualifier_reasons")
+    assert scored.skill_overlap_score >= 0.75
+    assert scored.industry_fit_score >= 0.75
+    assert scored.verification_status in {"review", "verified"}
+
+
 def test_score_candidate_caps_off_function_current_role_even_with_relevant_history() -> None:
     brief = build_search_brief(
         {
