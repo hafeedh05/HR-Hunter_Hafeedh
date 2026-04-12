@@ -975,6 +975,9 @@ class PublicEvidenceVerifier:
         verified_count = 0
         reviewed_count = 0
         rejected_count = 0
+        checked_verified_count = 0
+        checked_review_count = 0
+        checked_reject_count = 0
         total = min(max(0, int(limit or 0)), len(candidates))
         if total <= 0:
             return {
@@ -1007,15 +1010,9 @@ class PublicEvidenceVerifier:
                         "requests_used": request_count,
                         "promoted_to_verified": verified_count,
                         "promoted_to_review": reviewed_count,
-                        "verified_count": len(
-                            [candidate for candidate in candidates[:total] if candidate.verification_status == "verified"]
-                        ),
-                        "review_count": len(
-                            [candidate for candidate in candidates[:total] if candidate.verification_status == "review"]
-                        ),
-                        "reject_count": len(
-                            [candidate for candidate in candidates[:total] if candidate.verification_status == "reject"]
-                        ),
+                        "verified_count": checked_verified_count,
+                        "review_count": checked_review_count,
+                        "reject_count": checked_reject_count,
                         "verifying_count": max(0, total - checked_count),
                     }
                 )
@@ -1024,6 +1021,7 @@ class PublicEvidenceVerifier:
 
         async def verify_one(candidate: CandidateProfile) -> None:
             nonlocal checked_count, request_count, verified_count, reviewed_count, rejected_count
+            nonlocal checked_verified_count, checked_review_count, checked_reject_count
             before_status = candidate.verification_status
             evidence_records: List[EvidenceRecord] = []
             used_requests = 0
@@ -1047,6 +1045,12 @@ class PublicEvidenceVerifier:
                     reviewed_count += 1
                 if candidate.verification_status == "reject":
                     rejected_count += 1
+                if candidate.verification_status == "verified":
+                    checked_verified_count += 1
+                elif candidate.verification_status == "review":
+                    checked_review_count += 1
+                else:
+                    checked_reject_count += 1
                 await emit_progress()
 
         await emit_progress()

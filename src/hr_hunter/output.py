@@ -613,15 +613,6 @@ def build_scope_progress_counts(
         ),
         "title_match_count": len([candidate for candidate in hydrated_candidates if candidate.current_title_match]),
         "market_match_count": len([candidate for candidate in hydrated_candidates if _candidate_market_match(candidate)]),
-        "verified_count": len(
-            [candidate for candidate in hydrated_candidates if candidate.verification_status == "verified"]
-        ),
-        "review_count": len(
-            [candidate for candidate in hydrated_candidates if candidate.verification_status == "review"]
-        ),
-        "reject_count": len(
-            [candidate for candidate in hydrated_candidates if candidate.verification_status == "reject"]
-        ),
     }
 
 

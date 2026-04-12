@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from hr_hunter.briefing import build_search_brief
@@ -423,6 +424,68 @@ def test_report_roundtrip_preserves_evidence_fields(tmp_path: Path) -> None:
     assert loaded.candidates[0].evidence_records[0].current_employment_signal is True
     assert loaded.candidates[0].evidence_records[0].location_match_text == "Dublin"
     assert loaded.candidates[0].evidence_records[0].precise_location_match is True
+
+
+def test_verify_candidates_progress_counts_only_checked_candidates(monkeypatch) -> None:
+    verifier = PublicEvidenceVerifier({"parallel_candidates": 1, "queries_per_candidate": 1})
+    brief = build_search_brief(
+        {
+            "id": "verify-progress-counts-test",
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Dubai", "United Arab Emirates"],
+            },
+        }
+    )
+    candidates = [
+        CandidateProfile(full_name="Verified Candidate", current_title="Data Analyst", verification_status="reject"),
+        CandidateProfile(full_name="Review Candidate", current_title="Data Analyst", verification_status="reject"),
+        CandidateProfile(full_name="Reject Candidate", current_title="Data Analyst", verification_status="reject"),
+    ]
+
+    async def fake_collect_evidence(candidate, brief, client=None):  # type: ignore[no-untyped-def]
+        return [], 1
+
+    def fake_apply_evidence(candidate, brief, evidence_records):  # type: ignore[no-untyped-def]
+        if candidate.full_name.startswith("Verified"):
+            candidate.verification_status = "verified"
+        elif candidate.full_name.startswith("Review"):
+            candidate.verification_status = "review"
+        else:
+            candidate.verification_status = "reject"
+        return candidate
+
+    monkeypatch.setattr(verifier, "collect_evidence", fake_collect_evidence)
+    monkeypatch.setattr(verifier, "apply_evidence", fake_apply_evidence)
+
+    progress_events = []
+
+    def on_progress(event):  # type: ignore[no-untyped-def]
+        progress_events.append(dict(event))
+
+    stats = asyncio.run(
+        verifier.verify_candidates(
+            candidates,
+            brief,
+            limit=3,
+            progress_callback=on_progress,
+        )
+    )
+
+    assert progress_events[0]["candidates_checked"] == 0
+    assert progress_events[0]["verified_count"] == 0
+    assert progress_events[0]["review_count"] == 0
+    assert progress_events[0]["reject_count"] == 0
+    for event in progress_events[1:]:
+        checked = event["candidates_checked"]
+        assert event["verified_count"] + event["review_count"] + event["reject_count"] == checked
+        assert event["verifying_count"] == 3 - checked
+    assert stats["verified_count"] == 1
+    assert stats["review_count"] == 1
+    assert stats["reject_count"] == 1
 
 
 def test_apply_evidence_caps_historical_only_public_match() -> None:

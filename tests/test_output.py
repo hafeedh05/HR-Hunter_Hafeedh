@@ -1,5 +1,5 @@
 from hr_hunter.models import CandidateProfile
-from hr_hunter.output import build_reporting_summary
+from hr_hunter.output import build_reporting_summary, build_scope_progress_counts
 
 
 def _candidate(
@@ -211,3 +211,47 @@ def test_build_reporting_summary_keeps_non_executive_diagnostics_copy_generic() 
     assert diagnostics["enabled"] is True
     assert all("executive" not in issue["message"].lower() for issue in diagnostics["issues"])
     assert all("executive" not in issue["action"].lower() for issue in diagnostics["issues"])
+
+
+def test_build_scope_progress_counts_only_reports_scope_metrics() -> None:
+    candidates = [
+        _candidate(
+            name="Verified Scope Match",
+            status="verified",
+            score=78.0,
+            current_title_match=True,
+            location_aligned=True,
+            location_bucket="named_target_location",
+            parser_confidence=0.82,
+            evidence_quality_score=0.76,
+            skill_overlap_score=0.78,
+            current_function_fit=0.86,
+            years_fit_score=0.74,
+            industry_fit_score=0.8,
+            cap_reasons=[],
+        ),
+        _candidate(
+            name="Rejected Geo Gap",
+            status="reject",
+            score=41.0,
+            current_title_match=False,
+            location_aligned=False,
+            location_bucket="outside_target_area",
+            parser_confidence=0.18,
+            evidence_quality_score=0.1,
+            skill_overlap_score=0.08,
+            current_function_fit=0.12,
+            years_fit_score=0.18,
+            industry_fit_score=0.05,
+            cap_reasons=["outside_target_area"],
+        ),
+    ]
+
+    counts = build_scope_progress_counts(candidates)
+
+    assert counts["in_scope_count"] == 1
+    assert counts["precise_in_scope_count"] == 1
+    assert counts["title_match_count"] == 1
+    assert "verified_count" not in counts
+    assert "review_count" not in counts
+    assert "reject_count" not in counts

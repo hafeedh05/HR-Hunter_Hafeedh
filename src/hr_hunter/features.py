@@ -11,6 +11,17 @@ from hr_hunter.models import CandidateProfile, SearchBrief
 
 
 TITLE_FAMILY_KEYWORDS = {
+    "executive": [
+        "chief executive officer",
+        "ceo",
+        "managing director",
+        "md",
+        "president",
+        "group ceo",
+        "regional ceo",
+        "country ceo",
+        "general manager",
+    ],
     "brand": ["brand manager", "brand lead", "brand director", "head of brand"],
     "category": ["category manager", "category lead", "category director"],
     "marketing": [
@@ -55,6 +66,25 @@ TITLE_TOKEN_STOPWORDS = {
     "senior",
     "vice",
 }
+NON_PERSON_NAME_TOKENS = {
+    "about",
+    "blog",
+    "brand",
+    "careers",
+    "company",
+    "contact",
+    "free",
+    "info",
+    "leadership",
+    "management",
+    "our",
+    "people",
+    "profile",
+    "speaker",
+    "speakers",
+    "staff",
+    "team",
+}
 TITLE_PROXIMITY_STOPWORDS = {
     "a",
     "an",
@@ -69,6 +99,14 @@ TITLE_PROXIMITY_STOPWORDS = {
     "senior",
     "the",
     "to",
+}
+TITLE_ALIAS_EXPANSIONS = {
+    "ceo": {"chief", "executive", "officer"},
+    "chief executive officer": {"ceo"},
+    "md": {"managing", "director"},
+    "managing director": {"md"},
+    "gm": {"general", "manager"},
+    "general manager": {"gm"},
 }
 LOW_SENIORITY_KEYWORDS = [
     "assistant",
@@ -201,6 +239,15 @@ COMPANY_ENTITY_HINTS = {
     "ventures",
 }
 TITLE_ROLE_SIGNAL_MAP = {
+    "executive": [
+        "chief executive officer",
+        "ceo",
+        "managing director",
+        "president",
+        "group ceo",
+        "country ceo",
+        "general manager",
+    ],
     "brand": ["brand"],
     "category": ["category", "category development", "category insights"],
     "marketing": [
@@ -501,28 +548,46 @@ def location_priority_rank(target_locations: List[str], hint: str) -> int:
 def title_signal_tokens(value: str) -> set[str]:
     return {
         token
-        for token in normalize_text(value).split()
+        for token in _expanded_title_tokens(value)
         if token and token not in TITLE_TOKEN_STOPWORDS
     }
 
 
-def title_similarity(title: str, options: Iterable[str]) -> tuple[float, List[str]]:
-    current_tokens = {
+def _expanded_title_tokens(value: str) -> set[str]:
+    normalized = normalize_text(value)
+    tokens = {
         token
-        for token in normalize_text(title).split()
+        for token in normalized.split()
         if token and token not in TITLE_PROXIMITY_STOPWORDS
     }
+    expanded = set(tokens)
+    for phrase, extras in TITLE_ALIAS_EXPANSIONS.items():
+        normalized_phrase = normalize_text(phrase)
+        phrase_tokens = {
+            token
+            for token in normalized_phrase.split()
+            if token and token not in TITLE_PROXIMITY_STOPWORDS
+        }
+        if not phrase_tokens:
+            continue
+        if normalized_phrase in normalized or phrase_tokens.issubset(tokens):
+            expanded.update(
+                token
+                for token in extras
+                if token and token not in TITLE_PROXIMITY_STOPWORDS
+            )
+    return expanded
+
+
+def title_similarity(title: str, options: Iterable[str]) -> tuple[float, List[str]]:
+    current_tokens = _expanded_title_tokens(title)
     if not current_tokens:
         return 0.0, []
 
     best_score = 0.0
     best_matches: List[str] = []
     for option in options:
-        option_tokens = {
-            token
-            for token in normalize_text(option).split()
-            if token and token not in TITLE_PROXIMITY_STOPWORDS
-        }
+        option_tokens = _expanded_title_tokens(option)
         if not option_tokens:
             continue
         overlap = current_tokens.intersection(option_tokens)
@@ -998,6 +1063,62 @@ def looks_like_non_company_fragment(value: str, brief: SearchBrief | None = None
     return False
 
 
+def looks_like_person_name(value: str) -> bool:
+    tokens = [token for token in re.split(r"[^A-Za-z'’.-]+", value.strip()) if token]
+    if len(tokens) < 2 or len(tokens) > 5:
+        return False
+    lowered = {token.lower().strip(".") for token in tokens}
+    if lowered.intersection(NON_PERSON_NAME_TOKENS):
+        return False
+    if lowered.intersection(COMPANY_ENTITY_HINTS):
+        return False
+    return len([token for token in tokens if any(char.isalpha() for char in token)]) >= 2
+
+
+def title_looks_like_company_label(
+    current_title: str,
+    current_company: str,
+    brief: SearchBrief | None = None,
+) -> bool:
+    normalized_title = normalize_text(current_title)
+    if not normalized_title:
+        return False
+    title_tokens = set(normalized_title.split())
+    role_tokens = {
+        "ceo",
+        "chief",
+        "executive",
+        "officer",
+        "president",
+        "managing",
+        "director",
+        "general",
+        "manager",
+        "head",
+        "lead",
+        "founder",
+        "chairman",
+        "chairwoman",
+        "partner",
+        "principal",
+        "owner",
+    }
+    company_candidates = unique_preserving_order(
+        [
+            current_company,
+            *(brief.company_targets if brief else []),
+            *(getattr(brief, "sourcing_company_targets", []) if brief else []),
+        ]
+    )
+    if any(company_text_matches(current_title, [company]) for company in company_candidates if company):
+        if not title_tokens.intersection(role_tokens):
+            return True
+    company_label_tokens = {"experience", "furniture", "home", "homes", "interiors", "properties", "retail"}
+    if title_tokens.intersection(company_label_tokens) and not title_tokens.intersection(role_tokens):
+        return True
+    return False
+
+
 def evaluate_parser_confidence(candidate: CandidateProfile, brief: SearchBrief | None = None) -> tuple[float, List[str]]:
     notes: List[str] = []
     score = 0.0
@@ -1014,11 +1135,17 @@ def evaluate_parser_confidence(candidate: CandidateProfile, brief: SearchBrief |
     if candidate.raw:
         score += 0.05
 
+    if candidate.full_name and not looks_like_person_name(candidate.full_name):
+        score -= 0.45
+        notes.append("parser_confidence: invalid_person_name")
     normalized_title = normalize_text(candidate.current_title)
     normalized_company = normalize_text(candidate.current_company)
     if normalized_title and normalized_title == normalized_company:
         score -= 0.5
         notes.append("parser_confidence: title_equals_company")
+    if candidate.current_title and title_looks_like_company_label(candidate.current_title, candidate.current_company, brief):
+        score -= 0.45
+        notes.append("parser_confidence: title_looks_like_company")
     if normalized_company and looks_like_non_company_fragment(candidate.current_company, brief):
         score -= 0.35
         notes.append("parser_confidence: invalid_company_fragment")

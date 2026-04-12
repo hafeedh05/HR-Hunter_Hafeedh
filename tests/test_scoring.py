@@ -272,6 +272,68 @@ def test_score_candidate_avoids_generic_single_token_company_alias_false_positiv
     assert "The One" not in scored.matched_companies
 
 
+def test_score_candidate_treats_ceo_acronym_as_exact_exec_match() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-ceo-acronym-match-test",
+            "role_title": "Chief Executive Officer",
+            "titles": ["Chief Executive Officer", "Managing Director", "President"],
+            "company_targets": ["Al Huzaifa"],
+            "allow_adjacent_titles": False,
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Dubai", "United Arab Emirates"],
+            },
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Shiraz Jamaji",
+        current_title="CEO",
+        current_company="Al Huzaifa Furniture Industry",
+        location_name="Dubai, United Arab Emirates",
+        summary="Retail operator leading premium furniture growth in the GCC.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_target_company_match is True
+    assert scored.current_title_match is True
+    assert scored.current_function_fit >= 0.72
+
+
+def test_score_candidate_demotes_company_page_style_exec_result() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-company-page-style-exec-test",
+            "role_title": "Chief Executive Officer",
+            "titles": ["Chief Executive Officer", "Managing Director", "President"],
+            "company_targets": ["Marina Home Interiors"],
+            "allow_adjacent_titles": False,
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Dubai", "United Arab Emirates"],
+            },
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Marina Home Interiors",
+        current_title="Marina Home Interiors Retail Chain",
+        current_company="Marina Home Interiors",
+        location_name="Dubai, United Arab Emirates",
+        summary="Premium home furnishings retail chain.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_title_match is False
+    assert scored.parser_confidence < 0.25
+    assert "parser_confidence_too_low" in scored.cap_reasons
+
+
 def test_score_candidate_prefers_priority_geo_matches() -> None:
     brief = build_search_brief(
         {
