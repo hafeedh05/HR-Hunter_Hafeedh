@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HR Hunter</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260412inscope1" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260412scopefirst1" />
   </head>
   <body class="theme-bright">
     <div class="auth-shell" id="auth-shell">
@@ -259,10 +259,17 @@
               <div class="form-grid">
                 <div class="span-2">
                   <div class="inline-heading">
-                    <span>Target Companies</span>
-                    <span class="muted small">Current, past, or both.</span>
+                    <span>Must Current Companies</span>
+                    <span class="muted small">Use only when the candidate must currently work there.</span>
                   </div>
                   <div class="token-field" id="companies-field" data-placeholder="Add a target company"></div>
+                </div>
+                <div class="span-2">
+                  <div class="inline-heading">
+                    <span>Peer Companies to Source From</span>
+                    <span class="muted small">Comparable brands to source from without treating them as hard current-company gates.</span>
+                  </div>
+                  <div class="token-field" id="peer-companies-field" data-placeholder="Add a peer company"></div>
                 </div>
                 <label>
                   <span>Company Match Mode</span>

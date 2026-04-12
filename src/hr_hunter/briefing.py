@@ -312,6 +312,8 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
 
     titles = unique_preserving_order(config.get("titles", []))
     company_targets = unique_preserving_order(config.get("company_targets", []))
+    peer_company_targets = unique_preserving_order(config.get("peer_company_targets", []))
+    sourcing_company_targets = unique_preserving_order([*company_targets, *peer_company_targets])
     configured_title_keywords = unique_preserving_order(config.get("title_keywords", []))
     expand_title_keywords = bool(
         config.get("allow_adjacent_titles", config.get("expand_title_keywords", True))
@@ -342,7 +344,7 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
     if not summary and document_text:
         summary = "\n".join(document_text.splitlines()[:12])
 
-    company_aliases = merge_company_aliases(company_targets, config.get("company_aliases", {}))
+    company_aliases = merge_company_aliases(sourcing_company_targets, config.get("company_aliases", {}))
     brief_clarifications = (
         dict(config.get("brief_clarifications", {}))
         if isinstance(config.get("brief_clarifications", {}), dict)
@@ -357,6 +359,8 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
         titles=titles,
         title_keywords=title_keywords,
         company_targets=company_targets,
+        peer_company_targets=peer_company_targets,
+        sourcing_company_targets=sourcing_company_targets,
         company_aliases=company_aliases,
         geography=geography,
         required_keywords=unique_preserving_order(config.get("required_keywords", [])),
@@ -391,4 +395,7 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
         allow_adjacent_titles=expand_title_keywords,
         exact_company_scope=bool(brief_clarifications.get("exact_company_scope", False)),
         strict_market_scope=bool(brief_clarifications.get("strict_market_scope", False)),
+        scope_first_enabled=bool(config.get("scope_first_enabled", False)),
+        in_scope_target=max(0, int(config.get("in_scope_target", 0) or 0)),
+        verification_scope_target=max(0, int(config.get("verification_scope_target", 0) or 0)),
     )

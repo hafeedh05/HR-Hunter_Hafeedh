@@ -130,6 +130,9 @@ def test_should_stop_after_stagnant_top_up_when_near_target():
     assert _should_stop_after_stagnant_top_up(
         requested_limit=50,
         updated_unique_count=40,
+        updated_in_scope_count=40,
+        in_scope_target=40,
+        scope_first_enabled=True,
         top_up_rounds=1,
         stagnant_rounds=1,
     ) is True
@@ -139,6 +142,9 @@ def test_should_not_stop_after_single_stagnant_top_up_when_gap_is_still_large():
     assert _should_stop_after_stagnant_top_up(
         requested_limit=50,
         updated_unique_count=28,
+        updated_in_scope_count=10,
+        in_scope_target=35,
+        scope_first_enabled=True,
         top_up_rounds=1,
         stagnant_rounds=1,
     ) is False
@@ -153,6 +159,8 @@ def test_apply_strict_scope_shortlist_keeps_company_market_matches_only():
         titles=["Chief Executive Officer", "Managing Director", "President"],
         title_keywords=["Chief Executive Officer", "Managing Director", "President"],
         company_targets=["The One", "Marina Home Interiors"],
+        peer_company_targets=[],
+        sourcing_company_targets=["The One", "Marina Home Interiors"],
         company_aliases={},
         geography=GeoSpec(location_name="Dubai", country="United Arab Emirates", location_hints=["Dubai"]),
         required_keywords=[],
@@ -240,6 +248,8 @@ def test_finalize_report_for_limit_applies_strict_scope_shortlist_when_brief_pre
         titles=["Chief Executive Officer", "Managing Director", "President"],
         title_keywords=["Chief Executive Officer", "Managing Director", "President"],
         company_targets=["The One", "Marina Home Interiors"],
+        peer_company_targets=[],
+        sourcing_company_targets=["The One", "Marina Home Interiors"],
         company_aliases={},
         geography=GeoSpec(location_name="Dubai", country="United Arab Emirates", location_hints=["Dubai"]),
         required_keywords=[],

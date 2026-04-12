@@ -775,6 +775,7 @@ function initialiseTokenFields() {
     continents: new TokenField(document.getElementById("continents-field"), config.continents || [], { onChange: notifyBriefInputsChanged }),
     cities: new TokenField(document.getElementById("cities-field"), [], { onChange: notifyBriefInputsChanged }),
     companies: new TokenField(document.getElementById("companies-field"), [], { onChange: notifyBriefInputsChanged }),
+    peerCompanies: new TokenField(document.getElementById("peer-companies-field"), [], { onChange: notifyBriefInputsChanged }),
     mustHave: new TokenField(document.getElementById("must-have-field"), [], { onChange: notifyBriefInputsChanged }),
     niceToHave: new TokenField(document.getElementById("nice-to-have-field"), [], { onChange: notifyBriefInputsChanged }),
     industry: new TokenField(document.getElementById("industry-field"), [], { onChange: notifyBriefInputsChanged }),
@@ -886,6 +887,7 @@ function buildUiMeta(options = {}) {
     continents: state.tokenFields.continents.getTokens({ includePending }),
     cities: state.tokenFields.cities.getTokens({ includePending }),
     company_targets: state.tokenFields.companies.getTokens({ includePending }),
+    peer_company_targets: state.tokenFields.peerCompanies.getTokens({ includePending }),
     must_have_keywords: state.tokenFields.mustHave.getTokens({ includePending }),
     nice_to_have_keywords: state.tokenFields.niceToHave.getTokens({ includePending }),
     industry_keywords: state.tokenFields.industry.getTokens({ includePending }),
@@ -922,6 +924,7 @@ function buildBriefPayload(options = {}) {
     continents: uiMeta.continents,
     cities: uiMeta.cities,
     company_targets: uiMeta.company_targets,
+    peer_company_targets: uiMeta.peer_company_targets,
     company_match_mode: uiMeta.company_match_mode,
     employment_status_mode: uiMeta.employment_status_mode,
     years_mode: uiMeta.years_mode,
@@ -966,6 +969,7 @@ function assessHuntReadiness(briefPayload) {
   const mustHave = Array.isArray(briefPayload?.must_have_keywords) ? briefPayload.must_have_keywords.filter(Boolean) : [];
   const industry = Array.isArray(briefPayload?.industry_keywords) ? briefPayload.industry_keywords.filter(Boolean) : [];
   const companies = Array.isArray(briefPayload?.company_targets) ? briefPayload.company_targets.filter(Boolean) : [];
+  const peerCompanies = Array.isArray(briefPayload?.peer_company_targets) ? briefPayload.peer_company_targets.filter(Boolean) : [];
   const typedJD = String(briefPayload?.job_description || "").trim();
   const uploadedJD = String(briefPayload?.uploaded_job_description_text || "").trim();
   const jdText = uploadedJD || typedJD;
@@ -1006,7 +1010,7 @@ function assessHuntReadiness(briefPayload) {
     detailSignals += 1;
   }
 
-  if (companies.length >= 2) {
+  if ((companies.length + peerCompanies.length) >= 2) {
     score += 1;
     detailSignals += 1;
   }
@@ -1041,6 +1045,7 @@ function hasMeaningfulBriefInput(briefPayload) {
     || (Array.isArray(briefPayload.continents) && briefPayload.continents.length)
     || (Array.isArray(briefPayload.cities) && briefPayload.cities.length)
     || (Array.isArray(briefPayload.company_targets) && briefPayload.company_targets.length)
+    || (Array.isArray(briefPayload.peer_company_targets) && briefPayload.peer_company_targets.length)
     || (Array.isArray(briefPayload.must_have_keywords) && briefPayload.must_have_keywords.length)
     || String(briefPayload.job_description || "").trim()
     || String(briefPayload.uploaded_job_description_text || "").trim()
@@ -1257,6 +1262,7 @@ function formValuesFromProject(project) {
     continents: meta.continents || [],
     cities: meta.cities || (geography.location_name && geography.location_name !== geography.country ? [geography.location_name] : []),
     companyTargets: meta.company_targets || brief.company_targets || [],
+    peerCompanyTargets: meta.peer_company_targets || brief.peer_company_targets || [],
     mustHaveKeywords: meta.must_have_keywords || brief.required_keywords || [],
     niceToHaveKeywords: meta.nice_to_have_keywords || brief.preferred_keywords || [],
     industryKeywords: meta.industry_keywords || brief.industry_keywords || [],
@@ -1311,6 +1317,7 @@ function populateProjectForm(project) {
   state.tokenFields.continents.setTokens(values.continents);
   state.tokenFields.cities.setTokens(values.cities);
   state.tokenFields.companies.setTokens(values.companyTargets);
+  state.tokenFields.peerCompanies.setTokens(values.peerCompanyTargets);
   state.tokenFields.mustHave.setTokens(values.mustHaveKeywords);
   state.tokenFields.niceToHave.setTokens(values.niceToHaveKeywords);
   state.tokenFields.industry.setTokens(values.industryKeywords);
@@ -1649,6 +1656,8 @@ function runningJobProgress(job) {
   const createdAt = parseTimestamp(job?.started_at || job?.created_at);
   const elapsedFromClock = createdAt ? Math.max(0, (Date.now() - createdAt.getTime()) / 1000) : 0;
   const backendElapsed = safeNumber(backendProgress.elapsed_seconds, 0);
+  const backendEstimatedTotal = safeNumber(backendProgress.estimated_total_seconds, 0);
+  const backendEta = safeNumber(backendProgress.eta_seconds, Number.NaN);
   const elapsedSeconds = Math.max(elapsedFromClock, backendElapsed);
   const status = String(job?.status || "").toLowerCase();
   const stage = String(backendProgress.stage || status || "queued").toLowerCase();
@@ -1664,7 +1673,9 @@ function runningJobProgress(job) {
       || (stage === "finalizing" && finalizedCount <= 0));
   let estimatedSeconds = estimatedJobDurationSeconds(job, backendProgress, elapsedSeconds);
   const canProjectFromPercent =
-    explicitPercentUsable
+    !(backendEstimatedTotal > 0)
+    && !Number.isFinite(backendEta)
+    && explicitPercentUsable
     && explicitPercent >= 4
     && explicitPercent < 100
     && elapsedSeconds >= 8
@@ -1676,6 +1687,9 @@ function runningJobProgress(job) {
     const percentRatio = Math.max(0.04, Math.min(0.99, explicitPercent / 100));
     const projectedTotalFromPercent = elapsedSeconds / percentRatio;
     estimatedSeconds = Math.round((estimatedSeconds * 0.55) + (projectedTotalFromPercent * 0.45));
+  }
+  if (backendEstimatedTotal > 0) {
+    estimatedSeconds = Math.max(elapsedSeconds, Math.round(backendEstimatedTotal));
   }
   estimatedSeconds = Math.max(elapsedSeconds + (status === "completed" ? 0 : 2), estimatedSeconds);
   const rawPercent = estimatedSeconds > 0 ? (elapsedSeconds / estimatedSeconds) * 100 : 0;
@@ -1719,7 +1733,19 @@ function runningJobProgress(job) {
     .trim();
   const etaKnown = !(stage === "rerank" && rerankTarget > 0 && rerankedCount <= 0);
   const displayedEstimatedSeconds = etaKnown ? estimatedSeconds : 0;
-  const remainingSeconds = etaKnown ? Math.max(0, displayedEstimatedSeconds - elapsedSeconds) : 0;
+  const remainingSeconds = etaKnown
+    ? (
+      Number.isFinite(backendEta)
+        ? Math.max(0, Math.round(backendEta))
+        : Math.max(0, displayedEstimatedSeconds - elapsedSeconds)
+    )
+    : 0;
+  const inScopeCount = safeNumber(backendProgress.in_scope_count, 0);
+  const preciseInScopeCount = safeNumber(backendProgress.precise_in_scope_count, 0);
+  const verifiedCount = safeNumber(backendProgress.verified_count, 0);
+  const reviewCount = safeNumber(backendProgress.review_count, 0);
+  const rejectCount = safeNumber(backendProgress.reject_count, 0);
+  const verifyingCount = safeNumber(backendProgress.verifying_count, 0);
   return {
     elapsedSeconds,
     estimatedSeconds: displayedEstimatedSeconds,
@@ -1739,6 +1765,12 @@ function runningJobProgress(job) {
     rerankedCount,
     rerankTarget,
     finalizedCount,
+    inScopeCount,
+    preciseInScopeCount,
+    verifiedCount,
+    reviewCount,
+    rejectCount,
+    verifyingCount,
     stalledForSeconds,
     requested: jobRequestedLimit(job),
   };
@@ -1812,6 +1844,9 @@ function runningJobMarkup(job, options = {}) {
   const finalizedCounter = progress.finalizedCount > 0
     ? formatCounterValue(progress.finalizedCount)
     : (progress.stage === "completed" || progress.stage === "failed" ? "0" : "Pending");
+  const verifyingCounter = progress.verifyingCount > 0
+    ? formatCounterValue(progress.verifyingCount)
+    : (progress.stage === "verifying" ? "0" : "Pending");
   const etaValue = progress.etaKnown ? formatDuration(progress.remainingSeconds) : "Calculating...";
   const estimatedTotalValue = progress.etaKnown ? formatDuration(progress.estimatedSeconds) : "Calculating...";
   const stallNote = progress.stage === "retrieval" && progress.stalledForSeconds >= 20
@@ -1857,8 +1892,14 @@ function runningJobMarkup(job, options = {}) {
         <span><strong>In Flight</strong> ${escapeHtml(formatCounterValue(progress.queriesInFlight))}</span>
         <span><strong>Raw Found</strong> ${escapeHtml(formatCounterValue(progress.rawFound))}</span>
         <span><strong>Unique</strong> ${escapeHtml(formatCounterValue(progress.uniqueAfterDedupe))}</span>
+        <span><strong>In Scope</strong> ${escapeHtml(formatCounterValue(progress.inScopeCount))}</span>
+        <span><strong>Precise Scope</strong> ${escapeHtml(formatCounterValue(progress.preciseInScopeCount))}</span>
         <span><strong>Reranked</strong> ${escapeHtml(rerankedCounter)}</span>
         <span><strong>Finalized</strong> ${escapeHtml(finalizedCounter)}</span>
+        <span><strong>Verifying</strong> ${escapeHtml(verifyingCounter)}</span>
+        <span><strong>Verified</strong> ${escapeHtml(formatCounterValue(progress.verifiedCount))}</span>
+        <span><strong>Needs Review</strong> ${escapeHtml(formatCounterValue(progress.reviewCount))}</span>
+        <span><strong>Rejected</strong> ${escapeHtml(formatCounterValue(progress.rejectCount))}</span>
       </div>
       ${progress.message ? `<p class="muted small">${escapeHtml(progress.message)}</p>` : ""}
       ${stallNote ? `<p class="muted small">${escapeHtml(stallNote)}</p>` : ""}
@@ -3598,6 +3639,7 @@ function loadDemoBrief() {
   state.tokenFields.continents.setTokens(preset.continents || []);
   state.tokenFields.cities.setTokens(preset.cities || []);
   state.tokenFields.companies.setTokens(preset.company_targets || []);
+  state.tokenFields.peerCompanies.setTokens(preset.peer_company_targets || []);
   state.tokenFields.mustHave.setTokens(preset.must_have_keywords || []);
   state.tokenFields.niceToHave.setTokens(preset.nice_to_have_keywords || []);
   state.tokenFields.industry.setTokens(preset.industry_keywords || []);

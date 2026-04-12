@@ -22,9 +22,11 @@ from hr_hunter.config import (
 from hr_hunter.engine import SearchEngine, dedupe_candidates
 from hr_hunter.feedback import export_training_rows, init_feedback_db, load_ranker_training_rows, log_feedback
 from hr_hunter.output import (
+    build_scope_progress_counts,
     build_reporting_summary,
     collect_seen_candidate_keys,
     collect_seen_provider_queries,
+    prioritize_verification_candidates,
     write_report,
 )
 from hr_hunter.parsers.documents import extract_document_text_from_bytes
@@ -166,6 +168,38 @@ def _apply_strict_scope_shortlist(report, *, brief):
     return report
 
 
+def _resolve_scope_targets(
+    *,
+    payload: Dict[str, Any],
+    ui_payload: Dict[str, Any],
+    requested_limit: int,
+) -> Dict[str, int | bool]:
+    brief_config = dict(ui_payload.get("brief_config", {}) or {})
+    requested = max(1, int(requested_limit or 1))
+    scope_first_enabled = bool(
+        brief_config.get("scope_first_enabled", payload.get("scope_first_enabled", False))
+    )
+    in_scope_target = max(
+        0,
+        int(brief_config.get("in_scope_target", payload.get("in_scope_target", 0)) or 0),
+    )
+    verification_scope_target = max(
+        0,
+        int(
+            brief_config.get(
+                "verification_scope_target",
+                payload.get("verification_scope_target", 0),
+            )
+            or 0
+        ),
+    )
+    return {
+        "scope_first_enabled": scope_first_enabled,
+        "in_scope_target": min(requested, in_scope_target) if in_scope_target > 0 else 0,
+        "verification_scope_target": verification_scope_target,
+    }
+
+
 def _write_app_request(kind: str, payload: Dict[str, Any]) -> Dict[str, str]:
     output_root = resolve_output_dir() / "inbox"
     output_root.mkdir(parents=True, exist_ok=True)
@@ -237,6 +271,9 @@ def _should_stop_after_stagnant_top_up(
     *,
     requested_limit: int,
     updated_unique_count: int,
+    updated_in_scope_count: int,
+    in_scope_target: int,
+    scope_first_enabled: bool,
     top_up_rounds: int,
     stagnant_rounds: int,
 ) -> bool:
@@ -247,13 +284,19 @@ def _should_stop_after_stagnant_top_up(
     requested = max(1, int(requested_limit or 1))
     remaining_needed = max(0, requested - max(0, int(updated_unique_count or 0)))
     near_target_remaining = max(10, int(round(requested * 0.05)))
+    if scope_first_enabled and in_scope_target > 0:
+        remaining_in_scope = max(0, int(in_scope_target) - max(0, int(updated_in_scope_count or 0)))
+        near_scope_remaining = max(5, int(round(max(1, in_scope_target) * 0.08)))
+        if remaining_in_scope <= near_scope_remaining:
+            return True
     return remaining_needed <= near_target_remaining
 
 
-def _merge_ranked_report_candidates(report, supplemental_report):
+def _merge_ranked_report_candidates(report, supplemental_report, *, brief=None):
     report.provider_results = [*report.provider_results, *supplemental_report.provider_results]
     report.candidates = sort_candidates(
-        dedupe_candidates([*report.candidates, *supplemental_report.candidates])
+        dedupe_candidates([*report.candidates, *supplemental_report.candidates]),
+        brief,
     )
     return report
 
@@ -553,19 +596,33 @@ def create_app() -> "FastAPI":
         requested = max(1, int(requested_limit or 1))
         current_fetch_limit = max(requested, int(internal_fetch_limit or requested))
         current_unique_count = len(report.candidates)
+        scope_targets = _resolve_scope_targets(
+            payload=payload,
+            ui_payload=ui_payload,
+            requested_limit=requested,
+        )
+        scope_first_enabled = bool(scope_targets["scope_first_enabled"])
+        in_scope_target = int(scope_targets["in_scope_target"] or 0)
+        scope_counts = build_scope_progress_counts(report.candidates)
+        current_in_scope_count = int(scope_counts.get("in_scope_count", 0) or 0)
         top_up_rounds = 0
         top_up_notes: List[str] = []
         max_rounds = max(1, int(payload.get("top_up_max_rounds", 8) or 8))
         stagnant_rounds = 0
         source_exhausted = False
 
-        while current_unique_count < requested and top_up_rounds < max_rounds:
+        while top_up_rounds < max_rounds:
+            need_more_candidates = current_unique_count < requested
+            need_more_in_scope = bool(scope_first_enabled and in_scope_target > 0 and current_in_scope_count < in_scope_target)
+            if not need_more_candidates and not need_more_in_scope:
+                break
             next_fetch_limit = compute_top_up_fetch_limit(requested, current_fetch_limit)
             if next_fetch_limit <= current_fetch_limit and stagnant_rounds > 0:
                 break
 
             top_up_rounds += 1
             round_growth = 0
+            round_in_scope_growth = 0
             payload_override = dict(payload)
             payload_override["internal_fetch_limit_override"] = next_fetch_limit
             payload_override["top_up_round"] = top_up_rounds
@@ -582,7 +639,9 @@ def create_app() -> "FastAPI":
                         "round": top_up_rounds,
                         "target": requested,
                         "unique_after_dedupe": current_unique_count,
-                        "finalized_count": min(current_unique_count, requested),
+                        "finalized_count": 0,
+                        "in_scope_count": current_in_scope_count,
+                        "precise_in_scope_count": int(scope_counts.get("precise_in_scope_count", 0) or 0),
                     }
                 )
 
@@ -590,7 +649,7 @@ def create_app() -> "FastAPI":
                 try:
                     supplemental_report = await remote_client.run_search(payload_override, top_up_ui_payload)
                     before_merge = len(report.candidates)
-                    report = _merge_ranked_report_candidates(report, supplemental_report)
+                    report = _merge_ranked_report_candidates(report, supplemental_report, brief=top_up_brief)
                     round_growth += max(0, len(report.candidates) - before_merge)
                 except Exception as exc:
                     top_up_notes.append(f"Remote top-up failed: {exc}")
@@ -606,22 +665,35 @@ def create_app() -> "FastAPI":
                     progress_callback=progress_callback,
                 )
                 before_merge = len(report.candidates)
-                report = _merge_ranked_report_candidates(report, supplemental_report)
+                report = _merge_ranked_report_candidates(report, supplemental_report, brief=top_up_brief)
                 round_growth += max(0, len(report.candidates) - before_merge)
 
             current_fetch_limit = next_fetch_limit
             updated_unique_count = len(report.candidates)
-            if round_growth <= 0 or updated_unique_count <= current_unique_count:
+            scope_counts = build_scope_progress_counts(report.candidates)
+            updated_in_scope_count = int(scope_counts.get("in_scope_count", 0) or 0)
+            round_in_scope_growth = max(0, updated_in_scope_count - current_in_scope_count)
+            if (
+                round_growth <= 0
+                or updated_unique_count <= current_unique_count
+                or (need_more_in_scope and round_in_scope_growth <= 0)
+            ):
                 stagnant_rounds += 1
                 if _should_stop_after_stagnant_top_up(
                     requested_limit=requested,
                     updated_unique_count=updated_unique_count,
+                    updated_in_scope_count=updated_in_scope_count,
+                    in_scope_target=in_scope_target,
+                    scope_first_enabled=scope_first_enabled,
                     top_up_rounds=top_up_rounds,
                     stagnant_rounds=stagnant_rounds,
                 ):
                     source_exhausted = True
                     remaining_needed = max(0, requested - updated_unique_count)
-                    if remaining_needed <= max(10, int(round(requested * 0.05))):
+                    remaining_in_scope = max(0, in_scope_target - updated_in_scope_count) if scope_first_enabled else 0
+                    if remaining_needed <= max(10, int(round(requested * 0.05))) or (
+                        scope_first_enabled and remaining_in_scope <= max(5, int(round(max(1, in_scope_target) * 0.08)))
+                    ):
                         top_up_notes.append(
                             "Stopped after a stagnant top-up round because the remaining gap was small and no new unique candidates appeared."
                         )
@@ -629,6 +701,7 @@ def create_app() -> "FastAPI":
             else:
                 stagnant_rounds = 0
             current_unique_count = updated_unique_count
+            current_in_scope_count = updated_in_scope_count
 
         if top_up_rounds:
             summary = dict(report.summary or {})
@@ -636,6 +709,9 @@ def create_app() -> "FastAPI":
             summary["top_up_fetch_limit"] = current_fetch_limit
             summary["top_up_source_exhausted"] = bool(source_exhausted)
             summary["top_up_max_rounds"] = max_rounds
+            summary["scope_first_enabled"] = scope_first_enabled
+            summary["scope_first_in_scope_target"] = in_scope_target
+            summary["scope_first_in_scope_achieved"] = current_in_scope_count
             if top_up_notes:
                 summary["top_up_notes"] = top_up_notes[-3:]
             report.summary = summary
@@ -668,12 +744,18 @@ def create_app() -> "FastAPI":
                 "queries_in_flight": 0,
                 "raw_found": 0,
                 "unique_after_dedupe": 0,
+                "in_scope_count": 0,
+                "precise_in_scope_count": 0,
                 "reranked_count": 0,
                 "rerank_target": 0,
                 "finalized_count": 0,
                 "verified_candidates_checked": 0,
                 "verification_target": verification_target,
                 "verification_requests_used": 0,
+                "verifying_count": verification_target,
+                "verified_count": 0,
+                "review_count": 0,
+                "reject_count": 0,
                 "stage_elapsed_seconds": 0,
                 "estimated_total_seconds": 0,
                 "target": requested_limit,
@@ -800,12 +882,18 @@ def create_app() -> "FastAPI":
                         "queries_in_flight": int(latest_telemetry.get("queries_in_flight", 0) or 0),
                         "raw_found": int(latest_telemetry.get("raw_found", 0) or 0),
                         "unique_after_dedupe": int(latest_telemetry.get("unique_after_dedupe", 0) or 0),
+                        "in_scope_count": int(latest_telemetry.get("in_scope_count", 0) or 0),
+                        "precise_in_scope_count": int(latest_telemetry.get("precise_in_scope_count", 0) or 0),
                         "reranked_count": int(latest_telemetry.get("reranked_count", 0) or 0),
                         "rerank_target": int(latest_telemetry.get("rerank_target", 0) or 0),
                         "finalized_count": int(latest_telemetry.get("finalized_count", 0) or 0),
                         "verified_candidates_checked": int(latest_telemetry.get("verified_candidates_checked", 0) or 0),
                         "verification_target": int(latest_telemetry.get("verification_target", verification_target) or verification_target or 0),
                         "verification_requests_used": int(latest_telemetry.get("verification_requests_used", 0) or 0),
+                        "verifying_count": int(latest_telemetry.get("verifying_count", 0) or 0),
+                        "verified_count": int(latest_telemetry.get("verified_count", 0) or 0),
+                        "review_count": int(latest_telemetry.get("review_count", 0) or 0),
+                        "reject_count": int(latest_telemetry.get("reject_count", 0) or 0),
                         "stage_elapsed_seconds": int(latest_telemetry.get("stage_elapsed_seconds", 0) or 0),
                         "estimated_total_seconds": int(latest_telemetry.get("estimated_total_seconds", 0) or 0),
                         "eta_seconds": int(latest_telemetry.get("eta_seconds", 0) or 0),
@@ -835,9 +923,15 @@ def create_app() -> "FastAPI":
                 previous_queries_completed = 0 if round_reset else int(latest_telemetry.get("queries_completed", 0) or 0)
                 previous_raw_found = 0 if round_reset else int(latest_telemetry.get("raw_found", 0) or 0)
                 previous_unique = int(latest_telemetry.get("unique_after_dedupe", 0) or 0)
+                previous_in_scope = int(latest_telemetry.get("in_scope_count", 0) or 0)
+                previous_precise_in_scope = int(latest_telemetry.get("precise_in_scope_count", 0) or 0)
                 previous_reranked = int(latest_telemetry.get("reranked_count", 0) or 0)
                 previous_rerank_target = int(latest_telemetry.get("rerank_target", 0) or 0)
                 previous_finalized = int(latest_telemetry.get("finalized_count", 0) or 0)
+                previous_verified = int(latest_telemetry.get("verified_count", 0) or 0)
+                previous_review = int(latest_telemetry.get("review_count", 0) or 0)
+                previous_reject = int(latest_telemetry.get("reject_count", 0) or 0)
+                previous_verifying = int(latest_telemetry.get("verifying_count", 0) or 0)
 
                 queries_total = max(previous_queries_total, int(event.get("queries_total", previous_queries_total) or 0))
                 queries_completed = max(
@@ -853,6 +947,14 @@ def create_app() -> "FastAPI":
                 unique_after_dedupe = max(
                     previous_unique,
                     int(event.get("unique_after_dedupe", previous_unique) or 0),
+                )
+                in_scope_count = max(
+                    0,
+                    int(event.get("in_scope_count", previous_in_scope) or 0),
+                )
+                precise_in_scope_count = max(
+                    0,
+                    int(event.get("precise_in_scope_count", previous_precise_in_scope) or 0),
                 )
                 raw_found = max(
                     previous_raw_found,
@@ -884,6 +986,13 @@ def create_app() -> "FastAPI":
                     finalized_count = min(previous_finalized, max(0, requested_limit))
                 else:
                     finalized_count = min(raw_finalized_count, max(0, requested_limit))
+                verified_count = max(0, int(event.get("verified_count", previous_verified) or 0))
+                review_count = max(0, int(event.get("review_count", previous_review) or 0))
+                reject_count = max(0, int(event.get("reject_count", previous_reject) or 0))
+                verifying_count = max(
+                    0,
+                    int(event.get("verifying_count", previous_verifying) or 0),
+                )
                 estimated_total_seconds = int(event.get("estimated_total_seconds", latest_telemetry.get("estimated_total_seconds", 0)) or 0)
                 if stage in {"rerank", "verifying", "finalizing"}:
                     queries_in_flight = 0
@@ -905,9 +1014,15 @@ def create_app() -> "FastAPI":
                         "queries_in_flight": queries_in_flight,
                         "raw_found": raw_found,
                         "unique_after_dedupe": unique_after_dedupe,
+                        "in_scope_count": in_scope_count,
+                        "precise_in_scope_count": precise_in_scope_count,
                         "reranked_count": reranked_count,
                         "rerank_target": rerank_target,
                         "finalized_count": finalized_count,
+                        "verified_count": verified_count,
+                        "review_count": review_count,
+                        "reject_count": reject_count,
+                        "verifying_count": verifying_count,
                         "stage_elapsed_seconds": event.get("stage_elapsed_seconds"),
                         "estimated_total_seconds": estimated_total_seconds,
                         "round": round_number,
@@ -988,8 +1103,18 @@ def create_app() -> "FastAPI":
                 exclude_history_dirs=exclude_history_dirs,
                 progress_callback=_on_pipeline_progress,
             )
+            scope_targets = _resolve_scope_targets(
+                payload=payload,
+                ui_payload=ui_payload,
+                requested_limit=requested_limit,
+            )
+            scope_progress_counts = build_scope_progress_counts(report.candidates)
             verification_stats = None
             if verification_enabled and verification_target > 0:
+                report.candidates = prioritize_verification_candidates(
+                    report.candidates,
+                    company_required=bool(brief.company_targets),
+                )
                 verifier = PublicEvidenceVerifier(
                     {
                         **dict(brief.provider_settings.get("scrapingbee_google", {}) or {}),
@@ -1009,6 +1134,12 @@ def create_app() -> "FastAPI":
                                 "verification_target": total,
                                 "verified_candidates_checked": checked,
                                 "verification_requests_used": int(event.get("requests_used", 0) or 0),
+                                "verifying_count": int(event.get("verifying_count", max(0, total - checked)) or 0),
+                                "verified_count": int(event.get("verified_count", 0) or 0),
+                                "review_count": int(event.get("review_count", 0) or 0),
+                                "reject_count": int(event.get("reject_count", 0) or 0),
+                                "in_scope_count": int(scope_progress_counts.get("in_scope_count", 0) or 0),
+                                "precise_in_scope_count": int(scope_progress_counts.get("precise_in_scope_count", 0) or 0),
                                 "percent": max(92, min(98, 92 + int(round(coverage * 6)))),
                                 "message": (
                                     "Checking public evidence for top candidates. "
@@ -1026,6 +1157,12 @@ def create_app() -> "FastAPI":
                             "verification_target": verification_target,
                             "verified_candidates_checked": 0,
                             "verification_requests_used": 0,
+                            "verifying_count": verification_target,
+                            "verified_count": int(scope_progress_counts.get("verified_count", 0) or 0),
+                            "review_count": int(scope_progress_counts.get("review_count", 0) or 0),
+                            "reject_count": int(scope_progress_counts.get("reject_count", 0) or 0),
+                            "in_scope_count": int(scope_progress_counts.get("in_scope_count", 0) or 0),
+                            "precise_in_scope_count": int(scope_progress_counts.get("precise_in_scope_count", 0) or 0),
                             "percent": 92,
                             "message": "Checking public evidence for top candidates.",
                         },
@@ -1039,6 +1176,7 @@ def create_app() -> "FastAPI":
                         progress_callback=_on_verification_progress,
                     )
                     refresh_report_summary(report, verification_stats, brief=brief)
+                    scope_progress_counts = build_scope_progress_counts(report.candidates)
             report = _finalize_report_for_limit(
                 report,
                 requested_limit=requested_limit,
@@ -1064,6 +1202,12 @@ def create_app() -> "FastAPI":
                         (verification_stats or {}).get("requests_used", latest_telemetry.get("verification_requests_used", 0))
                         or 0
                     ),
+                    "verifying_count": 0,
+                    "verified_count": int(report.summary.get("verified_count", latest_telemetry.get("verified_count", 0)) or 0),
+                    "review_count": int(report.summary.get("review_count", latest_telemetry.get("review_count", 0)) or 0),
+                    "reject_count": int(report.summary.get("reject_count", latest_telemetry.get("reject_count", 0)) or 0),
+                    "in_scope_count": int(report.summary.get("in_scope_count", latest_telemetry.get("in_scope_count", 0)) or 0),
+                    "precise_in_scope_count": int(report.summary.get("precise_in_scope_count", latest_telemetry.get("precise_in_scope_count", 0)) or 0),
                     "message": "Persisting final results and artifacts.",
                 },
                 checkpoint_patch={"event": "finalizing"},

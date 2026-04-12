@@ -602,6 +602,69 @@ def build_reporting_summary(
     return summary
 
 
+def build_scope_progress_counts(
+    candidates: Iterable[CandidateProfile],
+) -> Dict[str, int]:
+    hydrated_candidates = [hydrate_candidate_reporting(candidate) for candidate in candidates]
+    return {
+        "in_scope_count": len([candidate for candidate in hydrated_candidates if candidate.in_scope]),
+        "precise_in_scope_count": len(
+            [candidate for candidate in hydrated_candidates if candidate.precise_market_in_scope]
+        ),
+        "title_match_count": len([candidate for candidate in hydrated_candidates if candidate.current_title_match]),
+        "market_match_count": len([candidate for candidate in hydrated_candidates if _candidate_market_match(candidate)]),
+        "verified_count": len(
+            [candidate for candidate in hydrated_candidates if candidate.verification_status == "verified"]
+        ),
+        "review_count": len(
+            [candidate for candidate in hydrated_candidates if candidate.verification_status == "review"]
+        ),
+        "reject_count": len(
+            [candidate for candidate in hydrated_candidates if candidate.verification_status == "reject"]
+        ),
+    }
+
+
+def prioritize_verification_candidates(
+    candidates: Iterable[CandidateProfile],
+    *,
+    company_required: bool,
+) -> List[CandidateProfile]:
+    hydrated_candidates = [hydrate_candidate_reporting(candidate) for candidate in candidates]
+    status_rank = {"verified": 0, "review": 1, "reject": 2}
+
+    def _priority_bucket(candidate: CandidateProfile) -> int:
+        if company_required and candidate.current_target_company_match and candidate.precise_market_in_scope:
+            return 0
+        if company_required and candidate.current_target_company_match and candidate.in_scope:
+            return 1
+        if candidate.precise_market_in_scope:
+            return 2
+        if candidate.in_scope:
+            return 3
+        if company_required and candidate.current_target_company_match and candidate.location_aligned:
+            return 4
+        if candidate.current_title_match and candidate.location_aligned:
+            return 5
+        if candidate.current_title_match:
+            return 6
+        if candidate.location_aligned:
+            return 7
+        return 9
+
+    return sorted(
+        hydrated_candidates,
+        key=lambda candidate: (
+            _priority_bucket(candidate),
+            status_rank.get(candidate.verification_status, 9),
+            -float(candidate.current_function_fit or 0.0),
+            -float(candidate.parser_confidence or 0.0),
+            -float(candidate.score or 0.0),
+            str(candidate.full_name or "").lower(),
+        ),
+    )
+
+
 def _diagnostic_issue(
     *,
     key: str,
@@ -723,6 +786,15 @@ def build_quality_diagnostics(
     unique_after_dedupe = int(pipeline_metrics.get("unique_after_dedupe", total) or total)
     raw_found = int(pipeline_metrics.get("raw_found", unique_after_dedupe) or unique_after_dedupe)
     scarcity_gap = max(0, target - unique_after_dedupe)
+    company_match_mode = str(base_summary.get("company_match_mode", "both") or "both").strip().lower()
+    exact_company_scope = company_match_mode == "current_only"
+    company_scope_gap_count = len(
+        [
+            candidate
+            for candidate in hydrated_candidates
+            if not candidate.current_target_company_match and candidate.location_aligned
+        ]
+    )
 
     issues: List[Dict[str, object]] = []
     if title_gap_count / max(1, total) >= 0.28:
@@ -794,6 +866,24 @@ def build_quality_diagnostics(
                 action=(
                     "Add more truly comparable companies and industry markers instead of broad sector labels that pull "
                     "in weak adjacencies."
+                ),
+            )
+        )
+    if exact_company_scope and company_scope_gap_count / max(1, total) >= 0.35:
+        issues.append(
+            _diagnostic_issue(
+                key="company_scope_too_strict",
+                label="Company scope may be too strict",
+                count=company_scope_gap_count,
+                total=total,
+                severity="medium",
+                message=(
+                    "Most shortlisted profiles miss the exact current-company requirement, which usually means peer "
+                    "companies are being treated as hard gates instead of sourcing hints."
+                ),
+                action=(
+                    "Use exact current companies only for true must-have employers. Move comparable brands into Peer "
+                    "Companies to Source From so HR Hunter can source broadly without faking company matches."
                 ),
             )
         )
@@ -877,8 +967,9 @@ def build_quality_diagnostics(
         "parser_confidence": 3,
         "weak_must_have_anchors": 4,
         "weak_company_or_industry_signals": 5,
-        "filters_too_strict": 6,
-        "filters_too_loose": 7,
+        "company_scope_too_strict": 6,
+        "filters_too_strict": 7,
+        "filters_too_loose": 8,
     }
     issues = sorted(
         issues,

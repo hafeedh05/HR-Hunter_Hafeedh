@@ -53,6 +53,7 @@ def _default_job_progress(*, target: int = 0, stage: str = "queued", status: str
         "retrieval": "Retrieval",
         "dedupe": "Dedupe",
         "rerank": "Rerank",
+        "verifying": "Verifying",
         "finalizing": "Finalizing",
         "completed": "Completed",
         "failed": "Failed",
@@ -64,12 +65,27 @@ def _default_job_progress(*, target: int = 0, stage: str = "queued", status: str
         "percent": 0 if normalized_stage not in {"completed"} else 100,
         "queries_completed": 0,
         "queries_total": 0,
+        "queries_in_flight": 0,
         "raw_found": 0,
         "unique_after_dedupe": 0,
+        "in_scope_count": 0,
+        "precise_in_scope_count": 0,
         "reranked_count": 0,
+        "rerank_target": 0,
         "finalized_count": 0,
+        "verified_candidates_checked": 0,
+        "verification_target": 0,
+        "verification_requests_used": 0,
+        "verifying_count": 0,
+        "verified_count": 0,
+        "review_count": 0,
+        "reject_count": 0,
         "target": max(0, int(target or 0)),
         "round": 0,
+        "elapsed_seconds": 0,
+        "stage_elapsed_seconds": 0,
+        "estimated_total_seconds": 0,
+        "eta_seconds": 0,
         "message": "",
         "updated_at": _now(),
     }
@@ -1132,12 +1148,42 @@ def complete_job(job_id: str, result: Dict[str, Any], *, db_path: Path | None = 
                 pipeline_metrics.get("unique_after_dedupe", progress.get("unique_after_dedupe", finalized_count))
                 or progress.get("unique_after_dedupe", finalized_count)
             ),
+            "in_scope_count": int(summary.get("in_scope_count", progress.get("in_scope_count", 0)) or 0),
+            "precise_in_scope_count": int(
+                summary.get("precise_in_scope_count", progress.get("precise_in_scope_count", 0)) or 0
+            ),
             "reranked_count": reranked_count,
             "rerank_target": max(rerank_target, reranked_count),
             "finalized_count": finalized_count,
+            "verified_candidates_checked": int(
+                summary.get(
+                    "verification_stats",
+                    {},
+                ).get("candidates_checked", progress.get("verified_candidates_checked", 0))
+                or 0
+            ),
+            "verification_target": int(
+                summary.get(
+                    "verification_stats",
+                    {},
+                ).get("candidates_checked", progress.get("verification_target", 0))
+                or progress.get("verification_target", 0)
+            ),
+            "verification_requests_used": int(
+                summary.get(
+                    "verification_stats",
+                    {},
+                ).get("requests_used", progress.get("verification_requests_used", 0))
+                or 0
+            ),
+            "verifying_count": 0,
+            "verified_count": int(summary.get("verified_count", progress.get("verified_count", 0)) or 0),
+            "review_count": int(summary.get("review_count", progress.get("review_count", 0)) or 0),
+            "reject_count": int(summary.get("reject_count", progress.get("reject_count", 0)) or 0),
             "elapsed_seconds": elapsed_seconds,
             "stage_elapsed_seconds": 0,
             "estimated_total_seconds": elapsed_seconds,
+            "eta_seconds": 0,
             "message": "Search job completed.",
             "updated_at": _now(),
         }

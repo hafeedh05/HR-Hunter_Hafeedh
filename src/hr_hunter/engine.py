@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Set
 
 from hr_hunter.identity import candidate_identity_keys, candidate_primary_key
 from hr_hunter.models import CandidateProfile, ProviderRunResult, SearchBrief, SearchRunReport
-from hr_hunter.output import build_reporting_summary
+from hr_hunter.output import build_reporting_summary, build_scope_progress_counts
 from hr_hunter.providers.mock import MockProvider
 from hr_hunter.providers.scrapingbee import ScrapingBeeGoogleProvider
 from hr_hunter.query_planner import build_search_slices
@@ -72,6 +72,15 @@ class SearchEngine:
         provider_query_completed: Dict[str, int] = {}
         provider_raw_found: Dict[str, int] = {}
         provider_queries_in_flight: Dict[str, int] = {}
+        last_scope_counts: Dict[str, int] = {
+            "in_scope_count": 0,
+            "precise_in_scope_count": 0,
+            "title_match_count": 0,
+            "market_match_count": 0,
+            "verified_count": 0,
+            "review_count": 0,
+            "reject_count": 0,
+        }
 
         def emit_progress(payload: Dict[str, Any]) -> None:
             if not progress_callback:
@@ -110,6 +119,7 @@ class SearchEngine:
                     "finalized_count": finalized_count,
                     "percent": max(0, min(99, int(percent))),
                     "stage_elapsed_seconds": elapsed_stage,
+                    **last_scope_counts,
                 }
                 if heartbeat_patch:
                     for key, value in heartbeat_patch(elapsed_stage).items():
@@ -133,6 +143,7 @@ class SearchEngine:
                 "finalized_count": 0,
                 "round": 0,
                 "percent": 5,
+                **last_scope_counts,
             }
         )
         memory_settings = brief.provider_settings.get("registry_memory", {})
@@ -158,6 +169,7 @@ class SearchEngine:
                     [score_candidate(candidate, brief) for candidate in dedupe_candidates(candidate_pool)],
                     brief,
                 )
+                last_scope_counts = build_scope_progress_counts(candidate_pool)
                 emit_progress(
                     {
                         "stage": "retrieval",
@@ -170,6 +182,7 @@ class SearchEngine:
                         "reranked_count": 0,
                         "finalized_count": 0,
                         "percent": 10,
+                        **last_scope_counts,
                     }
                 )
 
@@ -217,6 +230,7 @@ class SearchEngine:
                         "unique_after_dedupe": len(candidate_pool),
                         "reranked_count": 0,
                         "finalized_count": 0,
+                        **last_scope_counts,
                         "percent": max(
                             10,
                             min(
@@ -256,6 +270,7 @@ class SearchEngine:
                 excluded_seen_count += len(rescored_pool) - len(filtered_pool)
                 rescored_pool = filtered_pool
             candidate_pool = sort_candidates(rescored_pool, brief)
+            last_scope_counts = build_scope_progress_counts(candidate_pool)
             emit_progress(
                 {
                     "stage": "dedupe",
@@ -268,6 +283,7 @@ class SearchEngine:
                     "reranked_count": 0,
                     "finalized_count": 0,
                     "percent": 70 if not dry_run else 90,
+                    **last_scope_counts,
                 }
             )
 
@@ -334,6 +350,7 @@ class SearchEngine:
                     "finalized_count": 0,
                     "rerank_target": rerank_target_count,
                     "percent": 80,
+                    **last_scope_counts,
                 }
             )
             ranking_stage_message = "Applying semantic reranker to top candidates."
@@ -360,6 +377,7 @@ class SearchEngine:
                 len(candidate_pool),
                 max(semantic_reranked_count, int(brief.provider_settings.get("reranker", {}).get("top_n", 0) or 0)),
             )
+            last_scope_counts = build_scope_progress_counts(candidate_pool)
             emit_progress(
                 {
                     "stage": "rerank",
@@ -374,6 +392,7 @@ class SearchEngine:
                     "reranked_count": reranked_count,
                     "finalized_count": 0,
                     "percent": 92,
+                    **last_scope_counts,
                 }
             )
             candidate_pool = await run_blocking_stage(
@@ -385,21 +404,24 @@ class SearchEngine:
                 reranked_count=reranked_count,
                 finalized_count=0,
             )
+            last_scope_counts = build_scope_progress_counts(candidate_pool)
 
         final_candidates = attach_registry_metadata(candidate_pool[:limit])
+        last_scope_counts = build_scope_progress_counts(final_candidates)
         emit_progress(
                 {
-                    "stage": "finalizing",
-                    "stage_label": "Finalizing",
-                    "message": "Preparing final candidate set.",
+                    "stage": "rerank",
+                    "stage_label": "Rerank",
+                    "message": "Preparing verification shortlist.",
                     "queries_completed": sum(provider_query_completed.values()),
                     "queries_total": sum(provider_query_totals.values()),
                     "raw_found": sum(provider_raw_found.values()),
                     "queries_in_flight": 0,
                     "unique_after_dedupe": len(candidate_pool),
                     "reranked_count": reranked_count,
-                    "finalized_count": len(final_candidates),
-                    "percent": 95 if not dry_run else 100,
+                    "finalized_count": 0,
+                    "percent": 93 if not dry_run else 100,
+                    **last_scope_counts,
                 }
         )
         summary = self._build_summary(

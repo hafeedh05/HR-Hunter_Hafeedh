@@ -1210,6 +1210,66 @@ def _recommended_strict_market_scope(
     return False
 
 
+def _recommended_scope_first_enabled(
+    *,
+    search_profile: str,
+    executive_brief: bool,
+    common_volume_search: bool,
+    strict_market_scope: bool,
+    company_count: int,
+) -> bool:
+    if common_volume_search:
+        return True
+    if strict_market_scope:
+        return True
+    if executive_brief and company_count > 0:
+        return True
+    return search_profile == FOCUSED_SEARCH_PROFILE
+
+
+def _recommended_in_scope_target(
+    *,
+    limit: int,
+    executive_brief: bool,
+    company_count: int,
+    common_volume_search: bool,
+    search_profile: str,
+    strict_market_scope: bool,
+) -> int:
+    requested = max(1, int(limit or 1))
+    if requested <= 20:
+        return requested
+    if executive_brief and company_count > 0:
+        return min(requested, max(20, int(round(requested * 0.2))))
+    if common_volume_search:
+        return min(requested, max(50, int(round(requested * 0.6))))
+    if strict_market_scope:
+        return min(requested, max(25, int(round(requested * 0.5))))
+    if search_profile == FOCUSED_SEARCH_PROFILE:
+        return min(requested, max(20, int(round(requested * 0.45))))
+    return min(requested, max(15, int(round(requested * 0.35))))
+
+
+def _recommended_verification_scope_target(
+    *,
+    limit: int,
+    verification_top_n: int,
+    in_scope_target: int,
+    executive_brief: bool,
+) -> int:
+    requested = max(1, int(limit or 1))
+    verification_limit = max(0, int(verification_top_n or 0))
+    scope_target = max(0, int(in_scope_target or 0))
+    if verification_limit <= 0:
+        return 0
+    if executive_brief and requested >= 200:
+        return min(verification_limit, max(scope_target, 80))
+    return min(
+        verification_limit,
+        max(min(requested, 50), int(round(scope_target * 0.8))),
+    )
+
+
 def _default_query_family_budgets(
     *,
     search_profile: str,
@@ -1694,6 +1754,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     continents = parse_multi_value(payload.get("continents"))
     cities = parse_multi_value(payload.get("cities"))
     companies = parse_multi_value(payload.get("company_targets"))
+    peer_companies = parse_multi_value(payload.get("peer_company_targets"))
     exclude_titles = parse_multi_value(payload.get("exclude_title_keywords"))
     exclude_companies = parse_multi_value(payload.get("exclude_company_keywords"))
     must_have = parse_multi_value(payload.get("must_have_keywords"))
@@ -1964,6 +2025,35 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     verification_top_n = min(internal_fetch_limit, max(0, verification_top_n))
     if search_profile == FOCUSED_SEARCH_PROFILE:
         verification_top_n = min(verification_top_n, max(limit, 50))
+    scope_first_enabled = _coerce_bool(payload.get("scope_first_enabled"))
+    if scope_first_enabled is None:
+        scope_first_enabled = _recommended_scope_first_enabled(
+            search_profile=search_profile,
+            executive_brief=executive_brief,
+            common_volume_search=common_volume_search,
+            strict_market_scope=strict_market_scope,
+            company_count=len(companies),
+        )
+    in_scope_target = _coerce_int(payload.get("in_scope_target"))
+    if in_scope_target is None:
+        in_scope_target = _recommended_in_scope_target(
+            limit=limit,
+            executive_brief=executive_brief,
+            company_count=len(companies),
+            common_volume_search=common_volume_search,
+            search_profile=search_profile,
+            strict_market_scope=strict_market_scope,
+        )
+    in_scope_target = min(limit, max(0, int(in_scope_target or 0)))
+    verification_scope_target = _coerce_int(payload.get("verification_scope_target"))
+    if verification_scope_target is None:
+        verification_scope_target = _recommended_verification_scope_target(
+            limit=limit,
+            verification_top_n=verification_top_n,
+            in_scope_target=in_scope_target,
+            executive_brief=executive_brief,
+        )
+    verification_scope_target = min(max(0, int(verification_scope_target or 0)), max(verification_top_n, 0))
     verification_parallel_candidates = max(
         1,
         _coerce_int(payload.get("verification_parallel_candidates"))
@@ -2158,6 +2248,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "verification": {
             "enabled": bool(verification_enabled),
             "top_n": verification_top_n,
+            "scope_target": verification_scope_target,
             "parallel_candidates": verification_parallel_candidates,
             "country_code": str(payload.get("scrapingbee_country_code", "") or country_code or "us"),
             "queries_per_candidate": verification_queries_per_candidate,
@@ -2184,6 +2275,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "titles": titles,
         "expand_title_keywords": allow_adjacent_titles,
         "company_targets": companies,
+        "peer_company_targets": peer_companies,
         "geography": {
             "location_name": geography_location,
             "country": geography_country,
@@ -2219,12 +2311,16 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "result_target_max": max(limit, 40),
         "max_profiles": max(limit, 80),
         "provider_settings": providers_settings,
+        "scope_first_enabled": bool(scope_first_enabled),
+        "in_scope_target": in_scope_target,
+        "verification_scope_target": verification_scope_target,
         "ui_meta": {
             "titles": titles,
             "countries": countries,
             "continents": continents,
             "cities": cities,
             "company_targets": companies,
+            "peer_company_targets": peer_companies,
             "must_have_keywords": must_have,
             "nice_to_have_keywords": nice_to_have,
             "industry_keywords": industry_keywords,
@@ -2253,6 +2349,9 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "brief_clarifications": brief_clarifications,
             "top_up_round": top_up_round,
             "top_up_strategy": top_up_strategy["strategy"],
+            "scope_first_enabled": bool(scope_first_enabled),
+            "in_scope_target": in_scope_target,
+            "verification_scope_target": verification_scope_target,
             "keyword_tracks": {
                 "portfolio_keywords": portfolio_keywords,
                 "commercial_keywords": commercial_keywords,

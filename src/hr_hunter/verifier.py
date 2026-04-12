@@ -88,6 +88,14 @@ COMPANY_LOCATION_SOURCE_TERMS = (
     "head office",
     "ireland",
 )
+EXECUTIVE_TITLE_HINTS = (
+    "ceo",
+    "chief",
+    "president",
+    "managing director",
+    "vice president",
+    "vp",
+)
 
 
 def parse_year(value: str) -> int | None:
@@ -115,6 +123,26 @@ def company_aliases(candidate: CandidateProfile, brief: SearchBrief) -> List[str
         if company == candidate.current_company:
             aliases.extend(values)
     return unique_preserving_order([alias for alias in aliases if alias])
+
+
+def _is_title_market_priority_brief(brief: SearchBrief) -> bool:
+    normalized_role_scope = " ".join(
+        normalize_text(str(value))
+        for value in [brief.role_title, *brief.titles]
+        if normalize_text(str(value))
+    )
+    normalized_locations = {
+        normalize_text(str(value))
+        for value in [*brief.location_targets, brief.geography.location_name, brief.geography.country]
+        if normalize_text(str(value))
+    }
+    return (
+        not brief.company_targets
+        and bool(brief.titles)
+        and len(brief.titles) <= 3
+        and len(normalized_locations) <= 4
+        and not any(hint in normalized_role_scope for hint in EXECUTIVE_TITLE_HINTS)
+    )
 
 
 class PublicEvidenceVerifier:
@@ -860,6 +888,16 @@ class PublicEvidenceVerifier:
         if historical_only_records and not fresh_current_role_records:
             candidate.verification_notes.append("public evidence appears historical rather than current")
 
+        relaxed_industry_verification = (
+            _is_title_market_priority_brief(brief)
+            and candidate.current_employment_confirmed
+            and candidate.current_company_confirmed
+            and candidate.current_title_confirmed
+            and candidate.current_title_match
+            and candidate.current_location_confirmed
+            and candidate.precise_location_confirmed
+        )
+
         hard_verified = (
             candidate.current_employment_confirmed
             and candidate.current_company_confirmed
@@ -868,11 +906,19 @@ class PublicEvidenceVerifier:
             and candidate.precise_location_confirmed
             and (not brief.company_targets or candidate.current_target_company_match)
             and (not (brief.titles or brief.title_keywords) or candidate.current_title_match)
-            and (not brief.industry_keywords or candidate.industry_aligned)
+            and (
+                not brief.industry_keywords
+                or candidate.industry_aligned
+                or relaxed_industry_verification
+            )
         )
         if hard_verified:
             candidate.score = round(max(candidate.score, 72.0), 2)
             candidate.verification_notes.append("hard verification gate satisfied")
+            if relaxed_industry_verification and brief.industry_keywords and not candidate.industry_aligned:
+                candidate.verification_notes.append(
+                    "industry fit treated as supportive rather than mandatory because title, market, and current-role evidence are strong"
+                )
 
         cap_reasons = []
         if stale_data_risk:
@@ -928,6 +974,7 @@ class PublicEvidenceVerifier:
         request_count = 0
         verified_count = 0
         reviewed_count = 0
+        rejected_count = 0
         total = min(max(0, int(limit or 0)), len(candidates))
         if total <= 0:
             return {
@@ -935,6 +982,10 @@ class PublicEvidenceVerifier:
                 "requests_used": 0,
                 "promoted_to_verified": 0,
                 "promoted_to_review": 0,
+                "verified_count": 0,
+                "review_count": 0,
+                "reject_count": 0,
+                "verifying_count": 0,
             }
 
         checked_count = 0
@@ -956,13 +1007,23 @@ class PublicEvidenceVerifier:
                         "requests_used": request_count,
                         "promoted_to_verified": verified_count,
                         "promoted_to_review": reviewed_count,
+                        "verified_count": len(
+                            [candidate for candidate in candidates[:total] if candidate.verification_status == "verified"]
+                        ),
+                        "review_count": len(
+                            [candidate for candidate in candidates[:total] if candidate.verification_status == "review"]
+                        ),
+                        "reject_count": len(
+                            [candidate for candidate in candidates[:total] if candidate.verification_status == "reject"]
+                        ),
+                        "verifying_count": max(0, total - checked_count),
                     }
                 )
             except Exception:
                 return
 
         async def verify_one(candidate: CandidateProfile) -> None:
-            nonlocal checked_count, request_count, verified_count, reviewed_count
+            nonlocal checked_count, request_count, verified_count, reviewed_count, rejected_count
             before_status = candidate.verification_status
             evidence_records: List[EvidenceRecord] = []
             used_requests = 0
@@ -984,6 +1045,8 @@ class PublicEvidenceVerifier:
                     verified_count += 1
                 if candidate.verification_status == "review" and before_status == "reject":
                     reviewed_count += 1
+                if candidate.verification_status == "reject":
+                    rejected_count += 1
                 await emit_progress()
 
         await emit_progress()
@@ -994,6 +1057,10 @@ class PublicEvidenceVerifier:
             "requests_used": request_count,
             "promoted_to_verified": verified_count,
             "promoted_to_review": reviewed_count,
+            "verified_count": len([candidate for candidate in candidates[:total] if candidate.verification_status == "verified"]),
+            "review_count": len([candidate for candidate in candidates[:total] if candidate.verification_status == "review"]),
+            "reject_count": len([candidate for candidate in candidates[:total] if candidate.verification_status == "reject"]),
+            "verifying_count": 0,
         }
 
 

@@ -47,7 +47,8 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
         )
     )[:5]
 
-    company_chunks = chunked(brief.company_targets, chunk_size) or [[]]
+    source_companies = brief.sourcing_company_targets or brief.company_targets
+    company_chunks = chunked(source_companies, chunk_size) or [[]]
     slices: List[SearchSlice] = []
 
     for index, companies in enumerate(company_chunks, start=1):
