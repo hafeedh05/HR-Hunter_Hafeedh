@@ -3810,6 +3810,17 @@ async function completeSessionBootstrap(user, initialProjects = []) {
     renderResults();
     renderCandidates();
   }
+  try {
+    if (storedProject && state.projects.some((project) => project.id === storedProject)) {
+      await loadProject(storedProject);
+    } else {
+      startNewProject();
+      switchTab("projects");
+    }
+  } catch {
+    startNewProject();
+    switchTab("projects");
+  }
   const bootstrapTasks = [
     refreshUsers(),
     refreshProjects(state.projectSearchQuery),
@@ -3827,17 +3838,6 @@ async function completeSessionBootstrap(user, initialProjects = []) {
       );
     }
   });
-  try {
-    if (storedProject && state.projects.some((project) => project.id === storedProject)) {
-      await loadProject(storedProject);
-    } else {
-      startNewProject();
-      switchTab("projects");
-    }
-  } catch {
-    startNewProject();
-    switchTab("projects");
-  }
 }
 
 async function logout() {
