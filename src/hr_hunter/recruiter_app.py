@@ -2643,10 +2643,198 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "semantic": "preferred",
                 },
             },
+            "supply_chain_manager_uae": {
+                "project_name": "UAE Supply Chain Manager Search",
+                "client_name": "Demo Supply Chain Search",
+                "role_title": "Supply Chain Manager",
+                "titles": [
+                    "Supply Chain Manager",
+                    "Senior Supply Chain Manager",
+                    "Supply Planning Manager",
+                    "Demand Planning Manager",
+                ],
+                "countries": [
+                    "United Arab Emirates",
+                ],
+                "continents": [],
+                "cities": [
+                    "Dubai",
+                    "Abu Dhabi",
+                    "Sharjah",
+                    "Jebel Ali",
+                ],
+                "company_targets": [],
+                "peer_company_targets": [
+                    "Amazon",
+                    "noon",
+                    "Majid Al Futtaim",
+                    "Landmark Group",
+                    "talabat",
+                    "Careem",
+                    "Aramex",
+                    "DHL",
+                    "Unilever",
+                    "Nestle",
+                ],
+                "company_match_mode": "both",
+                "employment_status_mode": "any",
+                "years_mode": "plus_minus",
+                "years_value": 6,
+                "years_tolerance": 1,
+                "max_profiles": 300,
+                "must_have_keywords": [
+                    "S&OP",
+                    "Demand Planning",
+                    "Inventory Optimization",
+                    "Logistics",
+                    "ERP",
+                ],
+                "nice_to_have_keywords": [
+                    "Warehouse Operations",
+                    "Fulfillment",
+                    "3PL",
+                    "OTIF",
+                    "Procurement",
+                    "IBP",
+                    "Regional Distribution",
+                    "SAP",
+                ],
+                "industry_keywords": [
+                    "retail",
+                    "ecommerce",
+                    "consumer goods",
+                    "logistics",
+                    "distribution",
+                ],
+                "job_description": (
+                    "We are hiring a UAE-based Supply Chain Manager to lead planning, inventory, logistics, and "
+                    "fulfillment performance across a fast-moving retail and ecommerce network. The brief prioritizes "
+                    "candidates with strong public evidence of S&OP ownership, demand and supply planning, inventory "
+                    "optimization, ERP-led operations, and distribution or warehouse coordination in the UAE market. "
+                    "Experience scaling service levels across omnichannel retail, consumer goods, 3PL, or regional "
+                    "distribution environments is highly valuable."
+                ),
+                "brief_clarifications": {
+                    "prioritize_first_location": True,
+                    "allow_adjacent_titles": True,
+                    "strict_market_scope": True,
+                    "expand_search_when_thin": True,
+                },
+                "jd_breakdown": {
+                    **extract_job_description_breakdown(
+                        (
+                            "We are hiring a UAE-based Supply Chain Manager to lead planning, inventory, logistics, and "
+                            "fulfillment performance across a fast-moving retail and ecommerce network. The brief prioritizes "
+                            "candidates with strong public evidence of S&OP ownership, demand and supply planning, inventory "
+                            "optimization, ERP-led operations, and distribution or warehouse coordination in the UAE market. "
+                            "Experience scaling service levels across omnichannel retail, consumer goods, 3PL, or regional "
+                            "distribution environments is highly valuable."
+                        ),
+                        role_title="Supply Chain Manager",
+                    ),
+                    "titles": [
+                        "Supply Chain Manager",
+                        "Senior Supply Chain Manager",
+                        "Supply Planning Manager",
+                        "Demand Planning Manager",
+                    ],
+                    "required_keywords": [
+                        "s&op",
+                        "demand planning",
+                        "inventory optimization",
+                        "logistics",
+                        "erp",
+                    ],
+                    "preferred_keywords": [
+                        "warehouse operations",
+                        "fulfillment",
+                        "3pl",
+                        "otif",
+                        "procurement",
+                        "sap",
+                    ],
+                    "industry_keywords": [
+                        "retail",
+                        "ecommerce",
+                        "consumer goods",
+                        "logistics",
+                        "distribution",
+                    ],
+                    "years": {
+                        "mode": "plus_minus",
+                        "value": 6,
+                        "min": 5,
+                        "max": 7,
+                        "tolerance": 1,
+                    },
+                    "keyword_tracks": {
+                        "portfolio_keywords": [
+                            "inventory optimization",
+                            "warehouse operations",
+                            "regional distribution",
+                            "fulfillment",
+                        ],
+                        "commercial_keywords": [
+                            "service levels",
+                            "otif",
+                            "cost to serve",
+                            "stockouts",
+                        ],
+                        "leadership_keywords": [
+                            "cross-functional leadership",
+                            "supplier coordination",
+                            "operations leadership",
+                            "stakeholder management",
+                        ],
+                        "scope_keywords": [
+                            "uae",
+                            "dubai",
+                            "jebel ali",
+                            "regional distribution",
+                        ],
+                    },
+                    "search_tuning": {
+                        "internal_fetch_limit_override": 420,
+                        "reranker_top_n": 220,
+                        "provider_parallel_requests": 24,
+                        "scrapingbee_max_queries": 54,
+                        "max_geo_groups": 2,
+                        "geo_group_size": 1,
+                        "company_chunk_size": 4,
+                        "company_slice_location_group_limit": 1,
+                        "max_company_terms_per_query": 6,
+                        "stagnation_query_window": 8,
+                        "stagnation_min_results": 240,
+                        "include_history_slices": True,
+                        "include_discovery_slices": True,
+                        "verification_top_n": 160,
+                        "verification_parallel_candidates": 32,
+                        "verification_location_probe_queries": 1,
+                        "query_family_budgets": {
+                            "team_leadership_pages": 1,
+                            "appointment_news_pages": 3,
+                            "speaker_bio_pages": 1,
+                            "award_industry_pages": 0,
+                            "industry_association_pages": 2,
+                            "trade_directory_pages": 2,
+                            "org_chart_profile_pages": 2,
+                            "profile_like_public_pages": 18,
+                        },
+                    },
+                },
+                "anchors": {
+                    "title": "critical",
+                    "skills": "important",
+                    "location": "important",
+                    "company": "preferred",
+                    "years": "preferred",
+                    "industry": "important",
+                    "function": "important",
+                    "semantic": "preferred",
+                },
+            },
         },
     }
-    # Backward-compat alias for older UI keys.
-    bootstrap["presets"]["supply_chain_manager_uae"] = dict(bootstrap["presets"]["ceo_marina_home_emea"])
     return bootstrap
 
 

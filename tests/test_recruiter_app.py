@@ -186,6 +186,21 @@ def test_build_app_bootstrap_marina_preset_uses_peer_companies_for_sourcing() ->
     assert "The One" in preset["peer_company_targets"]
 
 
+def test_build_app_bootstrap_supply_chain_preset_is_distinct_from_ceo_demo() -> None:
+    bootstrap = build_app_bootstrap()
+    preset = bootstrap["presets"]["supply_chain_manager_uae"]
+
+    assert preset["role_title"] == "Supply Chain Manager"
+    assert preset["project_name"] != bootstrap["presets"]["ceo_marina_home_emea"]["project_name"]
+    assert preset["company_targets"] == []
+    assert "Marina Home Interiors" not in preset["job_description"]
+    assert "The One" not in preset["peer_company_targets"]
+    assert "Amazon" in preset["peer_company_targets"]
+    assert "S&OP" in preset["must_have_keywords"]
+    assert preset["brief_clarifications"]["strict_market_scope"] is True
+    assert preset["jd_breakdown"]["titles"][0] == "Supply Chain Manager"
+
+
 def test_build_app_bootstrap_can_enable_code_only_login(monkeypatch):
     monkeypatch.setenv("HR_HUNTER_CODE_ONLY_LOGIN", "true")
 

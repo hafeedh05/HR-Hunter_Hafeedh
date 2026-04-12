@@ -82,6 +82,11 @@ const state = {
   jobPollHandle: null,
   liveProgressHandle: null,
   jobPollFailureCount: 0,
+  projectLoadRequestId: 0,
+  latestJobRequestId: 0,
+  projectRunsRequestId: 0,
+  projectReviewsRequestId: 0,
+  projectRunRequestId: 0,
   tokenFields: {},
   projectSearchQuery: "",
   candidateSearchQuery: "",
@@ -1556,6 +1561,11 @@ function formatDuration(seconds) {
   return `${remainder}s`;
 }
 
+function runtimeTargetSeconds(requested) {
+  const normalizedRequested = Math.max(1, safeNumber(requested, 1));
+  return Math.max(60, Math.round(normalizedRequested * 3));
+}
+
 function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds = 0) {
   const requested = jobRequestedLimit(job);
   const stage = String(backendProgress.stage || job?.status || "").toLowerCase();
@@ -1629,14 +1639,15 @@ function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds =
     const projectedTotal = elapsedSeconds / Math.max(0.06, Math.min(0.99, explicitPercent / 100));
     return Math.max(elapsedSeconds + 6, Math.min(4 * 3600, Math.round(projectedTotal)));
   }
-  let estimate = queriesTotal > 0 ? Math.max(45, queriesTotal / 4.2) : 55 + requested * 1.2;
+  const targetRuntime = runtimeTargetSeconds(requested);
+  let estimate = queriesTotal > 0 ? Math.max(45, queriesTotal / 4.2) : Math.max(55, targetRuntime * 0.42);
   estimate += Math.max(15, Math.min(90, requested * 0.12));
   if (job?.payload?.include_discovery_slices) estimate += Math.max(25, requested * 0.18);
   if (job?.payload?.include_history_slices) estimate += Math.max(15, requested * 0.1);
   if (job?.payload?.registry_memory_enabled) estimate += 15;
   if (job?.payload?.reranker_enabled) estimate += Math.max(30, Math.min(160, requested * 0.35));
   if (job?.payload?.learned_ranker_enabled) estimate += Math.max(10, requested * 0.08);
-  return Math.max(90, Math.min(4 * 3600, Math.round(estimate)));
+  return Math.max(90, Math.min(4 * 3600, Math.round(Math.max(estimate, targetRuntime * 0.7))));
 }
 
 function jobProgressPayload(job) {
@@ -1654,13 +1665,17 @@ function formatCounterValue(value) {
 
 function runningJobProgress(job) {
   const backendProgress = jobProgressPayload(job);
-  const createdAt = parseTimestamp(job?.started_at || job?.created_at);
-  const elapsedFromClock = createdAt ? Math.max(0, (Date.now() - createdAt.getTime()) / 1000) : 0;
   const backendElapsed = safeNumber(backendProgress.elapsed_seconds, 0);
+  const completedElapsed = durationSecondsBetween(
+    job?.started_at || job?.created_at,
+    job?.finished_at || job?.heartbeat_at,
+  );
   const backendEstimatedTotal = safeNumber(backendProgress.estimated_total_seconds, 0);
   const backendEta = safeNumber(backendProgress.eta_seconds, Number.NaN);
-  const elapsedSeconds = Math.max(elapsedFromClock, backendElapsed);
   const status = String(job?.status || "").toLowerCase();
+  const elapsedSeconds = status === "completed"
+    ? Math.max(completedElapsed, backendElapsed)
+    : Math.max(0, backendElapsed);
   const stage = String(backendProgress.stage || status || "queued").toLowerCase();
   const lastProgressAt = parseTimestamp(backendProgress.updated_at || job?.heartbeat_at || job?.started_at || job?.created_at);
   const stalledForSeconds = lastProgressAt ? Math.max(0, (Date.now() - lastProgressAt.getTime()) / 1000) : 0;
@@ -1673,28 +1688,13 @@ function runningJobProgress(job) {
     && !((stage === "rerank" && rerankTarget > 0 && rerankedCount <= 0)
       || (stage === "finalizing" && finalizedCount <= 0));
   let estimatedSeconds = estimatedJobDurationSeconds(job, backendProgress, elapsedSeconds);
-  const canProjectFromPercent =
-    !(backendEstimatedTotal > 0)
-    && !Number.isFinite(backendEta)
-    && explicitPercentUsable
-    && explicitPercent >= 4
-    && explicitPercent < 100
-    && elapsedSeconds >= 8
-    && !(
-      stalledForSeconds >= 20
-      && (stage === "rerank" || stage === "finalizing" || stage === "retrieval")
-    );
-  if (canProjectFromPercent) {
-    const percentRatio = Math.max(0.04, Math.min(0.99, explicitPercent / 100));
-    const projectedTotalFromPercent = elapsedSeconds / percentRatio;
-    estimatedSeconds = Math.round((estimatedSeconds * 0.55) + (projectedTotalFromPercent * 0.45));
-  }
   if (backendEstimatedTotal > 0) {
     estimatedSeconds = Math.max(elapsedSeconds, Math.round(backendEstimatedTotal));
   }
   estimatedSeconds = Math.max(elapsedSeconds + (status === "completed" ? 0 : 2), estimatedSeconds);
-  const rawPercent = estimatedSeconds > 0 ? (elapsedSeconds / estimatedSeconds) * 100 : 0;
-  const elapsedFloorPercent = status === "queued" ? 4 : Math.max(3, Math.min(97, Math.round(rawPercent)));
+  const elapsedFloorPercent = status === "queued"
+    ? 4
+    : Math.max(3, Math.min(97, Math.round((elapsedSeconds / Math.max(elapsedSeconds, estimatedSeconds || 1)) * 100)));
   let progressPercent = explicitPercentUsable
     ? Math.max(1, Math.min(99, Math.round(explicitPercent)))
     : elapsedFloorPercent;
@@ -1716,15 +1716,12 @@ function runningJobProgress(job) {
   const rawFound = safeNumber(backendProgress.raw_found, 0);
   const uniqueAfterDedupe = safeNumber(backendProgress.unique_after_dedupe, 0);
   const stageElapsedRaw = safeNumber(backendProgress.stage_elapsed_seconds, 0);
-  const liveStageElapsed = isActiveJobStatus(status)
-    ? stageElapsedRaw + stalledForSeconds
-    : stageElapsedRaw;
   const stageElapsedFallback = ["completed", "failed"].includes(status) ? 0 : elapsedSeconds;
   const stageElapsedSeconds = Math.max(
     0,
     Math.min(
       elapsedSeconds,
-      Math.round(liveStageElapsed > 0 ? liveStageElapsed : stageElapsedFallback),
+      Math.round(stageElapsedRaw > 0 ? stageElapsedRaw : stageElapsedFallback),
     ),
   );
   const stageLabel = String(backendProgress.stage_label || titleCaseWords(stage || "queued"));
@@ -1747,6 +1744,10 @@ function runningJobProgress(job) {
   const reviewCount = safeNumber(backendProgress.review_count, 0);
   const rejectCount = safeNumber(backendProgress.reject_count, 0);
   const verifyingCount = safeNumber(backendProgress.verifying_count, 0);
+  const targetRuntime = Math.max(
+    runtimeTargetSeconds(jobRequestedLimit(job)),
+    safeNumber(backendProgress.target_runtime_seconds, 0),
+  );
   return {
     elapsedSeconds,
     estimatedSeconds: displayedEstimatedSeconds,
@@ -1774,6 +1775,7 @@ function runningJobProgress(job) {
     verifyingCount,
     stalledForSeconds,
     requested: jobRequestedLimit(job),
+    targetRuntimeSeconds: targetRuntime,
   };
 }
 
@@ -1791,6 +1793,40 @@ function latestCompletedSearchJobForCurrentReport() {
     return null;
   }
   return job;
+}
+
+function isCurrentProjectRequest(projectId, requestId = 0, stateKey = "") {
+  const normalizedProjectId = String(projectId || "").trim();
+  if (!normalizedProjectId || normalizedProjectId !== String(state.selectedProjectId || "").trim()) {
+    return false;
+  }
+  if (!stateKey || !requestId) {
+    return true;
+  }
+  return safeNumber(state[stateKey], 0) === safeNumber(requestId, 0);
+}
+
+function latestCompletedRunIdForProject(projectId, options = {}) {
+  const normalizedProjectId = String(projectId || "").trim();
+  if (!normalizedProjectId) {
+    return "";
+  }
+  const job = options.job || latestSearchJobForSelectedProject();
+  if (
+    job
+    && String(job?.job_type || "").toLowerCase() === "search"
+    && String(job?.status || "").toLowerCase() === "completed"
+    && jobProjectId(job) === normalizedProjectId
+    && String(job?.result?.run_id || "").trim()
+  ) {
+    return String(job.result.run_id).trim();
+  }
+  const runs = Array.isArray(options.runs) ? options.runs : state.currentRuns;
+  const firstRunId = String(runs?.[0]?.run_id || "").trim();
+  if (firstRunId) {
+    return firstRunId;
+  }
+  return "";
 }
 
 function resultsRunTiming() {
@@ -2927,8 +2963,13 @@ async function refreshOps() {
 }
 
 async function loadProject(projectId) {
-  if (!projectId) return;
+  if (!projectId) return null;
+  const selectionRequestId = safeNumber(state.projectLoadRequestId, 0) + 1;
+  state.projectLoadRequestId = selectionRequestId;
   const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}`);
+  if (selectionRequestId !== safeNumber(state.projectLoadRequestId, 0)) {
+    return null;
+  }
   state.selectedProjectId = payload.project.id;
   state.selectedProject = payload.project;
   state.currentReport = null;
@@ -2943,40 +2984,68 @@ async function loadProject(projectId) {
   renderResults();
   renderCandidates();
   updateTopbarActions();
-  await Promise.allSettled([
-    loadProjectRuns(projectId),
-    loadProjectReviews(projectId),
-    loadLatestProjectJob(projectId),
+  const [runsResult, reviewsResult, jobResult] = await Promise.allSettled([
+    loadProjectRuns(projectId, { suppressRender: true, selectionRequestId }),
+    loadProjectReviews(projectId, { suppressRender: true, selectionRequestId }),
+    loadLatestProjectJob(projectId, { suppressRender: true, selectionRequestId, skipReportSync: true }),
   ]);
-  const reportLoad = loadProjectRun(projectId, "", { timeoutMs: 5000, suppressErrors: true });
+  if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
+    return null;
+  }
+  renderHistory();
+  renderFeedback();
+  renderOwnerJobs();
+  renderResults();
+  renderCandidates();
+  syncLiveJobStatus();
+  const latestCompletedRunId = latestCompletedRunIdForProject(projectId, {
+    runs: runsResult.status === "fulfilled" ? runsResult.value : [],
+    job: jobResult.status === "fulfilled" ? jobResult.value : null,
+  });
+  const reportLoad = loadProjectRun(projectId, latestCompletedRunId, {
+    timeoutMs: 5000,
+    suppressErrors: true,
+    selectionRequestId,
+  });
   const failedJob = failedSearchJobForSelectedProject();
   const activeJob = activeSearchJobForSelectedProject();
-  if (!activeJob) {
-    await reportLoad;
+  await reportLoad;
+  if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
+    return null;
   }
   if (failedJob) {
     setStatus("Latest search failed.", "danger", `${failedJob.error || "The latest search did not complete successfully."} Retry when ready.`);
-    return;
+    return payload.project;
   }
   if (activeJob) {
     setStatus("Search still running.", "warning", `The latest search is ${titleCaseWords(activeJob.status)} for up to ${jobRequestedLimit(activeJob)} candidates.`);
-    return;
+    return payload.project;
   }
   setStatus(`${payload.project.name} loaded.`, "success", "The project brief, results, feedback, and history are ready.");
+  return payload.project;
 }
 
-async function loadLatestProjectJob(projectId) {
+async function loadLatestProjectJob(projectId, options = {}) {
+  const requestId = Math.max(1, safeNumber(options.selectionRequestId, 0) || (safeNumber(state.latestJobRequestId, 0) + 1));
+  state.latestJobRequestId = requestId;
   if (!projectId) {
-    state.activeJob = null;
-    clearJobPolling();
-    renderOwnerJobs();
-    renderResults();
-    renderCandidates();
-    renderStatusJobPanel(null);
+    if (!options.selectionRequestId || requestId === safeNumber(state.latestJobRequestId, 0)) {
+      state.activeJob = null;
+      clearJobPolling();
+      if (!options.suppressRender) {
+        renderOwnerJobs();
+        renderResults();
+        renderCandidates();
+        renderStatusJobPanel(null);
+      }
+    }
     return;
   }
   const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}/latest-job`);
   const incomingJob = payload?.job || null;
+  if (!isCurrentProjectRequest(projectId, requestId, "latestJobRequestId")) {
+    return incomingJob;
+  }
   const polledJobActive =
     Boolean(state.activeJob) &&
     state.activeJob.job_type === "search" &&
@@ -2997,43 +3066,87 @@ async function loadLatestProjectJob(projectId) {
   } else if (!incomingJob || !isActiveJobStatus(incomingJob.status)) {
     clearJobPolling();
   }
-  renderOwnerJobs();
-  renderResults();
-  renderCandidates();
-  syncLiveJobStatus();
+  if (!options.suppressRender) {
+    renderOwnerJobs();
+    renderResults();
+    renderCandidates();
+    syncLiveJobStatus();
+  }
+  const latestCompletedRunId = latestCompletedRunIdForProject(projectId, { job: incomingJob });
+  if (
+    !options.skipReportSync
+    && latestCompletedRunId
+    && String(state.currentReport?.run_id || "").trim() !== latestCompletedRunId
+  ) {
+    void loadProjectRun(projectId, latestCompletedRunId, {
+      suppressErrors: true,
+      selectionRequestId: safeNumber(options.selectionRequestId, 0),
+    });
+  }
+  return incomingJob;
 }
 
-async function loadProjectRuns(projectId) {
+async function loadProjectRuns(projectId, options = {}) {
+  const requestId = Math.max(1, safeNumber(options.selectionRequestId, 0) || (safeNumber(state.projectRunsRequestId, 0) + 1));
+  state.projectRunsRequestId = requestId;
   if (!projectId) {
-    state.currentRuns = [];
-    renderHistory();
-    return;
+    if (!options.selectionRequestId || requestId === safeNumber(state.projectRunsRequestId, 0)) {
+      state.currentRuns = [];
+      if (!options.suppressRender) {
+        renderHistory();
+      }
+    }
+    return [];
   }
   const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}/runs?limit=25`);
-  state.currentRuns = Array.isArray(payload.runs) ? payload.runs : [];
-  renderHistory();
+  const runs = Array.isArray(payload.runs) ? payload.runs : [];
+  if (!isCurrentProjectRequest(projectId, requestId, "projectRunsRequestId")) {
+    return runs;
+  }
+  state.currentRuns = runs;
+  if (!options.suppressRender) {
+    renderHistory();
+  }
+  return runs;
 }
 
-async function loadProjectReviews(projectId) {
+async function loadProjectReviews(projectId, options = {}) {
+  const requestId = Math.max(1, safeNumber(options.selectionRequestId, 0) || (safeNumber(state.projectReviewsRequestId, 0) + 1));
+  state.projectReviewsRequestId = requestId;
   if (!projectId) {
-    state.currentReviews = [];
-    renderFeedback();
-    return;
+    if (!options.selectionRequestId || requestId === safeNumber(state.projectReviewsRequestId, 0)) {
+      state.currentReviews = [];
+      if (!options.suppressRender) {
+        renderFeedback();
+      }
+    }
+    return [];
   }
   const payload = await fetchJSON(`/app/reviews?project_id=${encodeURIComponent(projectId)}&limit=50`);
-  state.currentReviews = Array.isArray(payload.reviews) ? payload.reviews : [];
-  renderFeedback();
+  const reviews = Array.isArray(payload.reviews) ? payload.reviews : [];
+  if (!isCurrentProjectRequest(projectId, requestId, "projectReviewsRequestId")) {
+    return reviews;
+  }
+  state.currentReviews = reviews;
+  if (!options.suppressRender) {
+    renderFeedback();
+  }
+  return reviews;
 }
 
 async function loadProjectRun(projectId, runId = "", options = {}) {
+  const requestId = Math.max(1, safeNumber(options.selectionRequestId, 0) || (safeNumber(state.projectRunRequestId, 0) + 1));
+  state.projectRunRequestId = requestId;
   if (!projectId) {
-    state.currentReport = null;
-    state.candidateSearchQuery = "";
-    state.candidateStatusFilter = "all";
-    state.candidateLocationFilter = "all";
-    state.selectedCandidateRef = "";
-    renderResults();
-    renderCandidates();
+    if (!options.selectionRequestId || requestId === safeNumber(state.projectRunRequestId, 0)) {
+      state.currentReport = null;
+      state.candidateSearchQuery = "";
+      state.candidateStatusFilter = "all";
+      state.candidateLocationFilter = "all";
+      state.selectedCandidateRef = "";
+      renderResults();
+      renderCandidates();
+    }
     return;
   }
   const query = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
@@ -3043,6 +3156,9 @@ async function loadProjectRun(projectId, runId = "", options = {}) {
       `/app/projects/${encodeURIComponent(projectId)}/run${query}`,
       timeoutMs > 0 ? { timeoutMs } : {},
     );
+    if (!isCurrentProjectRequest(projectId, requestId, "projectRunRequestId")) {
+      return null;
+    }
     state.currentReport = payload && payload.run_id ? payload : null;
     state.candidateSearchQuery = "";
     state.candidateStatusFilter = "all";
@@ -3052,6 +3168,9 @@ async function loadProjectRun(projectId, runId = "", options = {}) {
     renderCandidates();
     return state.currentReport;
   } catch (error) {
+    if (!isCurrentProjectRequest(projectId, requestId, "projectRunRequestId")) {
+      return null;
+    }
     if (!options.suppressErrors) {
       throw error;
     }

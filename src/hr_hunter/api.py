@@ -769,6 +769,7 @@ def create_app() -> "FastAPI":
             target_geography = _summarize_target_geography(ui_payload, brief)
             actor = _job_actor_from_payload(payload)
             last_progress_write = 0.0
+            runtime_target_seconds = max(60, int(round(max(1, requested_limit) * 3)))
             latest_telemetry: Dict[str, Any] = {
                 "stage": "running",
                 "stage_label": "Running",
@@ -791,6 +792,7 @@ def create_app() -> "FastAPI":
                 "reject_count": 0,
                 "stage_elapsed_seconds": 0,
                 "estimated_total_seconds": 0,
+                "target_runtime_seconds": runtime_target_seconds,
                 "target": requested_limit,
                 "round": 0,
                 "percent": 2,
@@ -879,6 +881,8 @@ def create_app() -> "FastAPI":
                 if not force and (now - last_progress_write) < 0.6:
                     return
                 patch_payload = {key: value for key, value in dict(patch or {}).items() if value is not None}
+                previous_stage = str(latest_telemetry.get("stage", "")).strip().lower() or "running"
+                previous_estimated_total = int(latest_telemetry.get("estimated_total_seconds", 0) or 0)
                 stage_name = str(patch_payload.get("stage", latest_telemetry.get("stage", ""))).strip().lower() or "running"
                 if stage_name != live_stage_name:
                     live_stage_name = stage_name
@@ -892,14 +896,26 @@ def create_app() -> "FastAPI":
                 patch_payload["stage_elapsed_seconds"] = stage_elapsed_seconds
                 latest_telemetry.update(patch_payload)
                 latest_telemetry["target"] = requested_limit
+                latest_telemetry["target_runtime_seconds"] = runtime_target_seconds
                 elapsed_seconds = max(0, int(now - job_started_monotonic))
                 latest_telemetry["elapsed_seconds"] = elapsed_seconds
                 stage = str(latest_telemetry.get("stage", "")).strip().lower() or "running"
                 projected_total_seconds = _project_total_runtime_seconds()
-                latest_telemetry["estimated_total_seconds"] = max(
+                computed_estimated_total = max(
                     elapsed_seconds + (0 if stage in {"completed", "failed"} else 2),
                     min(4 * 3600, max(0, int(projected_total_seconds or 0))),
                 )
+                if (
+                    previous_estimated_total > 0
+                    and stage == previous_stage
+                    and stage not in {"completed", "failed"}
+                ):
+                    smoothed_estimate = int(round((previous_estimated_total * 0.7) + (computed_estimated_total * 0.3)))
+                    computed_estimated_total = max(
+                        elapsed_seconds + 2,
+                        min(4 * 3600, smoothed_estimate),
+                    )
+                latest_telemetry["estimated_total_seconds"] = computed_estimated_total
                 latest_telemetry["eta_seconds"] = max(
                     0,
                     int(latest_telemetry["estimated_total_seconds"]) - elapsed_seconds,
@@ -930,6 +946,7 @@ def create_app() -> "FastAPI":
                         "stage_elapsed_seconds": int(latest_telemetry.get("stage_elapsed_seconds", 0) or 0),
                         "estimated_total_seconds": int(latest_telemetry.get("estimated_total_seconds", 0) or 0),
                         "eta_seconds": int(latest_telemetry.get("eta_seconds", 0) or 0),
+                        "target_runtime_seconds": runtime_target_seconds,
                         "requested_limit": requested_limit,
                         "internal_fetch_limit": internal_fetch_limit,
                         "round": int(latest_telemetry.get("round", 0) or 0),
@@ -1155,6 +1172,7 @@ def create_app() -> "FastAPI":
                 )
                 report.candidates = prepare_verification_candidate_order(
                     report.candidates,
+                    brief=brief,
                     company_required=bool(brief.company_targets),
                     verification_limit=verification_target,
                     scope_target=verification_scope_target,

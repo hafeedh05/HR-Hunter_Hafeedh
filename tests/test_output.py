@@ -1,3 +1,4 @@
+from hr_hunter.briefing import build_search_brief
 from hr_hunter.models import CandidateProfile
 from hr_hunter.output import (
     build_reporting_summary,
@@ -382,4 +383,70 @@ def test_prepare_verification_candidate_order_prefers_precise_scope_before_count
     assert [candidate.full_name for candidate in ordered[:2]] == [
         "Precise Scope",
         "Country Only Scope",
+    ]
+
+
+def test_prepare_verification_candidate_order_honors_title_market_priority_brief() -> None:
+    brief = build_search_brief(
+        {
+            "id": "verification-priority-test",
+            "role_title": "Supply Chain Manager",
+            "titles": [
+                "Supply Chain Manager",
+                "Senior Supply Chain Manager",
+            ],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "center_latitude": 25.2048,
+                "center_longitude": 55.2708,
+                "radius_miles": 25,
+            },
+        }
+    )
+
+    candidates = [
+        _candidate(
+            name="Title Match Weak Market",
+            status="review",
+            score=49.0,
+            current_title_match=True,
+            location_aligned=False,
+            location_bucket="outside_target_area",
+            parser_confidence=0.3,
+            evidence_quality_score=0.22,
+            skill_overlap_score=0.18,
+            current_function_fit=0.28,
+            years_fit_score=0.42,
+            industry_fit_score=0.32,
+            cap_reasons=["outside_target_area"],
+        ),
+        _candidate(
+            name="Strong Function Precise Market",
+            status="review",
+            score=61.0,
+            current_title_match=False,
+            location_aligned=True,
+            location_bucket="named_target_location",
+            parser_confidence=0.72,
+            evidence_quality_score=0.58,
+            skill_overlap_score=0.52,
+            current_function_fit=0.78,
+            years_fit_score=0.54,
+            industry_fit_score=0.41,
+            cap_reasons=[],
+        ),
+    ]
+
+    ordered = prepare_verification_candidate_order(
+        candidates,
+        brief=brief,
+        company_required=False,
+        verification_limit=2,
+        scope_target=0,
+    )
+
+    assert [candidate.full_name for candidate in ordered[:2]] == [
+        "Title Match Weak Market",
+        "Strong Function Precise Market",
     ]

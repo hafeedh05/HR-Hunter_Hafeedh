@@ -18,6 +18,7 @@ from hr_hunter.models import (
     CandidateProfile,
     EvidenceRecord,
     ProviderRunResult,
+    SearchBrief,
     SearchRunReport,
 )
 
@@ -624,6 +625,7 @@ def build_scope_progress_counts(
 def prioritize_verification_candidates(
     candidates: Iterable[CandidateProfile],
     *,
+    brief: SearchBrief | None = None,
     company_required: bool,
 ) -> List[CandidateProfile]:
     hydrated_candidates = [hydrate_candidate_reporting(candidate) for candidate in candidates]
@@ -632,7 +634,7 @@ def prioritize_verification_candidates(
         hydrated_candidates,
         key=lambda candidate: candidate_priority_sort_tuple(
             candidate,
-            None,
+            brief,
             phase="verification",
             company_required=company_required,
         ),
@@ -642,12 +644,14 @@ def prioritize_verification_candidates(
 def prepare_verification_candidate_order(
     candidates: Iterable[CandidateProfile],
     *,
+    brief: SearchBrief | None = None,
     company_required: bool,
     verification_limit: int,
     scope_target: int = 0,
 ) -> List[CandidateProfile]:
     prioritized = prioritize_verification_candidates(
         candidates,
+        brief=brief,
         company_required=company_required,
     )
     shortlist_limit = max(0, min(int(verification_limit or 0), len(prioritized)))
