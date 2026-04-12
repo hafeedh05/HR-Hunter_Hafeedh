@@ -76,6 +76,20 @@ def _stored_run_summary(summary_json: str, *, candidate_count: int) -> Dict[str,
     return summary
 
 
+def _candidate_report_payload(candidate: Any) -> Dict[str, Any]:
+    payload = asdict(candidate)
+    payload["experience"] = []
+    payload["evidence_records"] = []
+    raw_payload: Dict[str, Any] = {}
+    raw_source = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    registry = raw_source.get("registry") if isinstance(raw_source.get("registry"), dict) else {}
+    search_count = int(registry.get("search_count", 0) or 0)
+    if search_count > 0:
+        raw_payload["registry"] = {"search_count": search_count}
+    payload["raw"] = raw_payload
+    return payload
+
+
 def _project_status(value: str | None) -> str:
     normalized = str(value or "").strip().lower().replace(" ", "_")
     allowed = {item["id"] for item in PROJECT_STATUS_OPTIONS}
@@ -1407,8 +1421,8 @@ def get_project_run_report(
         "run_id": report.run_id,
         "brief_id": report.brief_id,
         "summary": report.summary,
-        "candidates": [asdict(candidate) for candidate in report.candidates],
-        "provider_results": [asdict(result) for result in report.provider_results],
+        "candidates": [_candidate_report_payload(candidate) for candidate in report.candidates],
+        "provider_results": [],
         "report_paths": {
             "json": str(report_path.resolve()),
             "csv": str(Path(str(row["report_csv_path"])).expanduser().resolve()) if str(row["report_csv_path"] or "").strip() else "",

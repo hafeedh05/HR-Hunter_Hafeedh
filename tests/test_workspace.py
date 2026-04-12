@@ -2,7 +2,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from hr_hunter.models import CandidateProfile, SearchRunReport
+from hr_hunter.models import CandidateProfile, EvidenceRecord, SearchRunReport
 from hr_hunter.output import write_report
 from hr_hunter.state import enqueue_job, load_job, start_job
 from hr_hunter.workspace import (
@@ -14,6 +14,7 @@ from hr_hunter.workspace import (
     delete_project_run,
     generate_totp_code,
     get_project,
+    get_project_run_report,
     get_user_totp_setup,
     init_workspace_db,
     list_project_runs,
@@ -501,6 +502,87 @@ def test_list_project_runs_uses_stored_summary_without_loading_artifact(tmp_path
     assert project_summary["latest_run_summary"]["verified_count"] == 1
     assert project_summary["latest_run_candidate_count"] == 1
     assert project_summary["latest_run_status"] == "completed"
+
+
+def test_get_project_run_report_trims_provider_and_candidate_payload(tmp_path: Path):
+    db_path = tmp_path / "workspace.db"
+    init_workspace_db(db_path)
+    admin_setup = get_user_totp_setup(email=DEFAULT_ADMIN_EMAIL, db_path=db_path)
+    admin = authenticate_user(
+        DEFAULT_ADMIN_EMAIL,
+        generate_totp_code(admin_setup["totp"]["secret"]),
+        db_path=db_path,
+    )["user"]
+
+    project = create_project(
+        admin,
+        name="Trimmed Run Payload",
+        client_name="Client",
+        role_title="Senior Data Analyst",
+        target_geography="UAE",
+        brief_json={"role_title": "Senior Data Analyst"},
+        db_path=db_path,
+    )
+
+    report = SearchRunReport(
+        run_id="workspace-trimmed-run",
+        brief_id="brief",
+        dry_run=False,
+        generated_at="2026-04-07T00:00:00+00:00",
+        provider_results=[],
+        candidates=[
+            CandidateProfile(
+                full_name="Verified Candidate",
+                verification_status="verified",
+                summary="Strong analyst profile",
+                score=82.0,
+                raw={"registry": {"search_count": 3}, "provider_payload": {"huge": "blob"}},
+                evidence_records=[EvidenceRecord(source_url="https://example.com")],
+            )
+        ],
+        summary={"verified_count": 1, "candidate_count": 1},
+    )
+    json_path, csv_path = write_report(report, tmp_path)
+
+    with sqlite3.connect(str(db_path)) as connection:
+        connection.execute(
+            """
+            INSERT INTO search_runs (
+                id, mandate_id, brief_id, org_id, status, execution_backend, provider_order_json,
+                summary_json, report_json_path, report_csv_path, dry_run, candidate_count,
+                accepted_count, limit_requested, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report.run_id,
+                project["id"],
+                "brief",
+                "local:project:" + project["id"],
+                "completed",
+                "local_engine",
+                json.dumps(["scrapingbee_google"]),
+                json.dumps(report.summary),
+                str(json_path),
+                str(csv_path),
+                0,
+                1,
+                1,
+                25,
+                "2026-04-07T09:00:00+00:00",
+                "2026-04-07T09:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "UPDATE projects SET latest_run_id = ?, latest_run_at = ? WHERE id = ?",
+            (report.run_id, "2026-04-07T09:00:00+00:00", project["id"]),
+        )
+
+    payload = get_project_run_report(admin, project_id=project["id"], run_id=report.run_id, db_path=db_path)
+
+    assert payload["provider_results"] == []
+    assert payload["candidates"][0]["raw"] == {"registry": {"search_count": 3}}
+    assert payload["candidates"][0]["evidence_records"] == []
+    assert payload["candidates"][0]["experience"] == []
 
 
 def test_rotating_user_totp_invalidates_old_code(tmp_path: Path):
