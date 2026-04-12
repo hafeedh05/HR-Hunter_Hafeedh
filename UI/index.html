@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HR Hunter</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260413demoopt4" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260413demoopt5" />
   </head>
   <body class="theme-bright">
     <div class="auth-shell" id="auth-shell">
@@ -943,7 +943,37 @@
         return false;
       };
     </script>
-    <script src="/assets/app.js?v=20260413demoopt4" defer></script>
+    <script>
+      (() => {
+        try {
+          const hasSession = Boolean(window.localStorage.getItem("hr-hunter-session-token"));
+          const stored = JSON.parse(window.localStorage.getItem("hr-hunter-ui-v3") || "{}");
+          const selectedProjectId = String(stored.selectedProjectId || "").trim();
+          if (!hasSession || !selectedProjectId) {
+            return;
+          }
+          const placeholder = (title, detail) => `
+            <div class="empty-state compact-empty">
+              <h4>${title}</h4>
+              <p>${detail}</p>
+            </div>
+          `;
+          const setMarkup = (id, title, detail) => {
+            const node = document.getElementById(id);
+            if (node) {
+              node.innerHTML = placeholder(title, detail);
+            }
+          };
+          setMarkup("results-summary", "Loading Latest Results", "Restoring the selected project and its latest run.");
+          setMarkup("candidates-summary", "Loading Candidate View", "Restoring the selected project and its latest candidate set.");
+          setMarkup("candidate-table-container", "Loading Candidate View", "Restoring the selected project and its latest candidate set.");
+          setMarkup("candidate-detail", "Loading Candidate Detail", "The latest candidate detail will appear here when the selected project finishes loading.");
+        } catch {
+          // Non-fatal. The main app will still restore the view once it boots.
+        }
+      })();
+    </script>
+    <script src="/assets/app.js?v=20260413demoopt5" defer></script>
     <script>
       // If the main bundle fails to load/parse, make that obvious instead of looking like "login is broken".
       window.setTimeout(() => {
