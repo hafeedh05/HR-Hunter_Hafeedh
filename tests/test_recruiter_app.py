@@ -279,6 +279,36 @@ def test_build_ui_brief_payload_supports_keyword_tracks_and_search_tuning_from_b
     assert brief["provider_settings"]["verification"]["parallel_candidates"] == 8
 
 
+def test_build_ui_brief_payload_supports_top_level_search_tuning_overrides() -> None:
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Chief Executive Officer (CEO)",
+            "titles": ["Chief Executive Officer", "Managing Director", "President"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "company_targets": ["Marina Home Interiors", "The One"],
+            "limit": 300,
+            "job_description": "Need a premium retail executive with exact-market focus.",
+            "search_tuning": {
+                "provider_parallel_requests": 20,
+                "scrapingbee_max_queries": 48,
+                "company_chunk_size": 4,
+                "company_slice_location_group_limit": 1,
+                "max_company_terms_per_query": 6,
+                "stagnation_query_window": 10,
+                "stagnation_min_results": 260,
+            },
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["provider_settings"]["scrapingbee_google"]["parallel_requests"] == 20
+    assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 48
+    assert brief["provider_settings"]["scrapingbee_google"]["company_slice_location_group_limit"] == 1
+    assert brief["provider_settings"]["scrapingbee_google"]["stagnation_query_window"] == 10
+    assert brief["provider_settings"]["retrieval"]["company_chunk_size"] == 4
+
+
 def test_build_ui_brief_payload_preserves_zero_verification_probe_overrides():
     payload = build_ui_brief_payload(
         {

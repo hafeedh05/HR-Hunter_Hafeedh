@@ -1705,9 +1705,16 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     keyword_tracks = breakdown.get("keyword_tracks", {})
     if not isinstance(keyword_tracks, dict):
         keyword_tracks = {}
-    search_tuning = breakdown.get("search_tuning", {})
-    if not isinstance(search_tuning, dict):
-        search_tuning = {}
+    breakdown_search_tuning = breakdown.get("search_tuning", {})
+    if not isinstance(breakdown_search_tuning, dict):
+        breakdown_search_tuning = {}
+    payload_search_tuning = payload.get("search_tuning", {})
+    if not isinstance(payload_search_tuning, dict):
+        payload_search_tuning = {}
+    search_tuning = {
+        **dict(breakdown_search_tuning),
+        **dict(payload_search_tuning),
+    }
 
     years_mode = str(payload.get("years_mode", breakdown.get("years", {}).get("mode", "range")) or "range")
     years_value = _coerce_int(payload.get("years_value"))
@@ -1879,13 +1886,15 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             ),
         ),
     )
-    scrapingbee_max_queries = max(
-        120,
+    explicit_scrapingbee_max_queries = (
         _coerce_int(payload.get("scrapingbee_max_queries"))
         or _coerce_int(search_tuning.get("scrapingbee_max_queries"))
-        or compute_provider_max_queries(limit),
     )
-    if search_profile == FOCUSED_SEARCH_PROFILE:
+    if explicit_scrapingbee_max_queries is not None:
+        scrapingbee_max_queries = max(1, explicit_scrapingbee_max_queries)
+    else:
+        scrapingbee_max_queries = max(120, compute_provider_max_queries(limit))
+    if search_profile == FOCUSED_SEARCH_PROFILE and explicit_scrapingbee_max_queries is None:
         scrapingbee_max_queries = min(scrapingbee_max_queries, max(90, limit * 2))
     default_geo_groups = 8 if limit >= 220 else (6 if limit >= 120 else 8)
     if search_profile == FOCUSED_SEARCH_PROFILE:
