@@ -2940,6 +2940,8 @@ async function loadProject(projectId) {
   populateProjectForm(payload.project);
   renderProjectSummary();
   renderProjectList();
+  renderResults();
+  renderCandidates();
   updateTopbarActions();
   await Promise.allSettled([
     loadProjectRuns(projectId),
