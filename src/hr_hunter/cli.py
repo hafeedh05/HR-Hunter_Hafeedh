@@ -228,7 +228,7 @@ async def run_search(args: argparse.Namespace) -> int:
         verifier = PublicEvidenceVerifier(brief.provider_settings.get("scrapingbee_google", {}))
         selected_candidates = report.candidates[: max(0, args.verify_top)]
         verification_stats = await verifier.verify_candidates(selected_candidates, brief, limit=args.verify_top)
-        refresh_report_summary(report, verification_stats)
+        refresh_report_summary(report, verification_stats, brief=brief)
 
     output_dir = resolve_output_dir(args.output_dir)
     json_path, csv_path = write_report(report, output_dir)
@@ -263,7 +263,7 @@ async def run_verify(args: argparse.Namespace) -> int:
 
     verifier = PublicEvidenceVerifier(brief.provider_settings.get("scrapingbee_google", {}))
     verification_stats = await verifier.verify_candidates(report.candidates, brief, limit=args.limit)
-    refresh_report_summary(report, verification_stats)
+    refresh_report_summary(report, verification_stats, brief=brief)
     report.run_id = f"{report.run_id}-verified"
 
     output_dir = resolve_output_dir(args.output_dir or str(Path(args.report).expanduser().resolve().parent))

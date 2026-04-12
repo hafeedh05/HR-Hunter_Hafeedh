@@ -17,6 +17,18 @@ RANKING_MODEL_VERSION = "heuristic-anchor-ranker-v2"
 LEARNED_RANKING_MODEL_PREFIX = "lightgbm-lambdarank"
 LEARNED_RANKER_MODEL_FILENAME = "model.txt"
 LEARNED_RANKER_METADATA_FILENAME = "metadata.json"
+EXECUTIVE_TITLE_HINTS = (
+    "ceo",
+    "chief",
+    "cmo",
+    "cto",
+    "coo",
+    "cfo",
+    "president",
+    "managing director",
+    "vice president",
+    "vp",
+)
 LEARNED_RANKER_FEATURES = [
     "title_similarity",
     "company_match",
@@ -127,6 +139,51 @@ def _is_focused_precision_brief(brief: SearchBrief) -> bool:
     )
 
 
+def _is_title_market_priority_brief(brief: SearchBrief) -> bool:
+    retrieval_settings = dict(brief.provider_settings.get("retrieval", {}) or {})
+    normalized_role_scope = " ".join(
+        normalize_text(str(value))
+        for value in [brief.role_title, *brief.titles]
+        if normalize_text(str(value))
+    )
+    normalized_locations = {
+        normalize_text(str(value))
+        for value in [*brief.location_targets, brief.geography.location_name, brief.geography.country]
+        if normalize_text(str(value))
+    }
+    return (
+        not brief.company_targets
+        and bool(brief.titles)
+        and len(brief.titles) <= 3
+        and len(normalized_locations) <= 4
+        and not any(hint in normalized_role_scope for hint in EXECUTIVE_TITLE_HINTS)
+        and not bool(retrieval_settings.get("include_history_slices", False))
+    )
+
+
+def _counts_as_market_match(location_bucket: str) -> bool:
+    return location_bucket in {
+        "within_radius",
+        "within_expanded_radius",
+        "priority_target_location",
+        "named_target_location",
+        "secondary_target_location",
+        "named_profile_location",
+        "country_only",
+    }
+
+
+def _counts_as_precise_market_match(location_bucket: str) -> bool:
+    return location_bucket in {
+        "within_radius",
+        "within_expanded_radius",
+        "priority_target_location",
+        "named_target_location",
+        "secondary_target_location",
+        "named_profile_location",
+    }
+
+
 def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResult:
     base_score, anchor_scores = _weighted_anchor_scores(features.feature_scores, brief.anchor_weights)
     score = base_score
@@ -150,6 +207,7 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
     outside_location_penalty = 10.0 if broad_location_scope else 25.0
     imprecise_location_penalty = 4.0 if broad_location_scope else 10.0
     focused_precision_brief = _is_focused_precision_brief(brief)
+    title_market_priority_brief = _is_title_market_priority_brief(brief)
     has_specific_location_target = any(
         normalize_text(str(value))
         and normalize_text(str(value)) != normalize_text(brief.geography.country)
@@ -157,7 +215,12 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
     )
     skill_overlap_score = float(features.feature_scores.get("skill_overlap", 0.0) or 0.0)
     current_function_fit_score = float(features.feature_scores.get("current_function_fit", 0.0) or 0.0)
+    years_fit_score = float(features.feature_scores.get("years_fit", 0.0) or 0.0)
+    parser_confidence = float(features.feature_scores.get("parser_confidence", 0.0) or 0.0)
     exact_role_anchor = bool(features.current_title_match and current_function_fit_score >= 0.72)
+    market_match = _counts_as_market_match(features.location_bucket)
+    precise_market_match = _counts_as_precise_market_match(features.location_bucket)
+    title_market_match = bool(features.current_title_match and market_match)
 
     if brief.company_targets:
         if company_mode == "current_only":
@@ -269,7 +332,6 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
         score -= min(15.0, float(features.low_seniority_hits * 6))
         notes.append("ranker_penalty: low_seniority")
 
-    parser_confidence = features.feature_scores.get("parser_confidence", 0.0)
     if parser_confidence < 0.25:
         score -= 18.0
         max_score = min(max_score, 49.0)
@@ -280,7 +342,10 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
         notes.append("ranker_penalty: parser_confidence_soft")
 
     if brief.industry_keywords and features.feature_scores.get("industry_fit", 0.0) <= 0.0:
-        score -= min(14.0, industry_weight * 14.0 or 12.0)
+        industry_penalty = min(14.0, industry_weight * 14.0 or 12.0)
+        if title_market_priority_brief and title_market_match:
+            industry_penalty = min(industry_penalty, 4.0)
+        score -= industry_penalty
         notes.append("ranker_penalty: industry_fit_missing")
 
     if employment_mode != "any":
@@ -328,6 +393,29 @@ def rank_candidate(features: FeatureBuildResult, brief: SearchBrief) -> RankResu
     ):
         score += 8.0
         notes.append("ranker_bonus: anchor_triple_match")
+
+    if title_market_priority_brief:
+        if title_market_match:
+            score += 10.0 if precise_market_match else 7.0
+            notes.append("ranker_bonus: title_market_match")
+        elif market_match and not features.current_title_match:
+            score -= 12.0
+            notes.append("ranker_penalty: title_missing_for_market_match")
+        elif features.current_title_match and features.location_bucket in {"unknown_location", "outside_target_area"}:
+            score -= 8.0
+            notes.append("ranker_penalty: market_unknown_for_exact_title")
+
+        if (
+            title_market_match
+            and current_function_fit_score >= 0.72
+            and parser_confidence >= 0.45
+            and years_fit_score > 0.0
+            and not features.off_function_blocked
+            and not features.exclude_hits
+        ):
+            review_floor = 54.0 if precise_market_match else 50.0
+            score = max(score, review_floor)
+            notes.append("ranker_floor: title_market_review")
 
     score = round(min(max(score, 0.0), max_score), 2)
     return RankResult(

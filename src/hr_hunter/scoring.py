@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
+from hr_hunter.briefing import normalize_text
 from hr_hunter.features import build_candidate_features
 from hr_hunter.models import CandidateProfile, SearchBrief
 from hr_hunter.ranker import rank_candidate, status_from_score
@@ -47,8 +48,77 @@ def score_candidate(candidate: CandidateProfile, brief: SearchBrief) -> Candidat
     return candidate
 
 
-def sort_candidates(candidates: List[CandidateProfile]) -> List[CandidateProfile]:
+def _is_title_market_priority_brief(brief: SearchBrief | None) -> bool:
+    if brief is None:
+        return False
+    normalized_role_scope = " ".join(
+        normalize_text(str(value))
+        for value in [brief.role_title, *brief.titles]
+        if normalize_text(str(value))
+    )
+    normalized_locations = {
+        normalize_text(str(value))
+        for value in [*brief.location_targets, brief.geography.location_name, brief.geography.country]
+        if normalize_text(str(value))
+    }
+    return (
+        not brief.company_targets
+        and bool(brief.titles)
+        and len(brief.titles) <= 3
+        and len(normalized_locations) <= 4
+        and not any(
+            hint in normalized_role_scope
+            for hint in ("ceo", "chief", "president", "managing director", "vice president", "vp")
+        )
+    )
+
+
+def _market_bucket_rank(candidate: CandidateProfile) -> int:
+    bucket = str(getattr(candidate, "location_precision_bucket", "") or "")
+    if bucket in {
+        "within_radius",
+        "within_expanded_radius",
+        "priority_target_location",
+        "named_target_location",
+        "secondary_target_location",
+        "named_profile_location",
+    }:
+        return 0
+    if bucket == "country_only":
+        return 1
+    if bucket == "unknown_location":
+        return 3
+    if bucket == "outside_target_area":
+        return 4
+    return 2
+
+
+def _title_market_bucket(candidate: CandidateProfile) -> int:
+    title_match = bool(getattr(candidate, "current_title_match", False))
+    market_rank = _market_bucket_rank(candidate)
+    if title_match and market_rank == 0:
+        return 0
+    if title_match and market_rank == 1:
+        return 1
+    if title_match:
+        return 2
+    if market_rank <= 1:
+        return 3
+    return 9
+
+
+def sort_candidates(candidates: List[CandidateProfile], brief: SearchBrief | None = None) -> List[CandidateProfile]:
     status_rank = {"verified": 0, "review": 1, "reject": 2}
+    if _is_title_market_priority_brief(brief):
+        return sorted(
+            candidates,
+            key=lambda candidate: (
+                _title_market_bucket(candidate),
+                status_rank.get(candidate.verification_status, 9),
+                -candidate.score,
+                candidate.full_name.lower(),
+            ),
+        )
     return sorted(
         candidates,
         key=lambda candidate: (

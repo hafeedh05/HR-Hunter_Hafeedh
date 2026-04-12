@@ -31,6 +31,13 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
     strict_skill_keywords = unique_preserving_order(
         brief.required_keywords + brief.preferred_keywords
     )[:4]
+    strict_precision_keywords = unique_preserving_order(
+        brief.required_keywords
+        + brief.preferred_keywords
+        + brief.industry_keywords
+        + brief.portfolio_keywords
+        + brief.commercial_keywords
+    )[:6]
     discovery_keyword_chunk_size = int(retrieval_settings.get("discovery_keyword_chunk_size", 6))
     market_keyword_chunk_size = int(retrieval_settings.get("market_keyword_chunk_size", 5))
     history_query_terms = unique_preserving_order(
@@ -70,6 +77,23 @@ def build_search_slices(brief: SearchBrief) -> List[SearchSlice]:
                         limit=slice_limit,
                     )
                 )
+                if not companies and strict_precision_keywords:
+                    for precision_index, keyword_group in enumerate(
+                        chunked(strict_precision_keywords, 2),
+                        start=1,
+                    ):
+                        slices.append(
+                            SearchSlice(
+                                id=f"strict-market-{precision_index}",
+                                description="Exact title + market signal precision slice",
+                                companies=[],
+                                titles=brief.titles,
+                                title_keywords=[],
+                                query_keywords=keyword_group,
+                                search_mode="strict",
+                                limit=slice_limit,
+                            )
+                        )
         if include_broad_slice:
             slices.append(
                 SearchSlice(

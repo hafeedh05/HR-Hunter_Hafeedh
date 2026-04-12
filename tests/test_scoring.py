@@ -513,6 +513,34 @@ def test_score_candidate_country_only_ireland_signal_caps_verified() -> None:
     assert scored.verification_status != "verified"
 
 
+def test_score_candidate_country_only_market_counts_as_aligned_for_country_brief() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-country-market-aligned-test",
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst"],
+            "geography": {
+                "country": "United Arab Emirates",
+            },
+            "required_keywords": ["SQL", "Python"],
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Country Match Analyst",
+        current_title="Data Analyst",
+        current_company="noon",
+        location_name="United Arab Emirates",
+        summary="SQL and Python data analyst supporting dashboards and reporting.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.location_precision_bucket == "country_only"
+    assert scored.location_aligned is True
+    assert scored.score >= 50.0
+
+
 def test_score_candidate_outside_search_area_is_rejected() -> None:
     brief = build_search_brief(
         {

@@ -1046,21 +1046,21 @@ FOCUSED_QUERY_FAMILY_BUDGETS = {
     "trade_directory_pages": 1,
 }
 FOCUSED_NON_EXECUTIVE_QUERY_FAMILY_BUDGETS = {
-    "profile_like_public_pages": 12,
-    "team_leadership_pages": 5,
-    "trade_directory_pages": 5,
-    "industry_association_pages": 4,
-    "org_chart_profile_pages": 3,
+    "profile_like_public_pages": 18,
+    "team_leadership_pages": 3,
+    "trade_directory_pages": 8,
+    "industry_association_pages": 6,
+    "org_chart_profile_pages": 1,
     "appointment_news_pages": 1,
     "speaker_bio_pages": 1,
     "award_industry_pages": 0,
 }
 FOCUSED_NON_EXECUTIVE_TOP_UP_QUERY_FAMILY_BUDGETS = {
-    "profile_like_public_pages": 9,
-    "trade_directory_pages": 4,
-    "industry_association_pages": 3,
+    "profile_like_public_pages": 14,
+    "trade_directory_pages": 6,
+    "industry_association_pages": 5,
     "team_leadership_pages": 2,
-    "org_chart_profile_pages": 1,
+    "org_chart_profile_pages": 0,
     "appointment_news_pages": 1,
     "speaker_bio_pages": 0,
     "award_industry_pages": 0,
@@ -1251,7 +1251,17 @@ def _derive_search_profile(
     executive_brief = _is_executive_brief(role_title, titles)
     location_count = len(location_targets)
     title_count = len(titles)
+    common_role_precision_search = (
+        not executive_brief
+        and not company_targets
+        and limit <= 120
+        and location_count <= 2
+        and title_count <= 3
+        and detail_signals >= 1
+    )
 
+    if common_role_precision_search:
+        return FOCUSED_SEARCH_PROFILE
     if (
         limit <= 60
         and location_count <= 2
@@ -1842,7 +1852,10 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         internal_fetch_override if internal_fetch_override is not None else compute_internal_fetch_limit(limit),
     )
     if search_profile == FOCUSED_SEARCH_PROFILE and internal_fetch_override is None:
-        internal_fetch_limit = min(internal_fetch_limit, max(limit * 2, limit + 50))
+        focused_fetch_cap = max(limit * 2, limit + 50)
+        if common_volume_search and limit >= 80:
+            focused_fetch_cap = max(focused_fetch_cap, min(260, limit + 140))
+        internal_fetch_limit = min(internal_fetch_limit, focused_fetch_cap)
     csv_export_limit = max(1, int(payload.get("csv_export_limit", limit) or limit))
     reranker_enabled = bool(payload.get("reranker_enabled", True))
     learned_ranker_enabled = bool(payload.get("learned_ranker_enabled", False))
@@ -1871,10 +1884,12 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         4,
         _coerce_int(payload.get("provider_parallel_requests"))
         or _coerce_int(search_tuning.get("provider_parallel_requests"))
+        or (10 if common_volume_search and limit >= 80 else 0)
         or (16 if limit >= 220 else (12 if limit >= 120 else 8)),
     )
     if search_profile == FOCUSED_SEARCH_PROFILE:
-        scrapingbee_parallel_requests = min(scrapingbee_parallel_requests, 8)
+        focused_parallel_cap = 10 if common_volume_search and limit >= 80 else 8
+        scrapingbee_parallel_requests = min(scrapingbee_parallel_requests, focused_parallel_cap)
     scrapingbee_pages_per_query = max(
         1,
         min(
@@ -1895,7 +1910,10 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     else:
         scrapingbee_max_queries = max(120, compute_provider_max_queries(limit))
     if search_profile == FOCUSED_SEARCH_PROFILE and explicit_scrapingbee_max_queries is None:
-        scrapingbee_max_queries = min(scrapingbee_max_queries, max(90, limit * 2))
+        focused_query_cap = max(90, limit * 2)
+        if common_volume_search and limit >= 80:
+            focused_query_cap = max(focused_query_cap, int(round(limit * 2.4)))
+        scrapingbee_max_queries = min(scrapingbee_max_queries, focused_query_cap)
     default_geo_groups = 8 if limit >= 220 else (6 if limit >= 120 else 8)
     if search_profile == FOCUSED_SEARCH_PROFILE:
         default_geo_groups = min(default_geo_groups, max(2, len(location_targets) or 2))

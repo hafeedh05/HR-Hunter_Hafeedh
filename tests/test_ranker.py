@@ -246,3 +246,33 @@ def test_focused_precision_brief_caps_exact_role_without_skill_proof_to_review()
     assert candidate.current_function_fit >= 0.72
     assert candidate.verification_status == "review"
     assert "required_skills_unconfirmed" in candidate.cap_reasons
+
+
+def test_title_market_priority_brief_promotes_exact_title_country_matches_even_with_sparse_industry() -> None:
+    brief = build_search_brief(
+        {
+            "id": "title-market-priority-brief",
+            "role_title": "Digital Marketing Manager",
+            "titles": ["Digital Marketing Manager"],
+            "geography": {"country": "United Arab Emirates"},
+            "required_keywords": ["Google Ads", "Meta Ads"],
+            "industry_keywords": ["ecommerce"],
+        }
+    )
+
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Country Match Marketer",
+            current_title="Digital Marketing Manager",
+            current_company="Retail Group",
+            location_name="United Arab Emirates",
+            linkedin_url="https://www.linkedin.com/in/country-match-marketer",
+            summary="Digital Marketing Manager leading paid media and performance growth.",
+        ),
+        brief,
+    )
+
+    assert candidate.location_precision_bucket == "country_only"
+    assert candidate.location_aligned is True
+    assert candidate.verification_status in {"review", "verified"}
+    assert "title_market_match" in " ".join(candidate.verification_notes)

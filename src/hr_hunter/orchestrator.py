@@ -245,7 +245,7 @@ async def run_search_matrix(
                 brief,
                 limit=strategy.verify_top,
             )
-            refresh_report_summary(strategy_report, strategy_verification_stats)
+            refresh_report_summary(strategy_report, strategy_verification_stats, brief=strategy_brief)
         _stamp_strategy_provenance(strategy_report, strategy, brief)
         strategy_report.candidates = [
             candidate
@@ -309,7 +309,7 @@ async def run_search_matrix(
     if verify_top and not dry_run:
         verifier = PublicEvidenceVerifier(primary_brief.provider_settings.get("scrapingbee_google", {}))
         verification_stats = await verifier.verify_candidates(matrix_report.candidates, primary_brief, limit=verify_top)
-        refresh_report_summary(matrix_report, verification_stats)
+        refresh_report_summary(matrix_report, verification_stats, brief=primary_brief)
         matrix_report.summary["strategy_runs"] = base_summary["strategy_runs"]
         matrix_report.summary["strategy_count"] = base_summary["strategy_count"]
         matrix_report.summary["primary_brief_id"] = base_summary["primary_brief_id"]

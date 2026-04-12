@@ -415,10 +415,35 @@ def test_build_ui_brief_payload_uses_broader_recommended_defaults_for_common_50_
     assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is True
     assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
     assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
-    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 12
-    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["trade_directory_pages"] == 5
-    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["industry_association_pages"] == 4
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 18
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["trade_directory_pages"] == 8
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["industry_association_pages"] == 6
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["award_industry_pages"] == 0
+
+
+def test_build_ui_brief_payload_keeps_common_100_candidate_searches_in_focused_precision_mode():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Digital Marketing Manager",
+            "titles": ["Digital Marketing Manager"],
+            "countries": ["United Arab Emirates"],
+            "must_have_keywords": ["Google Ads", "Meta Ads", "GA4"],
+            "preferred_keywords": ["Lead Generation"],
+            "industry_keywords": ["ecommerce"],
+            "job_description": "Need a Dubai-first digital marketing manager with strong paid media ownership.",
+            "limit": 100,
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["brief_search_profile"] == "focused"
+    assert payload["internal_fetch_limit"] == 240
+    assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 240
+    assert brief["provider_settings"]["scrapingbee_google"]["parallel_requests"] == 10
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 18
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["trade_directory_pages"] == 8
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["org_chart_profile_pages"] == 1
 
 
 def test_build_ui_brief_payload_does_not_auto_broaden_when_titles_are_already_explicit():
@@ -500,8 +525,8 @@ def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():
     assert brief["provider_settings"]["retrieval"]["max_geo_groups"] >= 4
     assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is True
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] >= 200
-    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 9
-    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["trade_directory_pages"] == 4
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 14
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["trade_directory_pages"] == 6
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["team_leadership_pages"] == 2
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["speaker_bio_pages"] == 0
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["award_industry_pages"] == 0

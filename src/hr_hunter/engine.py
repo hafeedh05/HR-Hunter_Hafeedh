@@ -154,7 +154,10 @@ class SearchEngine:
                     )
                 )
                 candidate_pool.extend(memory_candidates)
-                candidate_pool = sort_candidates([score_candidate(candidate, brief) for candidate in dedupe_candidates(candidate_pool)])
+                candidate_pool = sort_candidates(
+                    [score_candidate(candidate, brief) for candidate in dedupe_candidates(candidate_pool)],
+                    brief,
+                )
                 emit_progress(
                     {
                         "stage": "retrieval",
@@ -252,7 +255,7 @@ class SearchEngine:
                 ]
                 excluded_seen_count += len(rescored_pool) - len(filtered_pool)
                 rescored_pool = filtered_pool
-            candidate_pool = sort_candidates(rescored_pool)
+            candidate_pool = sort_candidates(rescored_pool, brief)
             emit_progress(
                 {
                     "stage": "dedupe",
@@ -344,7 +347,8 @@ class SearchEngine:
                         brief,
                         candidate_pool,
                         progress_callback=_semantic_rerank_progress,
-                    )
+                    ),
+                    brief,
                 ),
                 reranked_count=0,
                 finalized_count=0,
@@ -377,7 +381,7 @@ class SearchEngine:
                 stage_label="Rerank",
                 message="Applying trained model from feedback.",
                 percent=90,
-                worker=lambda: sort_candidates(apply_learned_ranker(brief, candidate_pool)),
+                worker=lambda: sort_candidates(apply_learned_ranker(brief, candidate_pool), brief),
                 reranked_count=reranked_count,
                 finalized_count=0,
             )

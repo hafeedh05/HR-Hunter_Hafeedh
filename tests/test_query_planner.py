@@ -190,9 +190,16 @@ def test_query_planner_adds_strict_skill_slice_for_focused_brief() -> None:
 
     slices = build_search_slices(brief)
 
-    assert [slice_config.id for slice_config in slices] == ["strict-1", "strict-skills-1"]
-    assert slices[1].search_mode == "strict"
+    assert [slice_config.id for slice_config in slices] == [
+        "strict-1",
+        "strict-skills-1",
+        "strict-market-1",
+        "strict-market-2",
+    ]
+    assert all(slice_config.search_mode == "strict" for slice_config in slices)
     assert slices[1].query_keywords == ["Google Ads", "Meta Ads", "GA4", "Lead Generation"]
+    assert slices[2].query_keywords == ["Google Ads", "Meta Ads"]
+    assert slices[3].query_keywords == ["GA4", "Lead Generation"]
 
 
 def test_query_planner_skips_history_slices_without_company_targets() -> None:

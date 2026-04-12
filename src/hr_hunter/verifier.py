@@ -997,7 +997,12 @@ class PublicEvidenceVerifier:
         }
 
 
-def refresh_report_summary(report: SearchRunReport, verification_stats: Dict[str, Any] | None = None) -> None:
+def refresh_report_summary(
+    report: SearchRunReport,
+    verification_stats: Dict[str, Any] | None = None,
+    *,
+    brief: SearchBrief | None = None,
+) -> None:
     verified = len([candidate for candidate in report.candidates if candidate.verification_status == "verified"])
     review = len([candidate for candidate in report.candidates if candidate.verification_status == "review"])
     rejected = len([candidate for candidate in report.candidates if candidate.verification_status == "reject"])
@@ -1008,7 +1013,7 @@ def refresh_report_summary(report: SearchRunReport, verification_stats: Dict[str
         [candidate for candidate in report.candidates if candidate.evidence_verdict == "supported"]
     )
 
-    report.candidates = sort_candidates(report.candidates)
+    report.candidates = sort_candidates(report.candidates, brief)
     report.summary.update(
         {
             "candidate_count": len(report.candidates),

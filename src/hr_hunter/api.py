@@ -252,7 +252,9 @@ def _should_stop_after_stagnant_top_up(
 
 def _merge_ranked_report_candidates(report, supplemental_report):
     report.provider_results = [*report.provider_results, *supplemental_report.provider_results]
-    report.candidates = sort_candidates(dedupe_candidates([*report.candidates, *supplemental_report.candidates]))
+    report.candidates = sort_candidates(
+        dedupe_candidates([*report.candidates, *supplemental_report.candidates])
+    )
     return report
 
 
@@ -1036,7 +1038,7 @@ def create_app() -> "FastAPI":
                         limit=verification_target,
                         progress_callback=_on_verification_progress,
                     )
-                    refresh_report_summary(report, verification_stats)
+                    refresh_report_summary(report, verification_stats, brief=brief)
             report = _finalize_report_for_limit(
                 report,
                 requested_limit=requested_limit,

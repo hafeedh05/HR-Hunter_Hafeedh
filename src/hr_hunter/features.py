@@ -727,6 +727,7 @@ def evaluate_location_match(candidate: CandidateProfile, brief: SearchBrief) -> 
         if normalize_text(hint)
         and normalize_text(hint) != normalize_text(brief.geography.country)
     ]
+    precise_market_required = bool(specific_hints)
     matched_hint = next(
         (hint for hint in specific_hints if normalize_text(hint) in location_haystack),
         "",
@@ -750,8 +751,11 @@ def evaluate_location_match(candidate: CandidateProfile, brief: SearchBrief) -> 
         if candidate.location_name and normalize_text(candidate.location_name) != normalize_text(brief.geography.country):
             notes.append("location_match: named_profile_location")
             return 0.68, "named_profile_location", True, notes
+        if not precise_market_required:
+            notes.append("location_match: country_only")
+            return 0.72, "country_only", True, notes
         notes.append("location_match: country_only")
-        return 0.35, "country_only", False, notes
+        return 0.4, "country_only", False, notes
     if candidate.location_name:
         notes.append("location_match: outside_target_area")
         return 0.0, "outside_target_area", False, notes
