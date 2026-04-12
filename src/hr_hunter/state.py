@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
 from hr_hunter.briefing import normalize_text
-from hr_hunter.db import connect_database, describe_database_target, resolve_database_target
+from hr_hunter.db import (
+    connect_database,
+    describe_database_target,
+    redact_database_locator,
+    resolve_database_target,
+)
 from hr_hunter.identity import candidate_primary_key
 from hr_hunter.models import CandidateProfile, SearchBrief, SearchRunReport
 from hr_hunter.output import load_report
@@ -42,6 +47,39 @@ def _json_object(value: Any) -> Dict[str, Any]:
     except Exception:
         parsed = {}
     return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _sanitize_database_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: Dict[str, Any] = {}
+        for key, nested in value.items():
+            if key in {"db_path", "display_locator", "locator"} and isinstance(nested, str):
+                sanitized[key] = redact_database_locator(nested)
+            else:
+                sanitized[key] = _sanitize_database_fields(nested)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_database_fields(item) for item in value]
+    return value
+
+
+def _job_record_from_row(row: Any) -> Dict[str, Any]:
+    return _sanitize_database_fields(
+        {
+            "job_id": row["id"],
+            "job_type": row["job_type"],
+            "status": row["status"],
+            "payload": json.loads(row["payload_json"] or "{}"),
+            "result": json.loads(row["result_json"] or "{}"),
+            "progress": _json_object(row["progress_json"]),
+            "checkpoint": _json_object(row["checkpoint_json"]),
+            "error": row["error_text"],
+            "created_at": row["created_at"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+            "heartbeat_at": row["heartbeat_at"],
+        }
+    )
 
 
 def _default_job_progress(*, target: int = 0, stage: str = "queued", status: str = "queued") -> Dict[str, Any]:
@@ -1291,20 +1329,7 @@ def load_job(job_id: str, *, db_path: Path | None = None) -> Dict[str, Any] | No
         ).fetchone()
     if not row:
         return None
-    return {
-        "job_id": row["id"],
-        "job_type": row["job_type"],
-        "status": row["status"],
-        "payload": json.loads(row["payload_json"] or "{}"),
-        "result": json.loads(row["result_json"] or "{}"),
-        "progress": _json_object(row["progress_json"]),
-        "checkpoint": _json_object(row["checkpoint_json"]),
-        "error": row["error_text"],
-        "created_at": row["created_at"],
-        "started_at": row["started_at"],
-        "finished_at": row["finished_at"],
-        "heartbeat_at": row["heartbeat_at"],
-    }
+    return _job_record_from_row(row)
 
 
 def list_jobs(
@@ -1333,20 +1358,7 @@ def list_jobs(
     expected_status = str(status or "").strip().lower()
     expected_project = str(project_id or "").strip()
     for row in rows:
-        job = {
-            "job_id": row["id"],
-            "job_type": row["job_type"],
-            "status": row["status"],
-            "payload": json.loads(row["payload_json"] or "{}"),
-            "result": json.loads(row["result_json"] or "{}"),
-            "progress": _json_object(row["progress_json"]),
-            "checkpoint": _json_object(row["checkpoint_json"]),
-            "error": row["error_text"],
-            "created_at": row["created_at"],
-            "started_at": row["started_at"],
-            "finished_at": row["finished_at"],
-            "heartbeat_at": row["heartbeat_at"],
-        }
+        job = _job_record_from_row(row)
         if expected_type and str(job["job_type"]).strip().lower() != expected_type:
             continue
         if expected_status and str(job["status"]).strip().lower() != expected_status:

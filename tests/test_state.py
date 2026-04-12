@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import httpx
@@ -520,3 +521,36 @@ def test_update_job_progress_persists_stage_counters_and_checkpoint(tmp_path: Pa
     assert updated["progress"]["queries_completed"] == 85
     assert updated["checkpoint"]["round"] == 2
     assert updated["checkpoint"]["project_id"] == "project_progress"
+
+
+def test_load_job_redacts_legacy_database_locators_in_result_and_checkpoint(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.db"
+    queued = enqueue_job(
+        "search",
+        {"project_id": "project_redaction", "role_title": "Operations Manager"},
+        db_path=db_path,
+    )
+    raw_locator = "postgresql://user:secret@example.com/hr_hunter"
+
+    target = db_path
+    with connect_database(
+        resolve_database_target(
+            target,
+            env_var="HR_HUNTER_STATE_DB",
+            default_path="output/state/hr_hunter_state.db",
+        )
+    ) as connection:
+        connection.execute(
+            "UPDATE jobs SET result_json = ?, checkpoint_json = ? WHERE id = ?",
+            (
+                json.dumps({"state": {"db_path": raw_locator}}),
+                json.dumps({"storage": {"display_locator": raw_locator}}),
+                queued["job_id"],
+            ),
+        )
+
+    job = load_job(queued["job_id"], db_path=db_path)
+
+    assert job is not None
+    assert job["result"]["state"]["db_path"] == "postgresql://<redacted>/hr_hunter"
+    assert job["checkpoint"]["storage"]["display_locator"] == "postgresql://<redacted>/hr_hunter"
