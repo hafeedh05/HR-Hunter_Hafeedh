@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HR Hunter</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260413demoopt5" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260413demoopt6" />
   </head>
   <body class="theme-bright">
     <div class="auth-shell" id="auth-shell">
@@ -949,7 +949,58 @@
           const hasSession = Boolean(window.localStorage.getItem("hr-hunter-session-token"));
           const stored = JSON.parse(window.localStorage.getItem("hr-hunter-ui-v3") || "{}");
           const selectedProjectId = String(stored.selectedProjectId || "").trim();
-          if (!hasSession || !selectedProjectId) {
+          const tabMeta = {
+            projects: {
+              title: "Projects",
+              description: "Search existing projects, pick the active mandate, or start a new project.",
+            },
+            recruiter: {
+              title: "Hunt",
+              description: "Complete the hunt brief, assign teammates, and run searches for the current project.",
+            },
+            results: {
+              title: "Results",
+              description: "Review the latest ranked candidates for the selected project.",
+            },
+            candidates: {
+              title: "Candidates",
+              description: "Browse, filter, and review the latest candidate list for the selected project.",
+            },
+            feedback: {
+              title: "Feedback",
+              description: "See recruiter actions and use them to improve ranking over time.",
+            },
+            history: {
+              title: "History",
+              description: "Open previous runs and project activity for the selected mandate.",
+            },
+            settings: {
+              title: "Settings",
+              description: "Switch theme, change paths, and send support or feature requests.",
+            },
+          };
+          const activeTab = Object.prototype.hasOwnProperty.call(tabMeta, stored.activeTab) ? stored.activeTab : "projects";
+          if (!hasSession) {
+            return;
+          }
+          const authShell = document.getElementById("auth-shell");
+          const appShell = document.getElementById("app-shell");
+          if (authShell && appShell) {
+            authShell.hidden = true;
+            appShell.hidden = false;
+          }
+          document.getElementById("status-line").textContent = "Restoring your session...";
+          document.getElementById("status-detail").textContent = "Loading your projects and hunt workspace.";
+          document.getElementById("view-title").textContent = tabMeta[activeTab].title;
+          document.getElementById("view-heading").textContent = tabMeta[activeTab].title;
+          document.getElementById("view-description").textContent = tabMeta[activeTab].description;
+          document.querySelectorAll("[data-tab-panel]").forEach((panel) => {
+            panel.classList.toggle("active", panel.dataset.tabPanel === activeTab);
+          });
+          document.querySelectorAll("[data-tab-target]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.tabTarget === activeTab);
+          });
+          if (!selectedProjectId) {
             return;
           }
           const placeholder = (title, detail) => `
@@ -973,7 +1024,7 @@
         }
       })();
     </script>
-    <script src="/assets/app.js?v=20260413demoopt5" defer></script>
+    <script src="/assets/app.js?v=20260413demoopt6" defer></script>
     <script>
       // If the main bundle fails to load/parse, make that obvious instead of looking like "login is broken".
       window.setTimeout(() => {

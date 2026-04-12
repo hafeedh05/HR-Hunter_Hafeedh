@@ -52,6 +52,7 @@ const FEATURE_LABELS = {
   parser_confidence: "Parser Confidence",
   evidence_quality: "Evidence Quality",
 };
+const VALID_TABS = new Set(Object.keys(TAB_META));
 const state = {
   config: null,
   sessionToken: "",
@@ -375,6 +376,7 @@ function persistStoredState() {
       STORAGE_KEY,
       JSON.stringify({
         settings: state.settings,
+        activeTab: state.activeTab,
         selectedProjectId: state.selectedProjectId,
       }),
     );
@@ -432,6 +434,7 @@ function defaultSettingsFromConfig() {
 function hydrateSettings() {
   const stored = readStoredState();
   state.selectedProjectId = String(stored.selectedProjectId || "").trim();
+  state.activeTab = VALID_TABS.has(stored.activeTab) ? stored.activeTab : "projects";
   const defaults = defaultSettingsFromConfig();
   const candidateProviders = Array.isArray(stored.settings?.providers) ? stored.settings.providers : defaults.providers;
   state.settings = {
@@ -490,20 +493,29 @@ function closeOwnerDrawer() {
 }
 
 function switchTab(tabId) {
-  state.activeTab = tabId;
+  const resolvedTab = VALID_TABS.has(tabId) ? tabId : "projects";
+  state.activeTab = resolvedTab;
   document.querySelectorAll("[data-tab-panel]").forEach((panel) => {
-    panel.classList.toggle("active", panel.dataset.tabPanel === tabId);
+    panel.classList.toggle("active", panel.dataset.tabPanel === resolvedTab);
   });
   document.querySelectorAll("[data-tab-target]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.tabTarget === tabId);
+    button.classList.toggle("active", button.dataset.tabTarget === resolvedTab);
   });
-  document.getElementById("view-title").textContent = TAB_META[tabId].title;
-  document.getElementById("view-heading").textContent = TAB_META[tabId].title;
-  document.getElementById("view-description").textContent = TAB_META[tabId].description;
+  document.getElementById("view-title").textContent = TAB_META[resolvedTab].title;
+  document.getElementById("view-heading").textContent = TAB_META[resolvedTab].title;
+  document.getElementById("view-description").textContent = TAB_META[resolvedTab].description;
   updateTopbarActions();
   closeNav();
-  setStatus(state.selectedProject ? `${state.selectedProject.name} selected.` : "Ready", "default", TAB_META[tabId].description);
+  persistStoredState();
+  setStatus(state.selectedProject ? `${state.selectedProject.name} selected.` : "Ready", "default", TAB_META[resolvedTab].description);
   syncLiveJobStatus();
+}
+
+function restoreTabAfterSessionBootstrap() {
+  if (!state.selectedProjectId) {
+    return "projects";
+  }
+  return VALID_TABS.has(state.activeTab) ? state.activeTab : "projects";
 }
 
 function updateTopbarActions() {
@@ -3648,7 +3660,7 @@ async function completeLoginPayload(payload) {
     // Non-fatal.
   }
   clearSessionTokenFromUrl();
-  switchTab("projects");
+  switchTab(restoreTabAfterSessionBootstrap());
   setStatus(`Welcome back, ${payload.user?.full_name || payload.user?.email || "Recruiter"}.`, "success", "Select a project or open the hunt brief.");
 }
 
@@ -3671,7 +3683,7 @@ async function restoreSession() {
       showRestoringShell();
       await completeSessionBootstrap(payload.user, payload.projects || []);
       clearSessionTokenFromUrl();
-      switchTab("projects");
+      switchTab(restoreTabAfterSessionBootstrap());
       setStatus(`Welcome back, ${payload.user.full_name || payload.user.email}.`, "success", "Select a project or open the hunt brief.");
       return;
     } catch {
@@ -3705,7 +3717,7 @@ async function restoreSession() {
       // Non-fatal.
     }
     clearSessionTokenFromUrl();
-    switchTab("projects");
+    switchTab(restoreTabAfterSessionBootstrap());
     setStatus(`Welcome back, ${payload.user.full_name || payload.user.email}.`, "success", "Select a project or open the hunt brief.");
   } catch {
     try {
@@ -3726,7 +3738,7 @@ async function restoreSession() {
         // Non-fatal.
       }
       clearSessionTokenFromUrl();
-      switchTab("projects");
+      switchTab(restoreTabAfterSessionBootstrap());
       setStatus(`Welcome back, ${payload.user.full_name || payload.user.email}.`, "success", "Select a project or open the hunt brief.");
       return;
     } catch {
