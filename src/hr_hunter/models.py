@@ -108,6 +108,9 @@ class CandidateProfile:
     current_target_company_match: bool = False
     target_company_history_match: bool = False
     current_title_match: bool = False
+    in_scope: bool = False
+    precise_market_in_scope: bool = False
+    scope_bucket: str = "out_of_scope"
     industry_aligned: bool = False
     location_aligned: bool = False
     current_company_confirmed: bool = False

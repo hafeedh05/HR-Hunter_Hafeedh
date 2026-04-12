@@ -122,6 +122,84 @@ INDUSTRY_KEYWORD_VARIANTS = {
     "home furnishings": ["furniture", "interiors", "home decor", "homeware"],
     "premium retail": ["luxury retail", "design led retail", "design-led retail"],
 }
+GENERIC_COMPANY_FRAGMENT_TOKENS = {
+    *LOW_SENIORITY_KEYWORDS,
+    "acquisition",
+    "ads",
+    "adwords",
+    "analytics",
+    "automation",
+    "brand",
+    "business",
+    "campaign",
+    "commerce",
+    "communications",
+    "content",
+    "coordinator",
+    "crm",
+    "customer",
+    "data",
+    "demand",
+    "designer",
+    "developer",
+    "digital",
+    "display",
+    "ecommerce",
+    "email",
+    "engagement",
+    "engineer",
+    "ga4",
+    "generation",
+    "google",
+    "growth",
+    "insights",
+    "lead",
+    "leadership",
+    "lifecycle",
+    "manager",
+    "marketing",
+    "media",
+    "meta",
+    "paid",
+    "performance",
+    "ppc",
+    "product",
+    "reporting",
+    "retention",
+    "sales",
+    "scientist",
+    "search",
+    "seo",
+    "social",
+    "specialist",
+    "strategy",
+}
+COMPANY_ENTITY_HINTS = {
+    "bank",
+    "brands",
+    "capital",
+    "company",
+    "corp",
+    "corporation",
+    "cosmetics",
+    "furniture",
+    "global",
+    "group",
+    "holdings",
+    "home",
+    "homes",
+    "industries",
+    "interiors",
+    "labs",
+    "limited",
+    "ltd",
+    "retail",
+    "studio",
+    "studios",
+    "technologies",
+    "technology",
+    "ventures",
+}
 TITLE_ROLE_SIGNAL_MAP = {
     "brand": ["brand"],
     "category": ["category", "category development", "category insights"],
@@ -870,7 +948,57 @@ def evaluate_years_fit(candidate: CandidateProfile, brief: SearchBrief) -> tuple
     return round(score, 3), years_experience, gap, notes
 
 
-def evaluate_parser_confidence(candidate: CandidateProfile) -> tuple[float, List[str]]:
+def looks_like_non_company_fragment(value: str, brief: SearchBrief | None = None) -> bool:
+    normalized = normalize_text(value)
+    if not normalized:
+        return False
+
+    allowed_companies = set()
+    keyword_values = set()
+    if brief is not None:
+        allowed_companies = {
+            normalize_text(company)
+            for company in [
+                *brief.company_targets,
+                *[alias for aliases in brief.company_aliases.values() for alias in aliases],
+            ]
+            if normalize_text(company)
+        }
+        if normalized in allowed_companies:
+            return False
+        keyword_values = {
+            normalize_text(keyword)
+            for keyword in [
+                brief.role_title,
+                *brief.titles,
+                *brief.title_keywords,
+                *brief.required_keywords,
+                *brief.preferred_keywords,
+                *brief.portfolio_keywords,
+                *brief.commercial_keywords,
+                *brief.leadership_keywords,
+                *brief.scope_keywords,
+            ]
+            if normalize_text(keyword)
+        }
+        if normalized in keyword_values:
+            return True
+
+    tokens = [token for token in re.split(r"[^a-z0-9]+", normalized) if token]
+    if not tokens or len(tokens) > 5:
+        return False
+    if any(token in COMPANY_ENTITY_HINTS for token in tokens):
+        return False
+
+    generic_hits = sum(1 for token in tokens if token in GENERIC_COMPANY_FRAGMENT_TOKENS)
+    if generic_hits == len(tokens):
+        return True
+    if generic_hits >= max(2, len(tokens) - 1):
+        return True
+    return False
+
+
+def evaluate_parser_confidence(candidate: CandidateProfile, brief: SearchBrief | None = None) -> tuple[float, List[str]]:
     notes: List[str] = []
     score = 0.0
     if candidate.current_title:
@@ -891,6 +1019,9 @@ def evaluate_parser_confidence(candidate: CandidateProfile) -> tuple[float, List
     if normalized_title and normalized_title == normalized_company:
         score -= 0.5
         notes.append("parser_confidence: title_equals_company")
+    if normalized_company and looks_like_non_company_fragment(candidate.current_company, brief):
+        score -= 0.35
+        notes.append("parser_confidence: invalid_company_fragment")
 
     score = round(min(max(score, 0.0), 1.0), 3)
     if score > 0.0:
@@ -961,7 +1092,7 @@ def build_candidate_features(candidate: CandidateProfile, brief: SearchBrief) ->
             notes.append("industry_fit: target_company_history_proxy")
     years_fit_score, years_experience, years_gap, years_notes = evaluate_years_fit(candidate, brief)
     notes.extend(years_notes)
-    parser_confidence, parser_notes = evaluate_parser_confidence(candidate)
+    parser_confidence, parser_notes = evaluate_parser_confidence(candidate, brief)
     notes.extend(parser_notes)
     evidence_quality_score, evidence_notes = evaluate_evidence_quality(candidate)
     notes.extend(evidence_notes)

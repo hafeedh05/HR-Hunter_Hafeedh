@@ -137,6 +137,33 @@ def test_candidate_parser_cleans_bidi_marks_and_infers_title_from_description() 
     assert candidate.current_company == "dubizzle"
 
 
+def test_candidate_parser_clears_skill_fragment_misparsed_as_company() -> None:
+    provider = ScrapingBeeGoogleProvider({})
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-skill-company-test",
+            "role_title": "Digital Marketing Manager",
+            "titles": ["Digital Marketing Manager"],
+            "required_keywords": ["Google Ads", "Meta Ads", "GA4"],
+            "preferred_keywords": ["Paid Social", "Performance Marketing"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+        }
+    )
+
+    candidate = provider._candidate_from_result(
+        {
+            "title": "Farah Example - Digital Marketing Manager at Google Ads",
+            "description": "Digital Marketing Manager based in Dubai, United Arab Emirates.",
+            "url": "https://example.com/people/farah-example",
+        },
+        brief,
+    )
+
+    assert candidate is not None
+    assert candidate.current_title == "Digital Marketing Manager"
+    assert candidate.current_company == ""
+
+
 def test_candidate_parser_does_not_infer_current_role_from_historical_snippet() -> None:
     provider = ScrapingBeeGoogleProvider({})
     brief = build_search_brief(

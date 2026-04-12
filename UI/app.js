@@ -1381,6 +1381,7 @@ function projectMetricChips(project) {
   const runCount = safeNumber(project.run_count);
   const latestCandidates = safeNumber(project.latest_run_candidate_count);
   const summary = latestRunSummary(project);
+  const inScopeCount = safeNumber(summary.in_scope_count);
   const verifiedCount = safeNumber(summary.verified_count);
   const reviewCount = safeNumber(summary.review_count);
   const yieldStatus = String(summary.quality_diagnostics?.yield_status || "").toLowerCase();
@@ -1391,6 +1392,9 @@ function projectMetricChips(project) {
   chips.push(`<span class="info-chip">${escapeHtml(String(runCount))} Runs</span>`);
   if (runCount > 0 || latestCandidates > 0) {
     chips.push(`<span class="info-chip">${escapeHtml(String(latestCandidates))} Latest Candidates</span>`);
+  }
+  if (inScopeCount > 0) {
+    chips.push(`<span class="info-chip chip-scope">${escapeHtml(String(inScopeCount))} In Scope</span>`);
   }
   if (verifiedCount > 0) {
     chips.push(`<span class="info-chip chip-good">${escapeHtml(String(verifiedCount))} Verified</span>`);
@@ -1447,6 +1451,14 @@ function statusFromCandidate(candidate) {
   if (normalized === "verified") return { key: "verified", label: "Verified" };
   if (normalized === "review" || normalized === "needs_review") return { key: "review", label: "Needs Review" };
   return { key: "reject", label: "Rejected" };
+}
+
+function candidateIsInScope(candidate) {
+  if (typeof candidate?.in_scope === "boolean") {
+    return candidate.in_scope;
+  }
+  const parserConfidence = safeNumber(candidate?.parser_confidence);
+  return Boolean(candidate?.current_title_match && candidate?.location_aligned && parserConfidence >= 0.35);
 }
 
 function jobProjectId(job) {
@@ -1948,7 +1960,11 @@ function filteredCandidates() {
   const locationFilter = String(state.candidateLocationFilter || "all");
   return currentCandidates().filter((candidate) => {
     const status = statusFromCandidate(candidate).key;
-    if (state.candidateStatusFilter !== "all" && status !== state.candidateStatusFilter) {
+    if (state.candidateStatusFilter === "in_scope") {
+      if (!candidateIsInScope(candidate)) {
+        return false;
+      }
+    } else if (state.candidateStatusFilter !== "all" && status !== state.candidateStatusFilter) {
       return false;
     }
     const candidateLocation = candidateLocationLabel(candidate);
@@ -1973,6 +1989,9 @@ function filteredCandidates() {
 }
 
 function bucketCountFor(statusKey) {
+  if (statusKey === "in_scope") {
+    return currentCandidates().filter((candidate) => candidateIsInScope(candidate)).length;
+  }
   return currentCandidates().filter((candidate) => statusFromCandidate(candidate).key === statusKey).length;
 }
 
@@ -2061,6 +2080,7 @@ function qualityDiagnosticsMarkup(summary) {
           <h4>${escapeHtml(diagnostics.headline || "Candidate quality diagnostics")}</h4>
         </div>
         <div class="quality-diagnostics-metrics">
+          <span class="info-chip chip-scope"><strong>In Scope</strong> ${escapeHtml(String(summary?.in_scope_count || 0))}</span>
           <span class="info-chip"><strong>Verified Yield</strong> ${escapeHtml(formatPercent(diagnostics.verified_rate || 0))}</span>
           <span class="info-chip"><strong>Verified</strong> ${escapeHtml(String(diagnostics.verified_count || 0))}</span>
           <span class="info-chip"><strong>Unique</strong> ${escapeHtml(String(diagnostics.unique_after_dedupe || 0))}</span>
@@ -2120,6 +2140,7 @@ function renderResultsSummary() {
   const summary = state.currentReport.summary || {};
   const cards = [
     { label: "Candidates", value: safeNumber(summary.candidate_count, state.currentReport.candidates?.length || 0) },
+    { label: "In Scope", value: safeNumber(summary.in_scope_count) },
     { label: "Verified", value: safeNumber(summary.verified_count) },
     { label: "Needs Review", value: safeNumber(summary.review_count) },
     { label: "Rejected", value: safeNumber(summary.reject_count) },
@@ -2231,6 +2252,7 @@ function candidateCardMarkup(candidate) {
         <div>
           <div class="candidate-name-row">
             <h4>${escapeHtml(candidate.full_name || "Unnamed Candidate")}</h4>
+            ${candidateIsInScope(candidate) ? `<span class="info-chip chip-scope">In Scope</span>` : ""}
             <span class="status-pill status-${escapeHtml(status.key)}">${escapeHtml(status.label)}</span>
           </div>
           <p class="candidate-subtitle">${escapeHtml(candidate.current_title || "No title")} | ${escapeHtml(candidate.current_company || "No company")} | ${escapeHtml(candidate.location_name || "No location")}</p>
@@ -2321,6 +2343,7 @@ function renderCandidatesSummary() {
     const requested = currentRequestedCandidateLimit();
   const cards = [
     { label: "Returned", value: candidates.length },
+    { label: "In Scope", value: bucketCountFor("in_scope") },
     { label: "Verified", value: bucketCountFor("verified") },
     { label: "Needs Review", value: bucketCountFor("review") },
     { label: "Rejected", value: bucketCountFor("reject") },
@@ -2357,6 +2380,7 @@ function renderCandidateControls() {
   const locationNote = document.getElementById("candidate-location-note");
   const buckets = [
     { id: "all", label: "All", count: currentCandidates().length },
+    { id: "in_scope", label: "In Scope", count: bucketCountFor("in_scope") },
     { id: "verified", label: "Verified", count: bucketCountFor("verified") },
     { id: "review", label: "Needs Review", count: bucketCountFor("review") },
     { id: "reject", label: "Rejected", count: bucketCountFor("reject") },
@@ -2478,10 +2502,14 @@ function renderCandidates() {
   const selectedCandidate = candidates.find((candidate) => candidateIdentityRef(candidate) === selectedRef) || candidates[0];
   const locationFilterLabel =
     state.candidateLocationFilter === "all" ? "All locations" : state.candidateLocationFilter;
+  const bucketLabel =
+    state.candidateStatusFilter === "in_scope"
+      ? "In Scope"
+      : titleCaseWords(state.candidateStatusFilter === "all" ? "all" : state.candidateStatusFilter);
   tableRoot.innerHTML = `
     <div class="candidate-table-meta">
       <p class="muted">Showing ${escapeHtml(String(candidates.length))} of ${escapeHtml(String(currentCandidates().length))} candidates.</p>
-      <p class="muted">Bucket: ${escapeHtml(titleCaseWords(state.candidateStatusFilter === "all" ? "all" : state.candidateStatusFilter))} | Location: ${escapeHtml(locationFilterLabel)}</p>
+      <p class="muted">Bucket: ${escapeHtml(bucketLabel)} | Location: ${escapeHtml(locationFilterLabel)}</p>
     </div>
     <div class="candidate-table-wrap">
       <table class="candidate-table">

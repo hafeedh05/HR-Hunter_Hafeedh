@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Set, Tuple
 
+from hr_hunter.features import looks_like_non_company_fragment
 from hr_hunter.identity import candidate_identity_keys, candidate_primary_key
 from hr_hunter.models import (
     CandidateProfile,
@@ -28,6 +29,8 @@ CSV_FIELDNAMES = [
     "full_name",
     "verification_status",
     "qualification_tier",
+    "in_scope",
+    "scope_bucket",
     "score",
     "current_title",
     "current_company",
@@ -312,6 +315,52 @@ def _infer_location_match_score(candidate: CandidateProfile) -> float:
     return 0.0
 
 
+def _candidate_market_match(candidate: CandidateProfile) -> bool:
+    bucket = _infer_location_precision_bucket(candidate)
+    return bool(candidate.location_aligned) or bucket in {
+        "within_radius",
+        "within_expanded_radius",
+        "priority_target_location",
+        "named_target_location",
+        "secondary_target_location",
+        "named_profile_location",
+        "country_only",
+        "text_aligned",
+        "profile_text",
+    }
+
+
+def _candidate_precise_market_match(candidate: CandidateProfile) -> bool:
+    bucket = _infer_location_precision_bucket(candidate)
+    return bucket in {
+        "within_radius",
+        "within_expanded_radius",
+        "priority_target_location",
+        "named_target_location",
+        "secondary_target_location",
+        "named_profile_location",
+        "geo_distance",
+        "current_evidence",
+    }
+
+
+def _infer_in_scope(candidate: CandidateProfile) -> bool:
+    parser_confidence = _infer_parser_confidence(candidate)
+    if "parser_confidence_too_low" in set(candidate.cap_reasons or []):
+        return False
+    return bool(candidate.current_title_match and _candidate_market_match(candidate) and parser_confidence >= 0.35)
+
+
+def _infer_scope_bucket(candidate: CandidateProfile) -> str:
+    if _infer_in_scope(candidate):
+        return "in_scope_precise" if _candidate_precise_market_match(candidate) else "in_scope_country"
+    if candidate.current_title_match:
+        return "title_only"
+    if _candidate_market_match(candidate):
+        return "market_only"
+    return "out_of_scope"
+
+
 def _infer_skill_overlap_score(candidate: CandidateProfile, function_fit: float, industry_fit: float) -> float:
     if candidate.skill_overlap_score > 0.0:
         return candidate.skill_overlap_score
@@ -346,7 +395,9 @@ def _infer_parser_confidence(candidate: CandidateProfile) -> float:
         score += 0.1
     if candidate.source_url or candidate.linkedin_url:
         score += 0.1
-    return round(min(score, 1.0), 3)
+    if candidate.current_company and looks_like_non_company_fragment(candidate.current_company):
+        score -= 0.35
+    return round(min(max(score, 0.0), 1.0), 3)
 
 
 def _infer_evidence_quality_score(candidate: CandidateProfile) -> float:
@@ -442,6 +493,9 @@ def hydrate_candidate_reporting(candidate: CandidateProfile) -> CandidateProfile
     parser_confidence = _infer_parser_confidence(candidate)
     evidence_quality_score = _infer_evidence_quality_score(candidate)
     qualification_tier = _infer_qualification_tier(candidate, current_function_fit, industry_fit_score)
+    in_scope = _infer_in_scope(candidate)
+    precise_market_in_scope = bool(in_scope and _candidate_precise_market_match(candidate))
+    scope_bucket = _infer_scope_bucket(candidate)
 
     candidate.matched_title_family = matched_title_family
     candidate.location_precision_bucket = _infer_location_precision_bucket(candidate)
@@ -458,6 +512,9 @@ def hydrate_candidate_reporting(candidate: CandidateProfile) -> CandidateProfile
     candidate.evidence_quality_score = round(evidence_quality_score, 3)
     candidate.current_function_fit = round(current_function_fit, 3)
     candidate.current_fmcg_fit = round(current_fmcg_fit, 3)
+    candidate.in_scope = in_scope
+    candidate.precise_market_in_scope = precise_market_in_scope
+    candidate.scope_bucket = scope_bucket
     if not candidate.feature_scores:
         candidate.feature_scores = {
             "title_similarity": candidate.title_similarity_score,
@@ -495,6 +552,12 @@ def build_reporting_summary(
     base_summary: Dict[str, object] | None = None,
 ) -> Dict[str, object]:
     hydrated_candidates = [hydrate_candidate_reporting(candidate) for candidate in candidates]
+    scope_counts = {
+        "in_scope": len([candidate for candidate in hydrated_candidates if candidate.in_scope]),
+        "precise_in_scope": len([candidate for candidate in hydrated_candidates if candidate.precise_market_in_scope]),
+        "title_match": len([candidate for candidate in hydrated_candidates if candidate.current_title_match]),
+        "market_match": len([candidate for candidate in hydrated_candidates if _candidate_market_match(candidate)]),
+    }
     verification_counts = {
         "verified": len([candidate for candidate in hydrated_candidates if candidate.verification_status == "verified"]),
         "review": len([candidate for candidate in hydrated_candidates if candidate.verification_status == "review"]),
@@ -513,6 +576,10 @@ def build_reporting_summary(
     summary.update(
         {
             "candidate_count": len(hydrated_candidates),
+            "in_scope_count": scope_counts["in_scope"],
+            "precise_in_scope_count": scope_counts["precise_in_scope"],
+            "title_match_count": scope_counts["title_match"],
+            "market_match_count": scope_counts["market_match"],
             "verified_count": verification_counts["verified"],
             "review_count": verification_counts["review"],
             "reject_count": verification_counts["reject"],
@@ -521,6 +588,7 @@ def build_reporting_summary(
             "weak_count": qualification_counts["weak"],
             "verification_status_counts": verification_counts,
             "qualification_tier_counts": qualification_counts,
+            "scope_counts": scope_counts,
             "ranking_model_versions": sorted(
                 {
                     candidate.ranking_model_version
@@ -863,6 +931,8 @@ def candidate_to_row(candidate: CandidateProfile) -> Dict[str, object]:
         "full_name": _repair_display_text(hydrated.full_name),
         "verification_status": hydrated.verification_status,
         "qualification_tier": hydrated.qualification_tier,
+        "in_scope": hydrated.in_scope,
+        "scope_bucket": hydrated.scope_bucket,
         "score": hydrated.score,
         "current_title": _repair_display_text(hydrated.current_title),
         "current_company": _repair_display_text(hydrated.current_company),
@@ -1013,6 +1083,9 @@ def build_candidate(payload: dict) -> CandidateProfile:
         current_target_company_match=bool(payload.get("current_target_company_match", False)),
         target_company_history_match=bool(payload.get("target_company_history_match", False)),
         current_title_match=bool(payload.get("current_title_match", False)),
+        in_scope=bool(payload.get("in_scope", False)),
+        precise_market_in_scope=bool(payload.get("precise_market_in_scope", False)),
+        scope_bucket=payload.get("scope_bucket", "out_of_scope"),
         industry_aligned=bool(payload.get("industry_aligned", False)),
         location_aligned=bool(payload.get("location_aligned", False)),
         current_company_confirmed=bool(payload.get("current_company_confirmed", False)),

@@ -76,6 +76,56 @@ def test_finalize_report_for_limit_keeps_raw_found_above_unique_pool():
     assert pipeline_metrics["finalized_count"] == 50
 
 
+def test_finalize_report_for_limit_tracks_in_scope_counts():
+    report = SearchRunReport(
+        run_id="run-scope-test",
+        brief_id="brief-scope-test",
+        dry_run=False,
+        generated_at="2026-04-12T00:00:00+00:00",
+        provider_results=[],
+        candidates=[
+            CandidateProfile(
+                full_name="Exact Dubai Match",
+                current_title_match=True,
+                location_aligned=True,
+                location_precision_bucket="named_target_location",
+                parser_confidence=0.72,
+                verification_status="review",
+            ),
+            CandidateProfile(
+                full_name="Country Match",
+                current_title_match=True,
+                location_aligned=True,
+                location_precision_bucket="country_only",
+                parser_confidence=0.68,
+                verification_status="reject",
+            ),
+            CandidateProfile(
+                full_name="Wrong Market",
+                current_title_match=True,
+                location_aligned=False,
+                location_precision_bucket="outside_target_area",
+                parser_confidence=0.84,
+                verification_status="reject",
+            ),
+        ],
+        summary={"pipeline_metrics": {"queries_completed": 5, "queries_total": 5, "raw_found": 3, "unique_after_dedupe": 3}},
+    )
+
+    finalized = _finalize_report_for_limit(report, requested_limit=3, internal_fetch_limit=10)
+
+    assert finalized.summary["in_scope_count"] == 2
+    assert finalized.summary["precise_in_scope_count"] == 1
+    assert finalized.summary["title_match_count"] == 3
+    assert finalized.summary["market_match_count"] == 2
+    assert finalized.summary["scope_counts"] == {
+        "in_scope": 2,
+        "precise_in_scope": 1,
+        "title_match": 3,
+        "market_match": 2,
+    }
+
+
 def test_should_stop_after_stagnant_top_up_when_near_target():
     assert _should_stop_after_stagnant_top_up(
         requested_limit=50,

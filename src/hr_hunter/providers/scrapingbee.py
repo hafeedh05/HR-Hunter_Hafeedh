@@ -11,6 +11,7 @@ import httpx
 
 from hr_hunter.briefing import normalize_text, unique_preserving_order
 from hr_hunter.config import resolve_secret
+from hr_hunter.features import looks_like_non_company_fragment
 from hr_hunter.identity import canonical_query_fingerprint
 from hr_hunter.models import CandidateProfile, ProviderRunResult, SearchBrief, SearchSlice
 from hr_hunter.providers.base import SearchProvider
@@ -819,6 +820,14 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         cleaned = ScrapingBeeGoogleProvider._sanitize_public_text(value)
         return re.sub(r"\s+", " ", cleaned)
 
+    def _sanitize_company_fragment(self, value: str, brief: SearchBrief) -> str:
+        cleaned = self._clean_title_fragment(value)
+        if not cleaned:
+            return ""
+        if looks_like_non_company_fragment(cleaned, brief):
+            return ""
+        return cleaned
+
     def _parse_title_fields(self, raw_title: str, url: str) -> tuple[str, str, str]:
         title = self._sanitize_public_text(raw_title)
         name = title.split(" - ")[0].split(" | ")[0].strip()
@@ -916,6 +925,7 @@ class ScrapingBeeGoogleProvider(SearchProvider):
 
         if not current_company and not self._looks_historical_role_text(description):
             current_company = self._find_company_match(f"{title} {description} {url or ''}", brief)
+        current_company = self._sanitize_company_fragment(current_company, brief)
         if self._should_infer_current_title(title, current_title, current_company, brief):
             inferred_title = self._infer_title_from_description(description, brief, current_company)
             if inferred_title:
