@@ -418,6 +418,109 @@ def test_build_record_does_not_self_confirm_candidate_location_outside_target_ma
     assert record.precise_location_match is False
 
 
+def test_build_record_does_not_treat_generic_profile_path_as_person_profile() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-generic-profile-test",
+            "role_title": "Chief Executive Officer",
+            "titles": ["Chief Executive Officer", "Managing Director"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Abu Dhabi"],
+            },
+        }
+    )
+    candidate = CandidateProfile(
+        full_name="Jesper Christensen",
+        current_title="Managing Director DACH",
+        current_company="BoConcept",
+        location_name="Germany",
+    )
+
+    record = verifier.build_record(
+        candidate,
+        brief,
+        '"Jesper Christensen" "BoConcept"',
+        {
+            "url": "https://www.pixnoy.com/profile/weareintelier/",
+            "domain": "www.pixnoy.com",
+            "title": "weareintelier - Marketing for architecture and design",
+            "description": "BoConcept Dubai Hills Mall opening remarks from Jesper Christensen, Managing Director, BoConcept UAE.",
+        },
+    )
+
+    assert record.name_match is True
+    assert record.location_match is True
+    assert record.profile_signal is False
+    assert record.current_employment_signal is False
+
+
+def test_apply_evidence_does_not_upgrade_location_from_event_pages() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-location-guard-test",
+            "role_title": "Chief Executive Officer",
+            "titles": ["Chief Executive Officer", "Managing Director", "President"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Abu Dhabi", "Jeddah"],
+            },
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Jesper Christensen",
+            current_title="Managing Director DACH",
+            current_company="BoConcept",
+            location_name="Germany",
+            summary="Senior executive leader at BoConcept.",
+            source_url="https://theorg.com/org/boconcept/org-chart/jesper-christensen",
+        ),
+        brief,
+    )
+    evidence = [
+        EvidenceRecord(
+            source_url="https://theorg.com/org/boconcept/org-chart/jesper-christensen",
+            source_domain="theorg.com",
+            name_match=True,
+            company_match="BoConcept",
+            title_matches=["Managing Director"],
+            location_match=False,
+            precise_location_match=False,
+            profile_signal=True,
+            current_employment_signal=True,
+            confidence=0.9,
+        ),
+        EvidenceRecord(
+            source_url="https://www.instagram.com/henge__official/reel/DLKKEmdtrGl/",
+            source_domain="www.instagram.com",
+            title="Dubai warmly welcomed Henge.",
+            snippet="The opening featured remarks by Jesper Christensen, Director, BoConcept EMEA, in Dubai.",
+            name_match=True,
+            company_match="BoConcept",
+            title_matches=["Managing Director"],
+            location_match=True,
+            location_match_text="Dubai",
+            precise_location_match=True,
+            profile_signal=False,
+            current_employment_signal=False,
+            confidence=0.85,
+        ),
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.current_employment_confirmed is True
+    assert updated.current_location_confirmed is False
+    assert updated.precise_location_confirmed is False
+    assert updated.location_precision_bucket == "outside_target_area"
+    assert updated.location_name == "Germany"
+
+
 def test_report_roundtrip_preserves_evidence_fields(tmp_path: Path) -> None:
     candidate = CandidateProfile(
         full_name="Jane Search",

@@ -188,6 +188,79 @@ def test_finalize_report_for_limit_honors_title_market_priority_brief() -> None:
     ]
 
 
+def test_finalize_report_for_limit_uses_final_scope_order_after_verification() -> None:
+    brief = build_search_brief(
+        {
+            "id": "scope-final-order-test",
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+            },
+            "scope_first_enabled": True,
+            "in_scope_target": 10,
+        }
+    )
+    report = SearchRunReport(
+        run_id="run-final-order-test",
+        brief_id="brief-final-order-test",
+        dry_run=False,
+        generated_at="2026-04-13T00:00:00+00:00",
+        provider_results=[],
+        candidates=[
+            CandidateProfile(
+                full_name="Rejected But Proof Heavy",
+                current_title="Supply Chain Manager",
+                current_title_match=True,
+                location_aligned=True,
+                location_precision_bucket="named_target_location",
+                current_employment_confirmed=True,
+                current_location_confirmed=True,
+                precise_location_confirmed=True,
+                current_company_confirmed=True,
+                current_title_confirmed=True,
+                current_role_proof_count=4,
+                current_function_fit=0.86,
+                skill_overlap_score=0.74,
+                industry_fit_score=0.62,
+                parser_confidence=0.8,
+                evidence_quality_score=0.78,
+                verification_status="reject",
+                score=78.0,
+            ),
+            CandidateProfile(
+                full_name="Verified Exact Match",
+                current_title="Supply Chain Manager",
+                current_title_match=True,
+                location_aligned=True,
+                location_precision_bucket="named_target_location",
+                current_employment_confirmed=True,
+                current_location_confirmed=True,
+                precise_location_confirmed=True,
+                current_company_confirmed=True,
+                current_title_confirmed=True,
+                current_role_proof_count=1,
+                current_function_fit=0.82,
+                skill_overlap_score=0.7,
+                industry_fit_score=0.64,
+                parser_confidence=0.78,
+                evidence_quality_score=0.76,
+                verification_status="verified",
+                score=74.0,
+            ),
+        ],
+        summary={"pipeline_metrics": {"queries_completed": 2, "queries_total": 2, "raw_found": 2, "unique_after_dedupe": 2}},
+    )
+
+    finalized = _finalize_report_for_limit(report, requested_limit=2, internal_fetch_limit=10, brief=brief)
+
+    assert [candidate.full_name for candidate in finalized.candidates] == [
+        "Verified Exact Match",
+        "Rejected But Proof Heavy",
+    ]
+
+
 def test_should_stop_after_stagnant_top_up_when_near_target():
     assert _should_stop_after_stagnant_top_up(
         requested_limit=50,

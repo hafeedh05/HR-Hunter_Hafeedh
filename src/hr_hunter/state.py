@@ -63,7 +63,49 @@ def _sanitize_database_fields(value: Any) -> Any:
     return value
 
 
+def _refresh_job_progress_runtime(row: Any, progress: Dict[str, Any]) -> Dict[str, Any]:
+    refreshed = _json_object(progress)
+    status = str(row["status"] or "").strip().lower()
+    started_at = _parse_iso_timestamp(str(row["started_at"] or ""))
+    finished_at = _parse_iso_timestamp(str(row["finished_at"] or ""))
+    now = datetime.now(timezone.utc)
+    if started_at:
+        reference = finished_at if status in {"completed", "failed"} and finished_at else now
+        elapsed_seconds = max(0, int((reference - started_at).total_seconds()))
+    else:
+        elapsed_seconds = int(refreshed.get("elapsed_seconds", 0) or 0)
+
+    if status in {"completed", "failed"}:
+        refreshed["elapsed_seconds"] = elapsed_seconds
+        refreshed["stage_elapsed_seconds"] = 0
+        refreshed["estimated_total_seconds"] = elapsed_seconds
+        refreshed["eta_seconds"] = 0
+        return refreshed
+
+    updated_at = (
+        _parse_iso_timestamp(str(refreshed.get("updated_at", "") or ""))
+        or _parse_iso_timestamp(str(row["heartbeat_at"] or ""))
+        or started_at
+        or _parse_iso_timestamp(str(row["created_at"] or ""))
+    )
+    stored_stage_elapsed = int(refreshed.get("stage_elapsed_seconds", 0) or 0)
+    stale_seconds = max(0, int((now - updated_at).total_seconds())) if updated_at else 0
+    refreshed["elapsed_seconds"] = max(int(refreshed.get("elapsed_seconds", 0) or 0), elapsed_seconds)
+    refreshed["stage_elapsed_seconds"] = min(
+        refreshed["elapsed_seconds"],
+        max(stored_stage_elapsed, stored_stage_elapsed + stale_seconds),
+    )
+    estimated_total_seconds = max(
+        int(refreshed.get("estimated_total_seconds", 0) or 0),
+        refreshed["elapsed_seconds"] + 2,
+    )
+    refreshed["estimated_total_seconds"] = estimated_total_seconds
+    refreshed["eta_seconds"] = max(0, estimated_total_seconds - refreshed["elapsed_seconds"])
+    return refreshed
+
+
 def _job_record_from_row(row: Any) -> Dict[str, Any]:
+    progress = _refresh_job_progress_runtime(row, _json_object(row["progress_json"]))
     return _sanitize_database_fields(
         {
             "job_id": row["id"],
@@ -71,7 +113,7 @@ def _job_record_from_row(row: Any) -> Dict[str, Any]:
             "status": row["status"],
             "payload": json.loads(row["payload_json"] or "{}"),
             "result": json.loads(row["result_json"] or "{}"),
-            "progress": _json_object(row["progress_json"]),
+            "progress": progress,
             "checkpoint": _json_object(row["checkpoint_json"]),
             "error": row["error_text"],
             "created_at": row["created_at"],
@@ -1160,11 +1202,11 @@ def complete_job(job_id: str, result: Dict[str, Any], *, db_path: Path | None = 
         )
         or 0
     )
+    started_at = _parse_iso_timestamp(str(existing.get("started_at", "")).strip())
+    now_dt = datetime.now(timezone.utc)
     elapsed_seconds = int(progress.get("elapsed_seconds", 0) or 0)
-    if elapsed_seconds <= 0:
-        started_at = _parse_iso_timestamp(str(existing.get("started_at", "")).strip())
-        if started_at:
-            elapsed_seconds = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds()))
+    if started_at:
+        elapsed_seconds = max(elapsed_seconds, int((now_dt - started_at).total_seconds()))
     estimated_total_seconds = int(progress.get("estimated_total_seconds", 0) or 0)
     if estimated_total_seconds <= 0:
         estimated_total_seconds = elapsed_seconds
@@ -1245,7 +1287,7 @@ def complete_job(job_id: str, result: Dict[str, Any], *, db_path: Path | None = 
             "updated_at": _now(),
         }
     )
-    now = _now()
+    now = now_dt.isoformat()
     with _connect(resolved) as connection:
         connection.execute(
             "UPDATE jobs SET status = ?, result_json = ?, progress_json = ?, finished_at = ?, heartbeat_at = ? WHERE id = ?",
@@ -1257,11 +1299,11 @@ def fail_job(job_id: str, error_text: str, *, db_path: Path | None = None) -> No
     resolved = init_state_db(db_path)
     existing = load_job(job_id, db_path=resolved) or {}
     progress = _json_object(existing.get("progress"))
+    started_at = _parse_iso_timestamp(str(existing.get("started_at", "")).strip())
+    now_dt = datetime.now(timezone.utc)
     elapsed_seconds = int(progress.get("elapsed_seconds", 0) or 0)
-    if elapsed_seconds <= 0:
-        started_at = _parse_iso_timestamp(str(existing.get("started_at", "")).strip())
-        if started_at:
-            elapsed_seconds = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds()))
+    if started_at:
+        elapsed_seconds = max(elapsed_seconds, int((now_dt - started_at).total_seconds()))
     estimated_total_seconds = int(progress.get("estimated_total_seconds", 0) or 0)
     if estimated_total_seconds <= 0:
         estimated_total_seconds = elapsed_seconds
@@ -1277,7 +1319,7 @@ def fail_job(job_id: str, error_text: str, *, db_path: Path | None = None) -> No
             "updated_at": _now(),
         }
     )
-    now = _now()
+    now = now_dt.isoformat()
     with _connect(resolved) as connection:
         connection.execute(
             "UPDATE jobs SET status = ?, error_text = ?, progress_json = ?, finished_at = ?, heartbeat_at = ? WHERE id = ?",
@@ -1392,11 +1434,11 @@ def stop_job(job_id: str, *, reason: str = "", db_path: Path | None = None) -> D
     error_text = str(reason or "").strip() or STALE_JOB_FAILURE_REASON
     resolved = init_state_db(db_path)
     progress = _json_object(existing.get("progress"))
+    started_at = _parse_iso_timestamp(str(existing.get("started_at", "")).strip())
+    now_dt = datetime.now(timezone.utc)
     elapsed_seconds = int(progress.get("elapsed_seconds", 0) or 0)
-    if elapsed_seconds <= 0:
-        started_at = _parse_iso_timestamp(str(existing.get("started_at", "")).strip())
-        if started_at:
-            elapsed_seconds = max(0, int((datetime.now(timezone.utc) - started_at).total_seconds()))
+    if started_at:
+        elapsed_seconds = max(elapsed_seconds, int((now_dt - started_at).total_seconds()))
     estimated_total_seconds = int(progress.get("estimated_total_seconds", 0) or 0)
     if estimated_total_seconds <= 0:
         estimated_total_seconds = elapsed_seconds
@@ -1412,7 +1454,7 @@ def stop_job(job_id: str, *, reason: str = "", db_path: Path | None = None) -> D
             "updated_at": _now(),
         }
     )
-    now = _now()
+    now = now_dt.isoformat()
     with _connect(resolved) as connection:
         connection.execute(
             "UPDATE jobs SET status = ?, error_text = ?, progress_json = ?, finished_at = ?, heartbeat_at = ? WHERE id = ?",

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -521,6 +522,61 @@ def test_update_job_progress_persists_stage_counters_and_checkpoint(tmp_path: Pa
     assert updated["progress"]["queries_completed"] == 85
     assert updated["checkpoint"]["round"] == 2
     assert updated["checkpoint"]["project_id"] == "project_progress"
+
+
+def test_load_job_refreshes_live_elapsed_seconds_when_progress_writes_pause(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "state.db"
+    queued = enqueue_job(
+        "search",
+        {"project_id": "project_live_elapsed", "role_title": "Supply Chain Manager", "limit": 300},
+        db_path=db_path,
+    )
+    start_job(queued["job_id"], db_path=db_path)
+
+    target = db_path
+    with connect_database(
+        resolve_database_target(
+            target,
+            env_var="HR_HUNTER_STATE_DB",
+            default_path="output/state/hr_hunter_state.db",
+        )
+    ) as connection:
+        connection.execute(
+            "UPDATE jobs SET created_at = ?, started_at = ?, heartbeat_at = ?, progress_json = ? WHERE id = ?",
+            (
+                "2026-04-13T12:00:00+00:00",
+                "2026-04-13T12:00:00+00:00",
+                "2026-04-13T12:05:00+00:00",
+                json.dumps(
+                    {
+                        "stage": "finalizing",
+                        "stage_label": "Finalizing",
+                        "status": "running",
+                        "percent": 97,
+                        "elapsed_seconds": 300,
+                        "stage_elapsed_seconds": 20,
+                        "estimated_total_seconds": 320,
+                        "updated_at": "2026-04-13T12:05:00+00:00",
+                    }
+                ),
+                queued["job_id"],
+            ),
+        )
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 4, 13, 12, 10, 0, tzinfo=timezone.utc if tz else None)
+
+    monkeypatch.setattr("hr_hunter.state.datetime", FrozenDateTime)
+
+    job = load_job(queued["job_id"], db_path=db_path)
+
+    assert job is not None
+    assert job["progress"]["elapsed_seconds"] == 600
+    assert job["progress"]["stage_elapsed_seconds"] == 320
+    assert job["progress"]["estimated_total_seconds"] >= 602
+    assert job["progress"]["eta_seconds"] >= 2
 
 
 def test_load_job_redacts_legacy_database_locators_in_result_and_checkpoint(tmp_path: Path) -> None:

@@ -190,6 +190,10 @@ def candidate_priority_sort_tuple(
     )
     status_rank = STATUS_RANK.get(str(getattr(candidate, "verification_status", "") or "").lower(), 9)
     current_employment_confirmed = 0 if getattr(candidate, "current_employment_confirmed", False) else 1
+    precise_location_confirmed = 0 if getattr(candidate, "precise_location_confirmed", False) else 1
+    current_location_confirmed = 0 if getattr(candidate, "current_location_confirmed", False) else 1
+    current_company_confirmed = 0 if getattr(candidate, "current_company_confirmed", False) else 1
+    current_title_confirmed = 0 if getattr(candidate, "current_title_confirmed", False) else 1
     current_role_proof_count = int(getattr(candidate, "current_role_proof_count", 0) or 0)
     current_function_fit = float(getattr(candidate, "current_function_fit", 0.0) or 0.0)
     skill_overlap_score = float(getattr(candidate, "skill_overlap_score", 0.0) or 0.0)
@@ -222,12 +226,18 @@ def candidate_priority_sort_tuple(
         return (
             bucket,
             current_employment_confirmed,
+            precise_location_confirmed,
+            current_location_confirmed,
+            current_company_confirmed,
+            current_title_confirmed,
             -current_role_proof_count,
+            -industry_fit_score,
+            -company_match_score,
             market_rank,
-            -evidence_quality_score,
-            -parser_confidence,
             -current_function_fit,
             -skill_overlap_score,
+            -evidence_quality_score,
+            -parser_confidence,
             status_rank,
             -score,
             name_key,
@@ -236,12 +246,16 @@ def candidate_priority_sort_tuple(
         bucket,
         status_rank,
         current_employment_confirmed,
+        precise_location_confirmed,
+        current_location_confirmed,
+        current_company_confirmed,
+        current_title_confirmed,
         -current_role_proof_count,
         market_rank,
-        -current_function_fit,
-        -skill_overlap_score,
         -industry_fit_score,
         -company_match_score,
+        -current_function_fit,
+        -skill_overlap_score,
         -location_match_score,
         -evidence_quality_score,
         -parser_confidence,

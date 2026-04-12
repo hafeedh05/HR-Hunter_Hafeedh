@@ -641,6 +641,25 @@ def prioritize_verification_candidates(
     )
 
 
+def prioritize_final_candidates(
+    candidates: Iterable[CandidateProfile],
+    *,
+    brief: SearchBrief | None = None,
+    company_required: bool,
+) -> List[CandidateProfile]:
+    hydrated_candidates = [hydrate_candidate_reporting(candidate) for candidate in candidates]
+
+    return sorted(
+        hydrated_candidates,
+        key=lambda candidate: candidate_priority_sort_tuple(
+            candidate,
+            brief,
+            phase="final",
+            company_required=company_required,
+        ),
+    )
+
+
 def prepare_verification_candidate_order(
     candidates: Iterable[CandidateProfile],
     *,

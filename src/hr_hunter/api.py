@@ -29,6 +29,7 @@ from hr_hunter.output import (
     collect_seen_candidate_keys,
     collect_seen_provider_queries,
     prepare_verification_candidate_order,
+    prioritize_final_candidates,
     prioritize_verification_candidates,
     write_report,
 )
@@ -242,14 +243,22 @@ def _runtime_storage_snapshot() -> Dict[str, Dict[str, Any]]:
     }
 
 
-def _apply_scope_first_candidate_order(report, *, brief):
+def _apply_scope_first_candidate_order(report, *, brief, phase: str = "final"):
     if not bool(getattr(brief, "scope_first_enabled", False)):
         return report
-    report.candidates = prioritize_verification_candidates(
-        report.candidates,
-        brief=brief,
-        company_required=bool(getattr(brief, "company_targets", [])),
-    )
+    phase_name = str(phase or "final").strip().lower() or "final"
+    if phase_name == "verification":
+        report.candidates = prioritize_verification_candidates(
+            report.candidates,
+            brief=brief,
+            company_required=bool(getattr(brief, "company_targets", [])),
+        )
+    else:
+        report.candidates = prioritize_final_candidates(
+            report.candidates,
+            brief=brief,
+            company_required=bool(getattr(brief, "company_targets", [])),
+        )
     summary = dict(report.summary or {})
     scope_counts = build_scope_progress_counts(report.candidates)
     summary["scope_first_enabled"] = True
@@ -1154,7 +1163,7 @@ def create_app() -> "FastAPI":
                 exclude_history_dirs=exclude_history_dirs,
                 progress_callback=_on_pipeline_progress,
             )
-            report = _apply_scope_first_candidate_order(report, brief=brief)
+            report = _apply_scope_first_candidate_order(report, brief=brief, phase="verification")
             scope_targets = _resolve_scope_targets(
                 payload=payload,
                 ui_payload=ui_payload,

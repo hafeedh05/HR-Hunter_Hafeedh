@@ -58,12 +58,49 @@ PROFILE_PATH_HINTS = (
     "/about/team",
     "/org-chart/",
 )
+TRUSTED_PROFILE_DOMAINS = {
+    "linkedin.com",
+    "www.linkedin.com",
+    "ae.linkedin.com",
+    "de.linkedin.com",
+    "kw.linkedin.com",
+    "qa.linkedin.com",
+    "sa.linkedin.com",
+    "theorg.com",
+}
 LOCATION_PROBE_PHRASES = (
     '"based in"',
     '"based out of"',
     '"located in"',
     '"works in"',
     '"county"',
+)
+LOCATION_CONFIRMATION_PHRASES = (
+    "based in",
+    "based out of",
+    "located in",
+    "works in",
+    "working in",
+    "lives in",
+    "living in",
+    "resident in",
+)
+LOCATION_EVENT_BLOCKERS = (
+    "award",
+    "awards",
+    "conference",
+    "event",
+    "flagship",
+    "forum",
+    "guest",
+    "launch",
+    "opening",
+    "panel",
+    "remarks",
+    "speaker",
+    "speakers",
+    "summit",
+    "welcomed",
 )
 LOCATION_SOURCE_TERMS = (
     "appointed",
@@ -212,12 +249,52 @@ class PublicEvidenceVerifier:
         return self._combine_query_parts(include_clause, " ".join(exclude_values))
 
     @staticmethod
-    def _is_profile_like_source(source_url: str, source_domain: str) -> bool:
+    def _name_tokens(value: str) -> List[str]:
+        return [token for token in re.split(r"[^a-z0-9]+", normalize_text(value)) if len(token) >= 3]
+
+    @classmethod
+    def _title_or_snippet_has_name_anchor(cls, candidate: CandidateProfile, *values: str) -> bool:
+        normalized_name = normalize_text(candidate.full_name)
+        combined = normalize_text(" ".join(str(value or "") for value in values))
+        if normalized_name and normalized_name in combined:
+            return True
+        tokens = cls._name_tokens(candidate.full_name)
+        if len(tokens) < 2:
+            return False
+        matches = sum(1 for token in tokens if token in combined)
+        return matches >= min(2, len(tokens))
+
+    @classmethod
+    def _url_path_has_name_anchor(cls, candidate: CandidateProfile, source_url: str) -> bool:
+        path = normalize_text(urlparse(source_url).path.replace("/", " "))
+        tokens = cls._name_tokens(candidate.full_name)
+        if not tokens:
+            return False
+        matches = sum(1 for token in tokens if token in path)
+        required = 1 if len(tokens) == 1 else min(2, len(tokens))
+        return matches >= required
+
+    @classmethod
+    def _is_profile_like_source(
+        cls,
+        candidate: CandidateProfile,
+        source_url: str,
+        source_domain: str,
+        title: str,
+        snippet: str,
+    ) -> bool:
         lowered_url = source_url.lower()
         lowered_domain = source_domain.lower()
-        if any(hint in lowered_url for hint in PROFILE_PATH_HINTS):
+        if not any(hint in lowered_url for hint in PROFILE_PATH_HINTS) and lowered_domain not in TRUSTED_PROFILE_DOMAINS:
+            return False
+        if "/in/" in lowered_url:
             return True
-        return lowered_domain in {"theorg.com"}
+        if lowered_domain == "theorg.com":
+            return cls._title_or_snippet_has_name_anchor(candidate, title, snippet) or cls._url_path_has_name_anchor(candidate, source_url)
+        return (
+            cls._title_or_snippet_has_name_anchor(candidate, title)
+            or cls._url_path_has_name_anchor(candidate, source_url)
+        )
 
     @staticmethod
     def _looks_like_past_role(text: str) -> bool:
@@ -251,6 +328,32 @@ class PublicEvidenceVerifier:
             record.current_employment_signal
             or (record.profile_signal and record.confidence >= 0.75)
         )
+
+    def _supports_location_confirmation(
+        self,
+        record: EvidenceRecord,
+        *,
+        current_year: int,
+        precise_required: bool,
+    ) -> bool:
+        if not record.location_match:
+            return False
+        if precise_required and not record.precise_location_match:
+            return False
+        if not self._supports_current_role(record):
+            return False
+        if self._is_stale(record, current_year) or record.confidence < 0.45:
+            return False
+        normalized_text = normalize_text(self._record_text(record))
+        explicit_location_cue = any(phrase in normalized_text for phrase in LOCATION_CONFIRMATION_PHRASES)
+        event_like_context = any(term in normalized_text for term in LOCATION_EVENT_BLOCKERS)
+        if record.profile_signal:
+            return True
+        if explicit_location_cue:
+            return True
+        if event_like_context:
+            return False
+        return False
 
     @staticmethod
     def _is_stale(record: EvidenceRecord, current_year: int) -> bool:
@@ -426,7 +529,7 @@ class PublicEvidenceVerifier:
                 precise_location_match = not self._is_country_only_location(hint, brief.geography.country)
                 break
 
-        profile_signal = self._is_profile_like_source(source_url, source_domain)
+        profile_signal = self._is_profile_like_source(candidate, source_url, source_domain, title, snippet)
         current_employment_signal = bool(
             matched_company
             and matched_titles
@@ -732,20 +835,22 @@ class PublicEvidenceVerifier:
             for record in evidence_records
         )
         candidate.current_location_confirmed = candidate.location_aligned or any(
-            record.location_match
-            and self._supports_current_role(record)
-            and not self._is_stale(record, current_year)
-            and record.confidence >= 0.45
+            self._supports_location_confirmation(
+                record,
+                current_year=current_year,
+                precise_required=False,
+            )
             for record in evidence_records
         )
         candidate.precise_location_confirmed = (
             candidate.location_precision_bucket
             not in {"country_only", "unknown_location", "outside_target_area", ""}
             or any(
-                record.precise_location_match
-                and self._supports_current_role(record)
-                and not self._is_stale(record, current_year)
-                and record.confidence >= 0.45
+                self._supports_location_confirmation(
+                    record,
+                    current_year=current_year,
+                    precise_required=True,
+                )
                 for record in evidence_records
             )
         )
@@ -757,11 +862,12 @@ class PublicEvidenceVerifier:
         precise_location_records = [
             record
             for record in evidence_records
-            if record.precise_location_match
+            if self._supports_location_confirmation(
+                record,
+                current_year=current_year,
+                precise_required=True,
+            )
             and record.source_type != "company_location"
-            and self._supports_current_role(record)
-            and not self._is_stale(record, current_year)
-            and record.confidence >= 0.45
         ]
         company_location_records = [
             record
@@ -846,7 +952,7 @@ class PublicEvidenceVerifier:
             )
         if company_location_records:
             candidate.verification_notes.append(
-                f"{len(company_location_records)} company office/contact sources support Ireland locality"
+                f"{len(company_location_records)} company office/contact sources support target-market locality"
             )
 
         if stale_data_risk:

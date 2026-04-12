@@ -3738,6 +3738,8 @@ async function restoreSession() {
 async function completeSessionBootstrap(user, initialProjects = []) {
   state.user = user;
   state.projects = Array.isArray(initialProjects) ? initialProjects : [];
+  const storedProject = state.selectedProjectId;
+  state.projectLoadPending = Boolean(storedProject);
   document.getElementById("nav-user-name").textContent = user.full_name || user.email;
   document.getElementById("nav-user-role").textContent = user.is_admin ? "Admin" : "Recruiter";
   document.getElementById("owner-user-name").textContent = user.full_name || user.email;
@@ -3745,6 +3747,10 @@ async function completeSessionBootstrap(user, initialProjects = []) {
   populateSettingsFields();
   renderProjectList();
   renderHistory();
+  if (state.projectLoadPending) {
+    renderResults();
+    renderCandidates();
+  }
   const bootstrapTasks = [
     refreshUsers(),
     refreshProjects(state.projectSearchQuery),
@@ -3754,7 +3760,6 @@ async function completeSessionBootstrap(user, initialProjects = []) {
   }
   const bootstrapResults = await Promise.allSettled(bootstrapTasks);
   const bootstrapFailure = bootstrapResults.find((result) => result.status === "rejected");
-  const storedProject = state.selectedProjectId;
   try {
     if (storedProject && state.projects.some((project) => project.id === storedProject)) {
       await loadProject(storedProject);
