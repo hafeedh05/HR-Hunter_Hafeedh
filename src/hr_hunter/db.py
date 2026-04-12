@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
+from urllib.parse import urlsplit
 
 try:
     import psycopg
@@ -35,6 +36,18 @@ def is_postgres_locator(value: str | None) -> bool:
     return normalized.startswith(POSTGRES_SCHEMES)
 
 
+def redact_database_locator(locator: str | None) -> str:
+    normalized = str(locator or "").strip()
+    if not is_postgres_locator(normalized):
+        return normalized
+    parts = urlsplit(normalized)
+    scheme = parts.scheme or "postgresql"
+    database_path = str(parts.path or "").strip()
+    if database_path and not database_path.startswith("/"):
+        database_path = f"/{database_path}"
+    return f"{scheme}://<redacted>{database_path}"
+
+
 def resolve_database_target(
     explicit: str | Path | None,
     *,
@@ -45,6 +58,20 @@ def resolve_database_target(
     if isinstance(locator, Path):
         return DatabaseTarget(backend="sqlite", locator=str(locator), path=locator)
     return DatabaseTarget(backend="postgres", locator=str(locator))
+
+
+def describe_database_target(target: DatabaseTarget) -> dict[str, Any]:
+    if target.backend == "sqlite":
+        return {
+            "backend": "sqlite",
+            "display_locator": str(target.path) if target.path is not None else target.locator,
+            "credentials_redacted": False,
+        }
+    return {
+        "backend": "postgres",
+        "display_locator": redact_database_locator(target.locator),
+        "credentials_redacted": True,
+    }
 
 
 def connect_database(target: DatabaseTarget) -> "ConnectionWrapper":
@@ -162,4 +189,3 @@ class ConnectionWrapper:
 
     def close(self) -> None:
         self._connection.close()
-

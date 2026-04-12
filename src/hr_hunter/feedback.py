@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from hr_hunter.db import connect_database, resolve_database_target
+from hr_hunter.db import connect_database, describe_database_target, resolve_database_target
 from hr_hunter.identity import canonicalize_profile_url, candidate_identity_keys, candidate_primary_key, normalize_identity_text
 from hr_hunter.models import CandidateProfile, GeoSpec, SearchBrief, SearchRunReport
 from hr_hunter.output import load_report
@@ -109,6 +109,10 @@ def _resolve_target(db_path: Path | str | None) -> Any:
 
 def _connect(db_path: Path | str | None) -> Any:
     return connect_database(_resolve_target(db_path))
+
+
+def _storage_metadata(db_path: Path | str | None) -> Dict[str, Any]:
+    return describe_database_target(_resolve_target(db_path))
 
 
 def init_feedback_db(db_path: Path | str | None = None) -> Path | str:
@@ -598,7 +602,8 @@ def log_feedback(
         note=note,
     )
     return {
-        "db_path": str(resolved),
+        "db_path": _storage_metadata(resolved)["display_locator"],
+        "storage": _storage_metadata(resolved),
         "brief_id": report.brief_id,
         "candidate_id": candidate_id,
         "candidate_name": candidate.full_name,

@@ -133,6 +133,37 @@ def test_score_candidate_matches_target_company_subdivision_name() -> None:
     assert "Unilever" in scored.matched_companies
 
 
+def test_score_candidate_does_not_treat_peer_source_company_as_hard_company_match() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-peer-company-separation-test",
+            "role_title": "Chief Executive Officer",
+            "titles": ["Chief Executive Officer", "Managing Director"],
+            "company_targets": ["Marina Home Interiors"],
+            "peer_company_targets": ["The One"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Dubai", "United Arab Emirates"],
+            },
+            "industry_keywords": ["premium retail", "home furnishings"],
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Peer Source Executive",
+        current_title="Chief Executive Officer",
+        current_company="The One",
+        location_name="Dubai, United Arab Emirates",
+        summary="Premium home retail executive with GCC scope.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_target_company_match is False
+    assert "Marina Home Interiors" not in scored.matched_companies
+
+
 def test_score_candidate_demotes_generic_tech_product_manager() -> None:
     brief = build_search_brief(
         {

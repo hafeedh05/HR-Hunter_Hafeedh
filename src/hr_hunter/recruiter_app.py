@@ -1290,7 +1290,7 @@ def _derive_search_profile(
     role_title: str,
     titles: List[str],
     location_targets: List[str],
-    company_targets: List[str],
+    sourcing_company_targets: List[str],
     required_keywords: List[str],
     preferred_keywords: List[str],
     industry_keywords: List[str],
@@ -1303,7 +1303,7 @@ def _derive_search_profile(
             len(required_keywords) >= 2,
             bool(preferred_keywords),
             bool(industry_keywords),
-            bool(company_targets),
+            bool(sourcing_company_targets),
             len(document_text) >= 120,
         )
         if signal
@@ -1313,7 +1313,7 @@ def _derive_search_profile(
     title_count = len(titles)
     common_role_precision_search = (
         not executive_brief
-        and not company_targets
+        and not sourcing_company_targets
         and limit <= 120
         and location_count <= 2
         and title_count <= 3
@@ -1343,6 +1343,7 @@ def _build_brief_follow_up_questions(
     cities: List[str],
     location_targets: List[str],
     companies: List[str],
+    source_companies: List[str],
     company_match_mode: str,
     required_keywords: List[str],
     industry_keywords: List[str],
@@ -1357,7 +1358,7 @@ def _build_brief_follow_up_questions(
     explicit_title_scope = _has_explicit_title_scope(titles)
     explicit_company_scope = _has_explicit_company_scope(company_match_mode)
     thin_detail = len(required_keywords) < 2 and not industry_keywords and len(document_text) < 160
-    common_volume_search = bool(limit >= 40 and not companies and title_count <= 2 and not executive_brief)
+    common_volume_search = bool(limit >= 40 and not source_companies and title_count <= 2 and not executive_brief)
 
     if location_count >= 2:
         questions.append(
@@ -1519,6 +1520,7 @@ def _resolve_top_up_expansion_strategy(
     top_up_round: int,
     search_profile: str,
     executive_brief: bool,
+    scope_first_enabled: bool,
     has_explicit_query_family_budgets: bool,
     raw_brief_clarifications: Dict[str, Any],
     explicit_geo_fanout: bool | None,
@@ -1538,7 +1540,8 @@ def _resolve_top_up_expansion_strategy(
         "auto_broadened": False,
         "steps": [],
     }
-    if top_up_round <= 0 or search_profile != FOCUSED_SEARCH_PROFILE:
+    controlled_scope_first = bool(search_profile == FOCUSED_SEARCH_PROFILE or (executive_brief and scope_first_enabled))
+    if top_up_round <= 0 or not controlled_scope_first:
         return {
             "allow_adjacent_titles": allow_adjacent_titles,
             "expand_search_when_thin": expand_search_when_thin,
@@ -1654,6 +1657,12 @@ def assess_ui_brief_quality(brief_config: Dict[str, Any]) -> Dict[str, Any]:
         for value in brief_config.get("company_targets", [])
         if str(value).strip()
     ]
+    peer_company_targets = [
+        str(value).strip()
+        for value in brief_config.get("peer_company_targets", [])
+        if str(value).strip()
+    ]
+    sourcing_company_targets = unique_preserving_order([*company_targets, *peer_company_targets])
     document_text = str(brief_config.get("document_text", "")).strip()
     min_years = _coerce_int(brief_config.get("minimum_years_experience"))
     max_years = _coerce_int(brief_config.get("maximum_years_experience"))
@@ -1703,7 +1712,7 @@ def assess_ui_brief_quality(brief_config: Dict[str, Any]) -> Dict[str, Any]:
         score += 1
         detail_signals += 1
 
-    if len(company_targets) >= 2:
+    if len(sourcing_company_targets) >= 2:
         score += 1
         detail_signals += 1
 
@@ -1755,6 +1764,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     cities = parse_multi_value(payload.get("cities"))
     companies = parse_multi_value(payload.get("company_targets"))
     peer_companies = parse_multi_value(payload.get("peer_company_targets"))
+    sourcing_companies = unique_preserving_order([*companies, *peer_companies])
     exclude_titles = parse_multi_value(payload.get("exclude_title_keywords"))
     exclude_companies = parse_multi_value(payload.get("exclude_company_keywords"))
     must_have = parse_multi_value(payload.get("must_have_keywords"))
@@ -1837,7 +1847,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         role_title=role_title,
         titles=titles,
         location_targets=location_targets,
-        company_targets=companies,
+        sourcing_company_targets=sourcing_companies,
         required_keywords=required_keywords,
         preferred_keywords=preferred_keywords,
         industry_keywords=industry_keywords,
@@ -1845,7 +1855,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         limit=limit,
     )
     explicit_title_scope = _has_explicit_title_scope(titles)
-    common_volume_search = bool(limit >= 40 and not companies and len(titles) <= 2 and not executive_brief)
+    common_volume_search = bool(limit >= 40 and not sourcing_companies and len(titles) <= 2 and not executive_brief)
     brief_follow_up_questions = _build_brief_follow_up_questions(
         role_title=role_title,
         titles=titles,
@@ -1853,6 +1863,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         cities=cities,
         location_targets=location_targets,
         companies=companies,
+        source_companies=sourcing_companies,
         company_match_mode=str(payload.get("company_match_mode", "both") or "both"),
         required_keywords=required_keywords,
         industry_keywords=industry_keywords,
@@ -2054,6 +2065,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             executive_brief=executive_brief,
         )
     verification_scope_target = min(max(0, int(verification_scope_target or 0)), max(verification_top_n, 0))
+    executive_scope_first = bool(executive_brief and scope_first_enabled)
     verification_parallel_candidates = max(
         1,
         _coerce_int(payload.get("verification_parallel_candidates"))
@@ -2117,16 +2129,32 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if str(family).strip()
     }
     has_explicit_query_family_budgets = bool(payload_query_family_budgets or tuned_query_family_budgets)
-    if not resolved_query_family_budgets and search_profile == FOCUSED_SEARCH_PROFILE:
+    if not resolved_query_family_budgets and (search_profile == FOCUSED_SEARCH_PROFILE or executive_scope_first):
         resolved_query_family_budgets = _default_query_family_budgets(
-            search_profile=search_profile,
+            search_profile=FOCUSED_SEARCH_PROFILE if executive_scope_first else search_profile,
             executive_brief=executive_brief,
             top_up_round=top_up_round,
         )
+    if executive_scope_first and top_up_round <= 0:
+        if explicit_include_history_slices is None:
+            resolved_include_history_slices = False
+        if explicit_include_discovery_slices is None:
+            resolved_include_discovery_slices = False
+        if explicit_geo_fanout is None:
+            resolved_geo_fanout = False
+        include_country_only_queries = False
+        if _coerce_int(payload.get("max_geo_groups")) is None and tuned_max_geo_groups is None:
+            resolved_max_geo_groups = min(
+                resolved_max_geo_groups,
+                max(2, min(3, len(location_targets) or 2)),
+            )
+        if not has_explicit_query_family_budgets:
+            resolved_query_family_budgets = dict(FOCUSED_QUERY_FAMILY_BUDGETS)
     top_up_strategy = _resolve_top_up_expansion_strategy(
         top_up_round=top_up_round,
         search_profile=search_profile,
         executive_brief=executive_brief,
+        scope_first_enabled=bool(scope_first_enabled),
         has_explicit_query_family_budgets=has_explicit_query_family_budgets,
         raw_brief_clarifications=raw_brief_clarifications,
         explicit_geo_fanout=explicit_geo_fanout,
@@ -2153,11 +2181,17 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if explicit_include_discovery_slices is not None
         else (tuned_include_discovery_slices if tuned_include_discovery_slices is not None else expand_search_when_thin)
     )
+    if executive_scope_first and top_up_round <= 0 and explicit_include_discovery_slices is None:
+        resolved_include_discovery_slices = False
     if exact_company_scope and companies:
         resolved_include_history_slices = False
         resolved_include_discovery_slices = False
     if strict_market_scope and location_targets:
         resolved_geo_fanout = False
+        include_country_only_queries = False
+    elif executive_scope_first and top_up_round <= 0:
+        if explicit_geo_fanout is None:
+            resolved_geo_fanout = False
         include_country_only_queries = False
     resolved_query_family_budgets = {
         str(family).strip(): max(0, int(value))
@@ -2441,8 +2475,8 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Doha",
                     "Manama",
                 ],
-                "company_targets": [
-                    "Marina Home Interiors",
+                "company_targets": [],
+                "peer_company_targets": [
                     "The One",
                     "Al Huzaifa",
                     "IDdesign",
@@ -2493,7 +2527,6 @@ def build_app_bootstrap() -> Dict[str, Any]:
                 "brief_clarifications": {
                     "prioritize_first_location": True,
                     "allow_adjacent_titles": False,
-                    "exact_company_scope": True,
                     "strict_market_scope": True,
                     "expand_search_when_thin": False,
                 },

@@ -178,6 +178,14 @@ def test_build_app_bootstrap_exposes_supported_ui_options():
     assert preset["jd_breakdown"]["key_experience_points"]
 
 
+def test_build_app_bootstrap_marina_preset_uses_peer_companies_for_sourcing() -> None:
+    preset = build_app_bootstrap()["presets"]["ceo_marina_home_emea"]
+
+    assert preset["company_targets"] == []
+    assert "Marina Home Interiors" not in preset["peer_company_targets"]
+    assert "The One" in preset["peer_company_targets"]
+
+
 def test_build_app_bootstrap_can_enable_code_only_login(monkeypatch):
     monkeypatch.setenv("HR_HUNTER_CODE_ONLY_LOGIN", "true")
 
@@ -391,6 +399,22 @@ def test_build_ui_brief_payload_respects_internal_fetch_override():
     assert payload["brief_config"]["provider_settings"]["reranker"]["top_n"] == 220
 
 
+def test_build_ui_brief_payload_treats_peer_companies_as_real_scope_detail() -> None:
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Regional Sales Manager",
+            "titles": ["Regional Sales Manager"],
+            "countries": ["United Arab Emirates"],
+            "peer_company_targets": ["Careem", "talabat"],
+            "limit": 80,
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["brief_search_profile"] == "balanced"
+
+
 def test_build_ui_brief_payload_uses_broader_recommended_defaults_for_common_50_candidate_searches():
     payload = build_ui_brief_payload(
         {
@@ -419,6 +443,24 @@ def test_build_ui_brief_payload_uses_broader_recommended_defaults_for_common_50_
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["trade_directory_pages"] == 8
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["industry_association_pages"] == 6
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["award_industry_pages"] == 0
+
+
+def test_assess_ui_brief_quality_counts_peer_company_targets_as_brief_detail() -> None:
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Regional Sales Manager",
+            "titles": ["Regional Sales Manager"],
+            "countries": ["United Arab Emirates"],
+            "peer_company_targets": ["Careem", "talabat"],
+            "limit": 80,
+        }
+    )
+
+    quality = assess_ui_brief_quality(payload["brief_config"])
+
+    assert quality["ok"] is True
+    assert quality["score"] >= 5
+    assert quality["issues"] == []
 
 
 def test_build_ui_brief_payload_keeps_common_100_candidate_searches_in_focused_precision_mode():
@@ -498,6 +540,30 @@ def test_build_ui_brief_payload_applies_exact_company_and_market_scope_clarifica
     assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is False
     assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
     assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
+
+
+def test_build_ui_brief_payload_keeps_exec_scope_first_searches_tight_before_top_up():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Chief Executive Officer (CEO)",
+            "titles": ["Chief Executive Officer", "Managing Director", "President"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "cities": ["Dubai", "Riyadh"],
+            "peer_company_targets": ["The One", "Al Huzaifa", "BoConcept"],
+            "must_have_keywords": ["P&L", "Retail Operations", "Omnichannel"],
+            "job_description": "Need a premium home retail chief executive with GCC scope and real store network ownership.",
+            "limit": 300,
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["scope_first_enabled"] is True
+    assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is False
+    assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
+    assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["org_chart_profile_pages"] >= 8
 
 
 def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():

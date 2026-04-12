@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
 from hr_hunter.briefing import normalize_text
-from hr_hunter.db import connect_database, resolve_database_target
+from hr_hunter.db import connect_database, describe_database_target, resolve_database_target
 from hr_hunter.identity import candidate_primary_key
 from hr_hunter.models import CandidateProfile, SearchBrief, SearchRunReport
 from hr_hunter.output import load_report
@@ -170,6 +170,10 @@ def _resolve_target(db_path: Path | str | None) -> Any:
 
 def _connect(db_path: Path | str | None) -> Any:
     return connect_database(_resolve_target(db_path))
+
+
+def _storage_metadata(db_path: Path | str | None) -> Dict[str, Any]:
+    return describe_database_target(_resolve_target(db_path))
 
 
 def _run_summary_from_artifact(
@@ -599,7 +603,8 @@ def persist_search_run(
             ),
         )
     return {
-        "db_path": str(resolved),
+        "db_path": _storage_metadata(resolved)["display_locator"],
+        "storage": _storage_metadata(resolved),
         "mandate_id": mandate_id,
         "run_id": report.run_id,
         "candidate_count": len(report.candidates),
@@ -729,7 +734,8 @@ def review_candidate(
             ),
         )
     return {
-        "db_path": str(resolved),
+        "db_path": _storage_metadata(resolved)["display_locator"],
+        "storage": _storage_metadata(resolved),
         "mandate_id": mandate_id,
         "run_id": run_id,
         "candidate_id": candidate_id,
@@ -761,7 +767,12 @@ def record_model_version(
             """,
             (row_id, model_type, model_version, model_dir, _json(metadata), _now()),
         )
-    return {"db_path": str(resolved), "id": row_id, "model_version": model_version}
+    return {
+        "db_path": _storage_metadata(resolved)["display_locator"],
+        "storage": _storage_metadata(resolved),
+        "id": row_id,
+        "model_version": model_version,
+    }
 
 
 def list_run_history(
@@ -1021,7 +1032,8 @@ def summarize_system_state(*, db_path: Path | None = None) -> Dict[str, Any]:
             "SELECT id, created_at, execution_backend, candidate_count FROM search_runs ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
     return {
-        "db_path": str(resolved),
+        "db_path": _storage_metadata(resolved)["display_locator"],
+        "storage": _storage_metadata(resolved),
         "counts": counts,
         "latest_run": dict(latest_run) if latest_run else None,
     }
@@ -1061,7 +1073,14 @@ def enqueue_job(job_type: str, payload: Dict[str, Any], *, db_path: Path | None 
                 now,
             ),
         )
-    return {"db_path": str(resolved), "job_id": job_id, "status": "queued", "progress": initial_progress, "checkpoint": {}}
+    return {
+        "db_path": _storage_metadata(resolved)["display_locator"],
+        "storage": _storage_metadata(resolved),
+        "job_id": job_id,
+        "status": "queued",
+        "progress": initial_progress,
+        "checkpoint": {},
+    }
 
 
 def start_job(job_id: str, *, db_path: Path | None = None) -> None:

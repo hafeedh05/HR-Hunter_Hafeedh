@@ -15,7 +15,7 @@ from typing import Any, Dict, Iterable, List, Sequence
 from urllib.parse import quote
 
 from hr_hunter.config import env_flag
-from hr_hunter.db import DbIntegrityError, connect_database, resolve_database_target
+from hr_hunter.db import DbIntegrityError, connect_database, describe_database_target, resolve_database_target
 from hr_hunter.output import load_report
 from hr_hunter.state import _run_summary_from_artifact, init_state_db, list_jobs, stop_job
 
@@ -52,6 +52,10 @@ def _resolve_target(db_path: Path | str | None) -> Any:
 
 def _connect(db_path: Path | str | None) -> Any:
     return connect_database(_resolve_target(db_path))
+
+
+def _storage_metadata(db_path: Path | str | None) -> Dict[str, Any]:
+    return describe_database_target(_resolve_target(db_path))
 
 
 def _json(value: Any) -> str:
@@ -472,7 +476,8 @@ def authenticate_user(email: str, otp_code: str, *, db_path: Path | None = None)
         raise ValueError(invalid_login_message)
     session = create_session_for_user(str(row["id"]), db_path=resolved)
     return {
-        "db_path": str(resolved),
+        "db_path": _storage_metadata(resolved)["display_locator"],
+        "storage": _storage_metadata(resolved),
         "session_token": session["session_token"],
         "expires_at": session["expires_at"],
         "user": _serialize_user(row),

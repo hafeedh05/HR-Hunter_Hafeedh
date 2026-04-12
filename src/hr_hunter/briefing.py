@@ -344,7 +344,7 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
     if not summary and document_text:
         summary = "\n".join(document_text.splitlines()[:12])
 
-    company_aliases = merge_company_aliases(sourcing_company_targets, config.get("company_aliases", {}))
+    company_aliases = merge_company_aliases(company_targets, config.get("company_aliases", {}))
     brief_clarifications = (
         dict(config.get("brief_clarifications", {}))
         if isinstance(config.get("brief_clarifications", {}), dict)

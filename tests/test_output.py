@@ -1,5 +1,9 @@
 from hr_hunter.models import CandidateProfile
-from hr_hunter.output import build_reporting_summary, build_scope_progress_counts
+from hr_hunter.output import (
+    build_reporting_summary,
+    build_scope_progress_counts,
+    prepare_verification_candidate_order,
+)
 
 
 def _candidate(
@@ -255,3 +259,65 @@ def test_build_scope_progress_counts_only_reports_scope_metrics() -> None:
     assert "verified_count" not in counts
     assert "review_count" not in counts
     assert "reject_count" not in counts
+
+
+def test_prepare_verification_candidate_order_fills_scope_target_first() -> None:
+    candidates = [
+        _candidate(
+            name="Out Of Scope High Score",
+            status="review",
+            score=92.0,
+            current_title_match=False,
+            location_aligned=False,
+            location_bucket="outside_target_area",
+            parser_confidence=0.82,
+            evidence_quality_score=0.72,
+            skill_overlap_score=0.76,
+            current_function_fit=0.8,
+            years_fit_score=0.7,
+            industry_fit_score=0.68,
+            cap_reasons=[],
+        ),
+        _candidate(
+            name="In Scope Exact One",
+            status="reject",
+            score=58.0,
+            current_title_match=True,
+            location_aligned=True,
+            location_bucket="named_target_location",
+            parser_confidence=0.65,
+            evidence_quality_score=0.44,
+            skill_overlap_score=0.5,
+            current_function_fit=0.72,
+            years_fit_score=0.52,
+            industry_fit_score=0.4,
+            cap_reasons=[],
+        ),
+        _candidate(
+            name="In Scope Exact Two",
+            status="reject",
+            score=56.0,
+            current_title_match=True,
+            location_aligned=True,
+            location_bucket="country_only",
+            parser_confidence=0.62,
+            evidence_quality_score=0.42,
+            skill_overlap_score=0.46,
+            current_function_fit=0.7,
+            years_fit_score=0.5,
+            industry_fit_score=0.38,
+            cap_reasons=[],
+        ),
+    ]
+
+    ordered = prepare_verification_candidate_order(
+        candidates,
+        company_required=False,
+        verification_limit=2,
+        scope_target=2,
+    )
+
+    assert [candidate.full_name for candidate in ordered[:2]] == [
+        "In Scope Exact One",
+        "In Scope Exact Two",
+    ]

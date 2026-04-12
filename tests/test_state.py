@@ -188,7 +188,9 @@ def test_summarize_system_state_supports_mapping_rows(monkeypatch) -> None:
 
     ops = summarize_system_state()
 
-    assert ops["db_path"] == "postgresql://fake/hr_hunter"
+    assert ops["db_path"] == "postgresql://<redacted>/hr_hunter"
+    assert ops["storage"]["backend"] == "postgres"
+    assert ops["storage"]["credentials_redacted"] is True
     assert ops["counts"]["mandates"] == 2
     assert ops["counts"]["jobs"] == 2
     assert ops["latest_run"]["id"] == "run-postgres"

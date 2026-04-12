@@ -656,6 +656,52 @@ def prioritize_verification_candidates(
     )
 
 
+def prepare_verification_candidate_order(
+    candidates: Iterable[CandidateProfile],
+    *,
+    company_required: bool,
+    verification_limit: int,
+    scope_target: int = 0,
+) -> List[CandidateProfile]:
+    prioritized = prioritize_verification_candidates(
+        candidates,
+        company_required=company_required,
+    )
+    shortlist_limit = max(0, min(int(verification_limit or 0), len(prioritized)))
+    scope_goal = max(0, min(int(scope_target or 0), shortlist_limit))
+    if shortlist_limit <= 0 or scope_goal <= 0:
+        return prioritized
+
+    selected_keys: Set[str] = set()
+    shortlisted: List[CandidateProfile] = []
+    remainder: List[CandidateProfile] = []
+
+    for candidate in prioritized:
+        identity_key = candidate_primary_key(candidate)
+        if candidate.in_scope and len(shortlisted) < scope_goal and identity_key not in selected_keys:
+            shortlisted.append(candidate)
+            selected_keys.add(identity_key)
+            continue
+        remainder.append(candidate)
+
+    if len(shortlisted) < shortlist_limit:
+        for candidate in remainder:
+            identity_key = candidate_primary_key(candidate)
+            if identity_key in selected_keys:
+                continue
+            shortlisted.append(candidate)
+            selected_keys.add(identity_key)
+            if len(shortlisted) >= shortlist_limit:
+                break
+
+    trailing = [
+        candidate
+        for candidate in prioritized
+        if candidate_primary_key(candidate) not in selected_keys
+    ]
+    return [*shortlisted, *trailing]
+
+
 def _diagnostic_issue(
     *,
     key: str,
@@ -786,6 +832,36 @@ def build_quality_diagnostics(
             if not candidate.current_target_company_match and candidate.location_aligned
         ]
     )
+    executive_role_text = " ".join(
+        str(value or "").strip().lower()
+        for value in [
+            base_summary.get("role_title", ""),
+            *list(base_summary.get("titles", []) or []),
+        ]
+    )
+    executive_brief = any(
+        hint in executive_role_text
+        for hint in (
+            "ceo",
+            "chief executive officer",
+            "chief",
+            "president",
+            "managing director",
+            "general manager",
+            "vice president",
+            "vp",
+        )
+    )
+    public_evidence_gap_count = len(
+        [
+            candidate
+            for candidate in hydrated_candidates
+            if candidate.current_role_proof_count <= 0
+            or candidate.parser_confidence < 0.45
+            or candidate.evidence_quality_score < 0.35
+            or "missing_current_role_proof" in set(candidate.cap_reasons or [])
+        ]
+    )
 
     issues: List[Dict[str, object]] = []
     if title_gap_count / max(1, total) >= 0.28:
@@ -896,6 +972,25 @@ def build_quality_diagnostics(
                 ),
             )
         )
+    if executive_brief and public_evidence_gap_count / max(1, total) >= 0.28:
+        issues.append(
+            _diagnostic_issue(
+                key="public_executive_evidence_thin",
+                label="Public executive evidence is thin",
+                count=public_evidence_gap_count,
+                total=total,
+                severity="high" if verified_rate < 0.12 else "medium",
+                message=(
+                    "Many executive profiles look directionally relevant but do not have enough public current-role "
+                    "evidence to verify cleanly."
+                ),
+                action=(
+                    "Keep the must-current company list small, move comparable brands into Peer Companies to Source "
+                    "From, and add public-proof anchors like P&L ownership, board exposure, retail footprint, or "
+                    "turnaround scope."
+                ),
+            )
+        )
     if strict_cap_count / max(1, total) >= 0.3 and review_rate >= 0.3:
         issues.append(
             _diagnostic_issue(
@@ -956,11 +1051,12 @@ def build_quality_diagnostics(
         "title_mismatch": 1,
         "geo_mismatch": 2,
         "parser_confidence": 3,
-        "weak_must_have_anchors": 4,
-        "weak_company_or_industry_signals": 5,
-        "company_scope_too_strict": 6,
-        "filters_too_strict": 7,
-        "filters_too_loose": 8,
+        "public_executive_evidence_thin": 4,
+        "weak_must_have_anchors": 5,
+        "weak_company_or_industry_signals": 6,
+        "company_scope_too_strict": 7,
+        "filters_too_strict": 8,
+        "filters_too_loose": 9,
     }
     issues = sorted(
         issues,

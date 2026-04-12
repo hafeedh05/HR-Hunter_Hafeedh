@@ -3,6 +3,7 @@ from hr_hunter.api import (
     _finalize_report_for_limit,
     _job_actor_from_payload,
     _resolve_pipeline_progress_percent,
+    _runtime_storage_snapshot,
     _should_stop_after_stagnant_top_up,
 )
 from hr_hunter.models import CandidateProfile, GeoSpec, SearchBrief, SearchRunReport
@@ -148,6 +149,17 @@ def test_should_not_stop_after_single_stagnant_top_up_when_gap_is_still_large():
         top_up_rounds=1,
         stagnant_rounds=1,
     ) is False
+
+
+def test_runtime_storage_snapshot_prefers_shared_database_url(monkeypatch):
+    monkeypatch.setenv("HR_HUNTER_DATABASE_URL", "postgresql://user:secret@db.internal/hr_hunter")
+    monkeypatch.delenv("HR_HUNTER_STATE_DB", raising=False)
+
+    snapshot = _runtime_storage_snapshot()
+
+    assert snapshot["state"]["backend"] == "postgres"
+    assert snapshot["state"]["display_locator"] == "postgresql://<redacted>/hr_hunter"
+    assert snapshot["workspace"]["display_locator"] == "postgresql://<redacted>/hr_hunter"
 
 
 def test_apply_strict_scope_shortlist_keeps_company_market_matches_only():

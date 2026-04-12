@@ -19,6 +19,7 @@ from hr_hunter.config import (
     resolve_ranker_model_dir,
     resolve_state_db_path,
 )
+from hr_hunter.db import describe_database_target, resolve_database_target
 from hr_hunter.engine import SearchEngine, dedupe_candidates
 from hr_hunter.feedback import export_training_rows, init_feedback_db, load_ranker_training_rows, log_feedback
 from hr_hunter.output import (
@@ -26,6 +27,7 @@ from hr_hunter.output import (
     build_reporting_summary,
     collect_seen_candidate_keys,
     collect_seen_provider_queries,
+    prepare_verification_candidate_order,
     prioritize_verification_candidates,
     write_report,
 )
@@ -226,11 +228,41 @@ def _private_api_auth_configured() -> bool:
     return bool(credentials["api_key"] or credentials["bearer_token"])
 
 
+def _runtime_storage_snapshot() -> Dict[str, Dict[str, Any]]:
+    state_target = resolve_database_target(
+        None,
+        env_var="HR_HUNTER_STATE_DB",
+        default_path="output/state/hr_hunter_state.db",
+    )
+    state_storage = describe_database_target(state_target)
+    return {
+        "state": dict(state_storage),
+        "workspace": dict(state_storage),
+    }
+
+
+def _apply_scope_first_candidate_order(report, *, brief):
+    if not bool(getattr(brief, "scope_first_enabled", False)):
+        return report
+    report.candidates = prioritize_verification_candidates(
+        report.candidates,
+        company_required=bool(getattr(brief, "company_targets", [])),
+    )
+    summary = dict(report.summary or {})
+    scope_counts = build_scope_progress_counts(report.candidates)
+    summary["scope_first_enabled"] = True
+    summary["scope_first_in_scope_target"] = max(0, int(getattr(brief, "in_scope_target", 0) or 0))
+    summary["scope_first_in_scope_achieved"] = int(scope_counts.get("in_scope_count", 0) or 0)
+    report.summary = summary
+    return report
+
+
 def _finalize_report_for_limit(report, *, requested_limit: int, internal_fetch_limit: int, brief=None):
     requested = max(1, int(requested_limit or 1))
     retrieval = max(requested, int(internal_fetch_limit or requested))
     if brief is not None:
         report = _apply_strict_scope_shortlist(report, brief=brief)
+        report = _apply_scope_first_candidate_order(report, brief=brief)
     report.candidates = list(report.candidates[:requested])
     summary = dict(report.summary or {})
     summary["requested_candidate_limit"] = requested
@@ -1103,6 +1135,7 @@ def create_app() -> "FastAPI":
                 exclude_history_dirs=exclude_history_dirs,
                 progress_callback=_on_pipeline_progress,
             )
+            report = _apply_scope_first_candidate_order(report, brief=brief)
             scope_targets = _resolve_scope_targets(
                 payload=payload,
                 ui_payload=ui_payload,
@@ -1111,9 +1144,35 @@ def create_app() -> "FastAPI":
             scope_progress_counts = build_scope_progress_counts(report.candidates)
             verification_stats = None
             if verification_enabled and verification_target > 0:
-                report.candidates = prioritize_verification_candidates(
+                verification_scope_target = max(
+                    0,
+                    int(
+                        scope_targets["verification_scope_target"]
+                        or getattr(brief, "verification_scope_target", 0)
+                        or 0
+                    ),
+                )
+                report.candidates = prepare_verification_candidate_order(
                     report.candidates,
                     company_required=bool(brief.company_targets),
+                    verification_limit=verification_target,
+                    scope_target=verification_scope_target,
+                )
+                report.summary = dict(report.summary or {})
+                report.summary["verification_scope_target"] = verification_scope_target
+                report.summary["verification_shortlist_scope_count"] = len(
+                    [
+                        candidate
+                        for candidate in report.candidates[:verification_target]
+                        if getattr(candidate, "in_scope", False)
+                    ]
+                )
+                report.summary["verification_shortlist_precise_scope_count"] = len(
+                    [
+                        candidate
+                        for candidate in report.candidates[:verification_target]
+                        if getattr(candidate, "precise_market_in_scope", False)
+                    ]
                 )
                 verifier = PublicEvidenceVerifier(
                     {
@@ -1326,13 +1385,16 @@ def create_app() -> "FastAPI":
     async def app_config() -> Dict[str, Any]:
         bootstrap = build_app_bootstrap()
         bootstrap["project_statuses"] = PROJECT_STATUS_OPTIONS
+        storage = _runtime_storage_snapshot()
         bootstrap["paths"] = {
             "workspace_root": str(workspace_root),
             "output_dir": str(resolve_output_dir()),
             "feedback_db": str(resolve_feedback_db_path()),
             "model_dir": str(resolve_ranker_model_dir()),
-            "state_db": str(resolve_state_db_path()),
+            "state_db": storage["state"]["display_locator"],
+            "workspace_db": storage["workspace"]["display_locator"],
         }
+        bootstrap["storage"] = storage
         bootstrap["remote_sourcing"] = {
             "configured": remote_client.is_configured(),
             "required": remote_client.is_required(),
@@ -1812,6 +1874,7 @@ def create_app() -> "FastAPI":
             exclude_report_paths=exclude_report_paths,
             exclude_history_dirs=exclude_history_dirs,
         )
+        report = _apply_scope_first_candidate_order(report, brief=brief)
         report = _finalize_report_for_limit(
             report,
             requested_limit=requested_limit,
@@ -1893,6 +1956,7 @@ def create_app() -> "FastAPI":
     async def app_ops(request: Request) -> Dict[str, Any]:
         _require_admin_user(request)
         summary = summarize_system_state()
+        summary["workspace_storage"] = _runtime_storage_snapshot()["workspace"]
         summary["remote_sourcing"] = {
             "configured": remote_client.is_configured(),
             "required": remote_client.is_required(),
