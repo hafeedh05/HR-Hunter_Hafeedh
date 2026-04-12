@@ -2,6 +2,8 @@
 
 HR Hunter is a recruiter-focused search and ranking platform for building project-based candidate pipelines. It combines structured hunt briefs, public-web sourcing, semantic ranking, recruiter feedback, and a full local web app into one workflow.
 
+Operator handoff for the live stack: [`docs/codex-production-handoff.md`](docs/codex-production-handoff.md)
+
 This repository now includes:
 
 - a FastAPI backend
