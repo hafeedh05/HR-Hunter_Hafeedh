@@ -51,6 +51,8 @@ class SearchBrief:
     provider_settings: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     document_text: str = ""
     allow_adjacent_titles: bool = True
+    exact_company_scope: bool = False
+    strict_market_scope: bool = False
 
 
 @dataclass

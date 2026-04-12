@@ -104,6 +104,68 @@ else:
     FASTAPI_IMPORT_ERROR = None
 
 
+def _strict_scope_shortlist_enabled(brief) -> bool:
+    current_only_scope = str(getattr(brief, "company_match_mode", "both") or "both").strip().lower() == "current_only"
+    strict_title_scope = not getattr(brief, "allow_adjacent_titles", True)
+    has_company_scope = bool(getattr(brief, "company_targets", []))
+    has_market_scope = bool(getattr(brief, "location_targets", []) or getattr(brief.geography, "country", ""))
+    return bool(
+        current_only_scope
+        and strict_title_scope
+        and has_company_scope
+        and has_market_scope
+    )
+
+
+def _strict_scope_bucket(candidate, brief) -> int:
+    current_company = bool(getattr(candidate, "current_target_company_match", False))
+    market_match = bool(getattr(candidate, "location_aligned", False))
+    exact_title = bool(getattr(candidate, "current_title_match", False))
+    if current_company and market_match and exact_title:
+        return 0
+    if current_company and market_match:
+        return 1
+    if current_company:
+        return 2
+    if market_match:
+        return 3
+    return 9
+
+
+def _apply_strict_scope_shortlist(report, *, brief):
+    if not _strict_scope_shortlist_enabled(brief):
+        return report
+    original_candidates = list(report.candidates)
+    shortlisted = [
+        candidate
+        for candidate in original_candidates
+        if _strict_scope_bucket(candidate, brief) <= 1
+    ]
+    status_rank = {"verified": 0, "review": 1, "reject": 2}
+    shortlisted = sorted(
+        shortlisted,
+        key=lambda candidate: (
+            _strict_scope_bucket(candidate, brief),
+            status_rank.get(getattr(candidate, "verification_status", "reject"), 9),
+            -float(getattr(candidate, "score", 0.0) or 0.0),
+            str(getattr(candidate, "full_name", "") or "").lower(),
+        ),
+    )
+    summary = dict(report.summary or {})
+    summary["strict_scope_shortlist"] = {
+        "enabled": True,
+        "scope_candidate_count": len(shortlisted),
+        "scope_filtered_out_count": max(0, len(original_candidates) - len(shortlisted)),
+        "exact_title_scope_count": len(
+            [candidate for candidate in shortlisted if _strict_scope_bucket(candidate, brief) == 0]
+        ),
+        "company_market_scope_count": len(shortlisted),
+    }
+    report.summary = summary
+    report.candidates = shortlisted
+    return report
+
+
 def _write_app_request(kind: str, payload: Dict[str, Any]) -> Dict[str, str]:
     output_root = resolve_output_dir() / "inbox"
     output_root.mkdir(parents=True, exist_ok=True)
@@ -130,9 +192,11 @@ def _private_api_auth_configured() -> bool:
     return bool(credentials["api_key"] or credentials["bearer_token"])
 
 
-def _finalize_report_for_limit(report, *, requested_limit: int, internal_fetch_limit: int):
+def _finalize_report_for_limit(report, *, requested_limit: int, internal_fetch_limit: int, brief=None):
     requested = max(1, int(requested_limit or 1))
     retrieval = max(requested, int(internal_fetch_limit or requested))
+    if brief is not None:
+        report = _apply_strict_scope_shortlist(report, brief=brief)
     report.candidates = list(report.candidates[:requested])
     summary = dict(report.summary or {})
     summary["requested_candidate_limit"] = requested
@@ -977,6 +1041,7 @@ def create_app() -> "FastAPI":
                 report,
                 requested_limit=requested_limit,
                 internal_fetch_limit=internal_fetch_limit,
+                brief=brief,
             )
             pipeline_metrics = dict(report.summary.get("pipeline_metrics", {}) or {})
             _push_progress(
@@ -1410,6 +1475,7 @@ def create_app() -> "FastAPI":
             report,
             requested_limit=requested_limit,
             internal_fetch_limit=limit,
+            brief=brief,
         )
         persist_search_run(
             brief,
@@ -1604,6 +1670,7 @@ def create_app() -> "FastAPI":
             report,
             requested_limit=requested_limit,
             internal_fetch_limit=internal_fetch_limit,
+            brief=brief,
         )
         output_dir = Path(ui_payload["output_dir"])
         json_path, csv_path = write_report(

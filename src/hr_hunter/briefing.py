@@ -343,6 +343,11 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
         summary = "\n".join(document_text.splitlines()[:12])
 
     company_aliases = merge_company_aliases(company_targets, config.get("company_aliases", {}))
+    brief_clarifications = (
+        dict(config.get("brief_clarifications", {}))
+        if isinstance(config.get("brief_clarifications", {}), dict)
+        else {}
+    )
 
     return SearchBrief(
         id=config.get("id", "unnamed-brief"),
@@ -384,4 +389,6 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
         provider_settings=config.get("provider_settings", {}),
         document_text=document_text,
         allow_adjacent_titles=expand_title_keywords,
+        exact_company_scope=bool(brief_clarifications.get("exact_company_scope", False)),
+        strict_market_scope=bool(brief_clarifications.get("strict_market_scope", False)),
     )
