@@ -3817,8 +3817,16 @@ async function completeSessionBootstrap(user, initialProjects = []) {
   if (state.user?.is_admin) {
     bootstrapTasks.push(refreshOps());
   }
-  const bootstrapResults = await Promise.allSettled(bootstrapTasks);
-  const bootstrapFailure = bootstrapResults.find((result) => result.status === "rejected");
+  void Promise.allSettled(bootstrapTasks).then((bootstrapResults) => {
+    const bootstrapFailure = bootstrapResults.find((result) => result.status === "rejected");
+    if (bootstrapFailure && bootstrapFailure.reason) {
+      setStatus(
+        "Signed in with partial data.",
+        "warning",
+        bootstrapFailure.reason.message || "Some workspace data could not be loaded yet.",
+      );
+    }
+  });
   try {
     if (storedProject && state.projects.some((project) => project.id === storedProject)) {
       await loadProject(storedProject);
@@ -3829,13 +3837,6 @@ async function completeSessionBootstrap(user, initialProjects = []) {
   } catch {
     startNewProject();
     switchTab("projects");
-  }
-  if (bootstrapFailure && bootstrapFailure.reason) {
-    setStatus(
-      "Signed in with partial data.",
-      "warning",
-      bootstrapFailure.reason.message || "Some workspace data could not be loaded yet.",
-    );
   }
 }
 
