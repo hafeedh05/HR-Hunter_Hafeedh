@@ -7,6 +7,7 @@ from functools import lru_cache
 from typing import Callable, Iterable, List, Sequence
 
 from hr_hunter.briefing import unique_preserving_order
+from hr_hunter.candidate_order import candidate_priority_sort_tuple
 from hr_hunter.models import CandidateProfile, SearchBrief
 from hr_hunter.ranker import cap_candidate_score, status_from_score
 
@@ -329,8 +330,12 @@ def rerank_candidates(
                 candidate.ranking_model_version = "heuristic-anchor-ranker-v1"
         return list(candidates)
 
-    rerank_window = list(candidates[: settings.top_n])
-    passthrough = list(candidates[settings.top_n :])
+    ordered_candidates = sorted(
+        list(candidates),
+        key=lambda candidate: candidate_priority_sort_tuple(candidate, brief, phase="rerank"),
+    )
+    rerank_window = list(ordered_candidates[: settings.top_n])
+    passthrough = list(ordered_candidates[settings.top_n :])
     try:
         backend = _load_backend(settings.model_name, settings.device)
         query_text = build_brief_text(brief)

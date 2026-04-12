@@ -1,6 +1,6 @@
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.models import CandidateProfile
-from hr_hunter.scoring import score_candidate, status_from_score
+from hr_hunter.scoring import score_candidate, sort_candidates, status_from_score
 
 
 def test_status_from_score_respects_explicit_user_bands() -> None:
@@ -131,6 +131,55 @@ def test_score_candidate_matches_target_company_subdivision_name() -> None:
 
     assert scored.current_target_company_match is True
     assert "Unilever" in scored.matched_companies
+
+
+def test_sort_candidates_prioritizes_in_scope_fit_over_blunt_status_score() -> None:
+    brief = build_search_brief(
+        {
+            "id": "sort-scope-priority-test",
+            "role_title": "Digital Marketing Manager",
+            "titles": ["Digital Marketing Manager"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Dubai", "United Arab Emirates"],
+            },
+        }
+    )
+
+    noisy_high_score = CandidateProfile(
+        full_name="Noisy High Score",
+        verification_status="review",
+        score=92.0,
+        current_title_match=False,
+        location_aligned=False,
+        location_precision_bucket="outside_target_area",
+        current_function_fit=0.24,
+        skill_overlap_score=0.12,
+        industry_fit_score=0.18,
+        parser_confidence=0.62,
+        evidence_quality_score=0.48,
+    )
+    in_scope_candidate = CandidateProfile(
+        full_name="In Scope Lower Score",
+        verification_status="reject",
+        score=58.0,
+        current_title_match=True,
+        location_aligned=True,
+        location_precision_bucket="named_target_location",
+        current_function_fit=0.78,
+        skill_overlap_score=0.56,
+        industry_fit_score=0.42,
+        parser_confidence=0.51,
+        evidence_quality_score=0.38,
+    )
+
+    ordered = sort_candidates([noisy_high_score, in_scope_candidate], brief)
+
+    assert [candidate.full_name for candidate in ordered] == [
+        "In Scope Lower Score",
+        "Noisy High Score",
+    ]
 
 
 def test_score_candidate_does_not_treat_peer_source_company_as_hard_company_match() -> None:

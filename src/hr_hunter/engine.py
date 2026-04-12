@@ -311,8 +311,10 @@ class SearchEngine:
             rerank_target_count = min(len(candidate_pool), max(1, int(optimized_top_n)))
             semantic_reranked_count = 0
             if reranker_settings.enabled:
-                optimized_top_n = max(limit * 2, 220)
-                optimized_top_n = min(optimized_top_n, reranker_settings.top_n, 500, len(candidate_pool))
+                optimized_top_n = max(limit + 40, int(round(limit * 1.6)))
+                if bool(getattr(brief, "scope_first_enabled", False)):
+                    optimized_top_n = max(limit + 50, int(round(limit * 1.5)))
+                optimized_top_n = min(optimized_top_n, reranker_settings.top_n, 360, len(candidate_pool))
                 brief.provider_settings.setdefault("reranker", {})["top_n"] = max(1, int(optimized_top_n))
                 rerank_target_count = min(len(candidate_pool), max(1, int(optimized_top_n)))
             else:

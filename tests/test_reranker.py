@@ -76,6 +76,78 @@ def test_rerank_candidates_blends_scores_and_reorders(monkeypatch) -> None:
     assert reranked[2].reranker_score == 0.0
 
 
+def test_rerank_candidates_prioritize_scopeful_candidates_into_rerank_window(monkeypatch) -> None:
+    brief = build_search_brief(
+        {
+            "id": "reranker-priority-window-test",
+            "role_title": "Digital Marketing Manager",
+            "titles": ["Digital Marketing Manager"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Dubai", "United Arab Emirates"],
+            },
+            "provider_settings": {
+                "reranker": {
+                    "enabled": True,
+                    "model_name": "BAAI/bge-reranker-v2-m3",
+                    "top_n": 2,
+                    "weight": 0.4,
+                }
+            },
+        }
+    )
+    candidates = [
+        CandidateProfile(
+            full_name="Noisy High Score",
+            score=91.0,
+            verification_status="review",
+            current_title_match=False,
+            location_aligned=False,
+            location_precision_bucket="outside_target_area",
+            current_function_fit=0.24,
+            skill_overlap_score=0.12,
+            parser_confidence=0.8,
+            evidence_quality_score=0.72,
+        ),
+        CandidateProfile(
+            full_name="Precise Fit One",
+            score=58.0,
+            verification_status="reject",
+            current_title_match=True,
+            location_aligned=True,
+            location_precision_bucket="named_target_location",
+            current_function_fit=0.78,
+            skill_overlap_score=0.55,
+            parser_confidence=0.46,
+            evidence_quality_score=0.4,
+        ),
+        CandidateProfile(
+            full_name="Precise Fit Two",
+            score=56.0,
+            verification_status="reject",
+            current_title_match=True,
+            location_aligned=True,
+            location_precision_bucket="within_radius",
+            current_function_fit=0.74,
+            skill_overlap_score=0.52,
+            parser_confidence=0.48,
+            evidence_quality_score=0.39,
+        ),
+    ]
+    monkeypatch.setattr(
+        "hr_hunter.reranker._load_backend",
+        lambda model_name, device: _FakeBackend([0.92, 0.81]),
+    )
+
+    reranked = rerank_candidates(brief, candidates)
+
+    scored_candidates = {candidate.full_name: candidate for candidate in reranked}
+    assert scored_candidates["Noisy High Score"].reranker_score == 0.0
+    assert scored_candidates["Precise Fit One"].reranker_score > 0.0
+    assert scored_candidates["Precise Fit Two"].reranker_score > 0.0
+
+
 def test_rerank_candidates_reapply_guardrail_caps(monkeypatch) -> None:
     brief = build_search_brief(
         {
@@ -169,5 +241,5 @@ def test_rerank_candidates_fallbacks_when_backend_load_is_blocked(monkeypatch) -
     assert reranked[0].ranking_model_version == "fallback-lexical-reranker-v1"
     assert reranked[0].reranker_score > 0.0
     assert reranked[1].ranking_model_version == "fallback-lexical-reranker-v1"
-    assert reranked[1].reranker_score > reranked[0].reranker_score
+    assert reranked[0].reranker_score > reranked[1].reranker_score
     assert any("low-memory host" in note for note in reranked[0].verification_notes)

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from hr_hunter.briefing import build_search_brief
+from hr_hunter.candidate_order import candidate_is_in_scope, candidate_is_precise_market_match
 from hr_hunter.config import (
     load_env_file,
     load_yaml_file,
@@ -1164,14 +1165,14 @@ def create_app() -> "FastAPI":
                     [
                         candidate
                         for candidate in report.candidates[:verification_target]
-                        if getattr(candidate, "in_scope", False)
+                        if candidate_is_in_scope(candidate)
                     ]
                 )
                 report.summary["verification_shortlist_precise_scope_count"] = len(
                     [
                         candidate
                         for candidate in report.candidates[:verification_target]
-                        if getattr(candidate, "precise_market_in_scope", False)
+                        if candidate_is_in_scope(candidate) and candidate_is_precise_market_match(candidate)
                     ]
                 )
                 verifier = PublicEvidenceVerifier(

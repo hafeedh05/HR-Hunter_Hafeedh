@@ -321,3 +321,65 @@ def test_prepare_verification_candidate_order_fills_scope_target_first() -> None
         "In Scope Exact One",
         "In Scope Exact Two",
     ]
+
+
+def test_prepare_verification_candidate_order_prefers_precise_scope_before_country_only() -> None:
+    candidates = [
+        _candidate(
+            name="Country Only Scope",
+            status="review",
+            score=62.0,
+            current_title_match=True,
+            location_aligned=True,
+            location_bucket="country_only",
+            parser_confidence=0.6,
+            evidence_quality_score=0.4,
+            skill_overlap_score=0.48,
+            current_function_fit=0.7,
+            years_fit_score=0.5,
+            industry_fit_score=0.4,
+            cap_reasons=[],
+        ),
+        _candidate(
+            name="Precise Scope",
+            status="reject",
+            score=57.0,
+            current_title_match=True,
+            location_aligned=True,
+            location_bucket="named_target_location",
+            parser_confidence=0.58,
+            evidence_quality_score=0.38,
+            skill_overlap_score=0.46,
+            current_function_fit=0.68,
+            years_fit_score=0.48,
+            industry_fit_score=0.39,
+            cap_reasons=[],
+        ),
+        _candidate(
+            name="Out Of Scope",
+            status="review",
+            score=91.0,
+            current_title_match=False,
+            location_aligned=False,
+            location_bucket="outside_target_area",
+            parser_confidence=0.82,
+            evidence_quality_score=0.74,
+            skill_overlap_score=0.76,
+            current_function_fit=0.8,
+            years_fit_score=0.7,
+            industry_fit_score=0.68,
+            cap_reasons=[],
+        ),
+    ]
+
+    ordered = prepare_verification_candidate_order(
+        candidates,
+        company_required=False,
+        verification_limit=2,
+        scope_target=2,
+    )
+
+    assert [candidate.full_name for candidate in ordered[:2]] == [
+        "Precise Scope",
+        "Country Only Scope",
+    ]

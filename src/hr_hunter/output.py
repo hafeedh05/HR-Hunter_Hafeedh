@@ -7,6 +7,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Set, Tuple
 
+from hr_hunter.candidate_order import (
+    candidate_is_in_scope,
+    candidate_is_precise_market_match,
+    candidate_priority_sort_tuple,
+)
 from hr_hunter.features import looks_like_non_company_fragment
 from hr_hunter.identity import candidate_identity_keys, candidate_primary_key
 from hr_hunter.models import (
@@ -622,36 +627,14 @@ def prioritize_verification_candidates(
     company_required: bool,
 ) -> List[CandidateProfile]:
     hydrated_candidates = [hydrate_candidate_reporting(candidate) for candidate in candidates]
-    status_rank = {"verified": 0, "review": 1, "reject": 2}
-
-    def _priority_bucket(candidate: CandidateProfile) -> int:
-        if company_required and candidate.current_target_company_match and candidate.precise_market_in_scope:
-            return 0
-        if company_required and candidate.current_target_company_match and candidate.in_scope:
-            return 1
-        if candidate.precise_market_in_scope:
-            return 2
-        if candidate.in_scope:
-            return 3
-        if company_required and candidate.current_target_company_match and candidate.location_aligned:
-            return 4
-        if candidate.current_title_match and candidate.location_aligned:
-            return 5
-        if candidate.current_title_match:
-            return 6
-        if candidate.location_aligned:
-            return 7
-        return 9
 
     return sorted(
         hydrated_candidates,
-        key=lambda candidate: (
-            _priority_bucket(candidate),
-            status_rank.get(candidate.verification_status, 9),
-            -float(candidate.current_function_fit or 0.0),
-            -float(candidate.parser_confidence or 0.0),
-            -float(candidate.score or 0.0),
-            str(candidate.full_name or "").lower(),
+        key=lambda candidate: candidate_priority_sort_tuple(
+            candidate,
+            None,
+            phase="verification",
+            company_required=company_required,
         ),
     )
 
@@ -676,17 +659,40 @@ def prepare_verification_candidate_order(
     shortlisted: List[CandidateProfile] = []
     remainder: List[CandidateProfile] = []
 
+    def _identity_key(candidate: CandidateProfile) -> str:
+        return candidate_primary_key(candidate) or f"memory:{id(candidate)}"
+
     for candidate in prioritized:
-        identity_key = candidate_primary_key(candidate)
-        if candidate.in_scope and len(shortlisted) < scope_goal and identity_key not in selected_keys:
+        identity_key = _identity_key(candidate)
+        if (
+            candidate_is_in_scope(candidate)
+            and candidate_is_precise_market_match(candidate)
+            and len(shortlisted) < scope_goal
+            and identity_key not in selected_keys
+        ):
             shortlisted.append(candidate)
             selected_keys.add(identity_key)
             continue
         remainder.append(candidate)
 
+    if len(shortlisted) < scope_goal:
+        secondary_remainder: List[CandidateProfile] = []
+        for candidate in remainder:
+            identity_key = _identity_key(candidate)
+            if (
+                candidate_is_in_scope(candidate)
+                and len(shortlisted) < scope_goal
+                and identity_key not in selected_keys
+            ):
+                shortlisted.append(candidate)
+                selected_keys.add(identity_key)
+                continue
+            secondary_remainder.append(candidate)
+        remainder = secondary_remainder
+
     if len(shortlisted) < shortlist_limit:
         for candidate in remainder:
-            identity_key = candidate_primary_key(candidate)
+            identity_key = _identity_key(candidate)
             if identity_key in selected_keys:
                 continue
             shortlisted.append(candidate)
@@ -697,7 +703,7 @@ def prepare_verification_candidate_order(
     trailing = [
         candidate
         for candidate in prioritized
-        if candidate_primary_key(candidate) not in selected_keys
+        if _identity_key(candidate) not in selected_keys
     ]
     return [*shortlisted, *trailing]
 

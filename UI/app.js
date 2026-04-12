@@ -81,6 +81,7 @@ const state = {
   polledJobId: "",
   jobPollHandle: null,
   liveProgressHandle: null,
+  jobPollFailureCount: 0,
   tokenFields: {},
   projectSearchQuery: "",
   candidateSearchQuery: "",
@@ -3175,6 +3176,7 @@ function clearJobPolling() {
     state.liveProgressHandle = null;
   }
   state.polledJobId = "";
+  state.jobPollFailureCount = 0;
 }
 
 function startLiveProgressTicker() {
@@ -3202,10 +3204,12 @@ function startJobPolling(jobId) {
   }
   clearJobPolling();
   state.polledJobId = resolvedJobId;
+  state.jobPollFailureCount = 0;
   startLiveProgressTicker();
   const poll = async () => {
     try {
       const job = await fetchJSON(`/app/jobs/${encodeURIComponent(resolvedJobId)}`, { timeoutMs: 8000 });
+      state.jobPollFailureCount = 0;
       state.activeJob = job;
       renderOwnerJobs();
       renderActiveJobTabPanels();
@@ -3225,10 +3229,30 @@ function startJobPolling(jobId) {
       }
       state.jobPollHandle = window.setTimeout(poll, 2000);
     } catch {
-      state.jobPollHandle = window.setTimeout(poll, 2500);
+      state.jobPollFailureCount = Math.min(12, safeNumber(state.jobPollFailureCount, 0) + 1);
+      if (state.selectedProjectId && state.jobPollFailureCount >= 3) {
+        try {
+          await loadLatestProjectJob(state.selectedProjectId);
+        } catch {
+          // Keep retrying the direct job poll below.
+        }
+      }
+      const retryDelay = Math.min(6000, 2000 + (state.jobPollFailureCount * 500));
+      state.jobPollHandle = window.setTimeout(poll, retryDelay);
     }
   };
   poll();
+}
+
+async function resumeSelectedProjectJobPolling() {
+  if (!state.user || !state.selectedProjectId) {
+    return;
+  }
+  try {
+    await loadLatestProjectJob(state.selectedProjectId);
+  } catch {
+    // Non-fatal. The existing poller or next project refresh can recover.
+  }
 }
 
 async function retrySearchForSelectedProject() {
@@ -3736,6 +3760,14 @@ function resetSettings() {
 function bindEvents() {
   window.__HR_HUNTER_LOGIN_BOUND = true;
   window.addEventListener("beforeunload", handleBeforeUnload);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      void resumeSelectedProjectJobPolling();
+    }
+  });
+  window.addEventListener("focus", () => {
+    void resumeSelectedProjectJobPolling();
+  });
   const loginForm = document.getElementById("login-form");
   if (loginForm && loginForm.dataset.inlineManaged !== "true") {
     loginForm.addEventListener("submit", handleLogin);

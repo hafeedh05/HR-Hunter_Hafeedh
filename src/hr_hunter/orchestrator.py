@@ -245,7 +245,7 @@ async def run_search_matrix(
                 brief,
                 limit=strategy.verify_top,
             )
-            refresh_report_summary(strategy_report, strategy_verification_stats, brief=strategy_brief)
+            refresh_report_summary(strategy_report, strategy_verification_stats, brief=brief)
         _stamp_strategy_provenance(strategy_report, strategy, brief)
         strategy_report.candidates = [
             candidate
@@ -270,7 +270,7 @@ async def run_search_matrix(
     rescored_candidates = []
     for candidate in dedupe_candidates(merged_candidates):
         rescored_candidates.append(score_candidate(candidate, primary_brief))
-    final_candidates = sort_candidates(rescored_candidates)[:limit]
+    final_candidates = sort_candidates(rescored_candidates, primary_brief)[:limit]
 
     base_summary = {
         "role_title": spec.role_title or primary_brief.role_title,
