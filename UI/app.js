@@ -3092,34 +3092,13 @@ async function loadProject(projectId) {
     renderCandidates();
     updateTopbarActions();
     const projectLatestRunId = String(payload.project.latest_run_id || "").trim();
-    const runsPromise = loadProjectRuns(projectId, {
-      suppressRender: true,
-      selectionRequestId,
-      timeoutMs: 6000,
-    });
-    const reviewsPromise = loadProjectReviews(projectId, {
-      suppressRender: true,
-      selectionRequestId,
-      timeoutMs: 6000,
-    });
-    const jobPromise = loadLatestProjectJob(projectId, {
-      suppressRender: true,
-      selectionRequestId,
-      skipReportSync: true,
-      timeoutMs: 6000,
-    });
-    const reportPromise = projectLatestRunId
-      ? loadProjectRun(projectId, projectLatestRunId, {
+    if (projectLatestRunId) {
+      await loadProjectRun(projectId, projectLatestRunId, {
         timeoutMs: 12000,
         suppressErrors: true,
         selectionRequestId,
-      })
-      : Promise.resolve(null);
-    const [jobResult, runsResult, reviewsResult] = await Promise.allSettled([
-      jobPromise,
-      runsPromise,
-      reviewsPromise,
-    ]);
+      });
+    }
     if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
       return null;
     }
@@ -3129,25 +3108,51 @@ async function loadProject(projectId) {
     renderResults();
     renderCandidates();
     syncLiveJobStatus();
-    await reportPromise;
-    if (!state.currentReport) {
-      const latestCompletedRunId = projectLatestRunId || latestCompletedRunIdForProject(projectId, {
-        runs: runsResult.status === "fulfilled" ? runsResult.value : [],
-        job: jobResult.status === "fulfilled" ? jobResult.value : null,
-      });
-      if (latestCompletedRunId) {
-        await loadProjectRun(projectId, latestCompletedRunId, {
-          timeoutMs: 12000,
-          suppressErrors: true,
-          selectionRequestId,
-        });
-      }
-    }
-    if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
-      return null;
-    }
     const failedJob = failedSearchJobForSelectedProject();
     const activeJob = activeSearchJobForSelectedProject();
+    void Promise.allSettled([
+      loadProjectRuns(projectId, {
+        suppressRender: true,
+        selectionRequestId,
+        timeoutMs: 6000,
+      }),
+      loadProjectReviews(projectId, {
+        suppressRender: true,
+        selectionRequestId,
+        timeoutMs: 6000,
+      }),
+      loadLatestProjectJob(projectId, {
+        suppressRender: true,
+        selectionRequestId,
+        timeoutMs: 6000,
+      }),
+    ]).then(async ([runsResult, reviewsResult, jobResult]) => {
+      if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
+        return;
+      }
+      if (!state.currentReport) {
+        const latestCompletedRunId = projectLatestRunId || latestCompletedRunIdForProject(projectId, {
+          runs: runsResult.status === "fulfilled" ? runsResult.value : [],
+          job: jobResult.status === "fulfilled" ? jobResult.value : null,
+        });
+        if (latestCompletedRunId) {
+          await loadProjectRun(projectId, latestCompletedRunId, {
+            timeoutMs: 12000,
+            suppressErrors: true,
+            selectionRequestId,
+          });
+        }
+      }
+      if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
+        return;
+      }
+      renderHistory();
+      renderFeedback();
+      renderOwnerJobs();
+      renderResults();
+      renderCandidates();
+      syncLiveJobStatus();
+    });
     if (failedJob) {
       setStatus("Latest search failed.", "danger", `${failedJob.error || "The latest search did not complete successfully."} Retry when ready.`);
       return payload.project;
