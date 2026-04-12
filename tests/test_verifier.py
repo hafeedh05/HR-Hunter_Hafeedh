@@ -381,6 +381,43 @@ def test_build_record_prefers_precise_location_over_country_only() -> None:
     assert record.precise_location_match is True
 
 
+def test_build_record_does_not_self_confirm_candidate_location_outside_target_market() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-build-record-outside-market-test",
+            "role_title": "Chief Executive Officer",
+            "titles": ["Chief Executive Officer", "Managing Director"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Abu Dhabi", "Riyadh"],
+            },
+        }
+    )
+    candidate = CandidateProfile(
+        full_name="Alex Outside Market",
+        current_title="Chief Executive Officer",
+        current_company="Example Retail",
+        location_name="France",
+    )
+
+    record = verifier.build_record(
+        candidate,
+        brief,
+        '"Alex Outside Market" "Example Retail"',
+        {
+            "title": "Alex Outside Market - Chief Executive Officer",
+            "description": "Chief executive based in France with EMEA leadership experience.",
+            "url": "https://example.com/people/alex-outside-market",
+        },
+    )
+
+    assert record.location_match is False
+    assert record.location_match_text == ""
+    assert record.precise_location_match is False
+
+
 def test_report_roundtrip_preserves_evidence_fields(tmp_path: Path) -> None:
     candidate = CandidateProfile(
         full_name="Jane Search",

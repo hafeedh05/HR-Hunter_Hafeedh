@@ -247,6 +247,7 @@ def _apply_scope_first_candidate_order(report, *, brief):
         return report
     report.candidates = prioritize_verification_candidates(
         report.candidates,
+        brief=brief,
         company_required=bool(getattr(brief, "company_targets", [])),
     )
     summary = dict(report.summary or {})

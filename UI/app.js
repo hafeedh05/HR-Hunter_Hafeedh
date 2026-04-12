@@ -82,6 +82,7 @@ const state = {
   jobPollHandle: null,
   liveProgressHandle: null,
   jobPollFailureCount: 0,
+  projectLoadPending: false,
   projectLoadRequestId: 0,
   latestJobRequestId: 0,
   projectRunsRequestId: 0,
@@ -860,6 +861,7 @@ function resetProjectForm() {
 function startNewProject() {
   state.selectedProjectId = "";
   state.selectedProject = null;
+  state.projectLoadPending = false;
   state.currentReport = null;
   state.currentRuns = [];
   state.currentReviews = [];
@@ -1829,6 +1831,10 @@ function latestCompletedRunIdForProject(projectId, options = {}) {
   return "";
 }
 
+function selectedProjectForView() {
+  return state.selectedProject || selectedProjectFromList() || null;
+}
+
 function resultsRunTiming() {
   const completedJob = latestCompletedSearchJobForCurrentReport();
   if (completedJob) {
@@ -2176,7 +2182,18 @@ function renderResultsSummary() {
   const root = document.getElementById("results-summary");
   const activeJob = activeSearchJobForSelectedProject();
   const failedJob = failedSearchJobForSelectedProject();
-  if (!state.selectedProject) {
+  const project = selectedProjectForView();
+  const restoringProject = Boolean(state.projectLoadPending && state.selectedProjectId);
+  if (!project) {
+    if (restoringProject) {
+      root.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>Loading Latest Results</h4>
+          <p>Restoring the selected project and its latest run.</p>
+        </div>
+      `;
+      return;
+    }
     root.innerHTML = `
       <div class="empty-state compact-empty">
         <h4>Select or Create a Project</h4>
@@ -2207,10 +2224,19 @@ function renderResultsSummary() {
       `;
       return;
     }
+    if (restoringProject) {
+      root.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>Loading Latest Results</h4>
+          <p>Fetching the latest run for <strong>${escapeHtml(project.name)}</strong>.</p>
+        </div>
+      `;
+      return;
+    }
     root.innerHTML = `
       <div class="empty-state compact-empty">
         <h4>No Results Yet</h4>
-        <p>Run a search for <strong>${escapeHtml(state.selectedProject.name)}</strong> to populate the current results.</p>
+        <p>Run a search for <strong>${escapeHtml(project.name)}</strong> to populate the current results.</p>
       </div>
     `;
     return;
@@ -2272,7 +2298,7 @@ function renderResultsSummary() {
         ${topLocationsMarkup}
         ${diagnosticsMarkup}
         <p class="muted small">${escapeHtml(timingNote)}</p>
-        <p class="muted">Latest run: ${escapeHtml(formatTimestamp(state.currentReport.generated_at))} for ${escapeHtml(state.selectedProject.name)}.</p>
+        <p class="muted">Latest run: ${escapeHtml(formatTimestamp(state.currentReport.generated_at))} for ${escapeHtml(project.name)}.</p>
         ${activeJob ? `<p class="muted">A newer search is currently ${escapeHtml(titleCaseWords(activeJob.status))}. Requested limit: ${escapeHtml(String(activeJob.payload?.limit || currentRequestedCandidateLimit()))} candidates.</p>` : ""}
         ${failedJob ? `<p class="muted">The latest search failed: ${escapeHtml(failedJob.error || "Retry when ready.")}</p><div class="inline-actions"><button type="button" class="button button-secondary" id="results-retry-search">Retry Search</button></div>` : ""}
       `;
@@ -2389,7 +2415,18 @@ function renderCandidatesSummary() {
   const candidates = currentCandidates();
   const activeJob = activeSearchJobForSelectedProject();
   const failedJob = failedSearchJobForSelectedProject();
-  if (!state.selectedProject) {
+  const project = selectedProjectForView();
+  const restoringProject = Boolean(state.projectLoadPending && state.selectedProjectId);
+  if (!project) {
+    if (restoringProject) {
+      root.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>Loading Candidate View</h4>
+          <p>Restoring the selected project and candidate list.</p>
+        </div>
+      `;
+      return;
+    }
     root.innerHTML = `
       <div class="empty-state compact-empty">
         <h4>Select or Create a Project</h4>
@@ -2404,6 +2441,15 @@ function renderCandidatesSummary() {
       document.getElementById("candidates-retry-search")?.addEventListener("click", retrySearchForSelectedProject);
       return;
     }
+    if (restoringProject) {
+      root.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>Loading Candidate View</h4>
+          <p>Fetching the latest candidate set for <strong>${escapeHtml(project.name)}</strong>.</p>
+        </div>
+      `;
+      return;
+    }
     root.innerHTML = `
         ${activeJob
           ? runningJobMarkup(activeJob, {
@@ -2412,7 +2458,7 @@ function renderCandidatesSummary() {
           })
           : `<div class="empty-state compact-empty">
           <h4>No Candidates Yet</h4>
-          <p>Run a search for ${escapeHtml(state.selectedProject.name)} to populate the candidate list.</p>
+          <p>Run a search for ${escapeHtml(project.name)} to populate the candidate list.</p>
         </div>`}
       `;
       return;
@@ -2528,7 +2574,24 @@ function renderCandidates() {
   const tableRoot = document.getElementById("candidate-table-container");
   const detailRoot = document.getElementById("candidate-detail");
   const candidates = filteredCandidates();
-  if (!state.selectedProject) {
+  const project = selectedProjectForView();
+  const restoringProject = Boolean(state.projectLoadPending && state.selectedProjectId);
+  if (!project) {
+    if (restoringProject) {
+      tableRoot.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>Loading Candidate View</h4>
+          <p>Restoring the selected project and its latest candidate set.</p>
+        </div>
+      `;
+      detailRoot.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>Loading Candidate Detail</h4>
+          <p>The latest candidate detail will appear here when the project finishes loading.</p>
+        </div>
+      `;
+      return;
+    }
     tableRoot.innerHTML = `
       <div class="empty-state compact-empty">
         <h4>Select or Create a Project</h4>
@@ -2544,10 +2607,25 @@ function renderCandidates() {
     return;
   }
   if (!currentCandidates().length) {
+    if (restoringProject) {
+      tableRoot.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>Loading Candidate View</h4>
+          <p>Fetching the latest candidate set for <strong>${escapeHtml(project.name)}</strong>.</p>
+        </div>
+      `;
+      detailRoot.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>Loading Candidate Detail</h4>
+          <p>The latest candidate detail will appear here when the run data finishes loading.</p>
+        </div>
+      `;
+      return;
+    }
     tableRoot.innerHTML = `
       <div class="empty-state compact-empty">
         <h4>No Candidates Yet</h4>
-        <p>Run a search for <strong>${escapeHtml(state.selectedProject.name)}</strong> to populate the candidate directory.</p>
+        <p>Run a search for <strong>${escapeHtml(project.name)}</strong> to populate the candidate directory.</p>
       </div>
     `;
     detailRoot.innerHTML = `
@@ -2966,63 +3044,85 @@ async function loadProject(projectId) {
   if (!projectId) return null;
   const selectionRequestId = safeNumber(state.projectLoadRequestId, 0) + 1;
   state.projectLoadRequestId = selectionRequestId;
-  const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}`);
-  if (selectionRequestId !== safeNumber(state.projectLoadRequestId, 0)) {
-    return null;
+  state.projectLoadPending = true;
+  const cachedProject = state.projects.find((project) => project.id === projectId) || null;
+  if (cachedProject) {
+    state.selectedProjectId = cachedProject.id;
+    if (!state.selectedProject || state.selectedProject.id !== cachedProject.id) {
+      state.selectedProject = cachedProject;
+    }
+    persistStoredState();
+    renderProjectList();
+    renderProjectSummary();
+    renderResults();
+    renderCandidates();
+    updateTopbarActions();
   }
-  state.selectedProjectId = payload.project.id;
-  state.selectedProject = payload.project;
-  state.currentReport = null;
-  state.candidateSearchQuery = "";
-  state.candidateStatusFilter = "all";
-  state.candidateLocationFilter = "all";
-  state.selectedCandidateRef = "";
-  persistStoredState();
-  populateProjectForm(payload.project);
-  renderProjectSummary();
-  renderProjectList();
-  renderResults();
-  renderCandidates();
-  updateTopbarActions();
-  const [runsResult, reviewsResult, jobResult] = await Promise.allSettled([
-    loadProjectRuns(projectId, { suppressRender: true, selectionRequestId }),
-    loadProjectReviews(projectId, { suppressRender: true, selectionRequestId }),
-    loadLatestProjectJob(projectId, { suppressRender: true, selectionRequestId, skipReportSync: true }),
-  ]);
-  if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
-    return null;
-  }
-  renderHistory();
-  renderFeedback();
-  renderOwnerJobs();
-  renderResults();
-  renderCandidates();
-  syncLiveJobStatus();
-  const latestCompletedRunId = latestCompletedRunIdForProject(projectId, {
-    runs: runsResult.status === "fulfilled" ? runsResult.value : [],
-    job: jobResult.status === "fulfilled" ? jobResult.value : null,
-  });
-  const reportLoad = loadProjectRun(projectId, latestCompletedRunId, {
-    timeoutMs: 5000,
-    suppressErrors: true,
-    selectionRequestId,
-  });
-  const failedJob = failedSearchJobForSelectedProject();
-  const activeJob = activeSearchJobForSelectedProject();
-  await reportLoad;
-  if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
-    return null;
-  }
-  if (failedJob) {
-    setStatus("Latest search failed.", "danger", `${failedJob.error || "The latest search did not complete successfully."} Retry when ready.`);
+  try {
+    const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}`);
+    if (selectionRequestId !== safeNumber(state.projectLoadRequestId, 0)) {
+      return null;
+    }
+    state.selectedProjectId = payload.project.id;
+    state.selectedProject = payload.project;
+    state.currentReport = null;
+    state.candidateSearchQuery = "";
+    state.candidateStatusFilter = "all";
+    state.candidateLocationFilter = "all";
+    state.selectedCandidateRef = "";
+    persistStoredState();
+    populateProjectForm(payload.project);
+    renderProjectSummary();
+    renderProjectList();
+    renderResults();
+    renderCandidates();
+    updateTopbarActions();
+    const [runsResult, reviewsResult, jobResult] = await Promise.allSettled([
+      loadProjectRuns(projectId, { suppressRender: true, selectionRequestId }),
+      loadProjectReviews(projectId, { suppressRender: true, selectionRequestId }),
+      loadLatestProjectJob(projectId, { suppressRender: true, selectionRequestId, skipReportSync: true }),
+    ]);
+    if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
+      return null;
+    }
+    renderHistory();
+    renderFeedback();
+    renderOwnerJobs();
+    renderResults();
+    renderCandidates();
+    syncLiveJobStatus();
+    const latestCompletedRunId = latestCompletedRunIdForProject(projectId, {
+      runs: runsResult.status === "fulfilled" ? runsResult.value : [],
+      job: jobResult.status === "fulfilled" ? jobResult.value : null,
+    });
+    const reportLoad = loadProjectRun(projectId, latestCompletedRunId, {
+      timeoutMs: 5000,
+      suppressErrors: true,
+      selectionRequestId,
+    });
+    const failedJob = failedSearchJobForSelectedProject();
+    const activeJob = activeSearchJobForSelectedProject();
+    await reportLoad;
+    if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
+      return null;
+    }
+    if (failedJob) {
+      setStatus("Latest search failed.", "danger", `${failedJob.error || "The latest search did not complete successfully."} Retry when ready.`);
+      return payload.project;
+    }
+    if (activeJob) {
+      setStatus("Search still running.", "warning", `The latest search is ${titleCaseWords(activeJob.status)} for up to ${jobRequestedLimit(activeJob)} candidates.`);
+      return payload.project;
+    }
+    setStatus(`${payload.project.name} loaded.`, "success", "The project brief, results, feedback, and history are ready.");
     return payload.project;
+  } finally {
+    if (selectionRequestId === safeNumber(state.projectLoadRequestId, 0)) {
+      state.projectLoadPending = false;
+      renderResults();
+      renderCandidates();
+    }
   }
-  if (activeJob) {
-    setStatus("Search still running.", "warning", `The latest search is ${titleCaseWords(activeJob.status)} for up to ${jobRequestedLimit(activeJob)} candidates.`);
-    return payload.project;
-  }
-  setStatus(`${payload.project.name} loaded.`, "success", "The project brief, results, feedback, and history are ready.");
-  return payload.project;
 }
 
 async function loadLatestProjectJob(projectId, options = {}) {

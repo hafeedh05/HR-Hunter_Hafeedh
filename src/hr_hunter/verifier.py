@@ -409,7 +409,7 @@ class PublicEvidenceVerifier:
         precise_hints = [
             hint
             for hint in unique_preserving_order(
-                [brief.geography.location_name, *brief.geography.location_hints, candidate.location_name]
+                [brief.geography.location_name, *brief.geography.location_hints]
             )
             if hint and not self._is_country_only_location(hint, brief.geography.country)
         ]

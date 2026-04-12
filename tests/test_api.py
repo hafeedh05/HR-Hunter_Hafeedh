@@ -1,3 +1,4 @@
+from hr_hunter.briefing import build_search_brief
 from hr_hunter.api import (
     _apply_strict_scope_shortlist,
     _finalize_report_for_limit,
@@ -125,6 +126,66 @@ def test_finalize_report_for_limit_tracks_in_scope_counts():
         "title_match": 3,
         "market_match": 2,
     }
+
+
+def test_finalize_report_for_limit_honors_title_market_priority_brief() -> None:
+    brief = build_search_brief(
+        {
+            "id": "scope-priority-test",
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager", "Senior Supply Chain Manager"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Abu Dhabi"],
+            },
+            "scope_first_enabled": True,
+            "in_scope_target": 10,
+        }
+    )
+    report = SearchRunReport(
+        run_id="run-scope-priority-test",
+        brief_id="brief-scope-priority-test",
+        dry_run=False,
+        generated_at="2026-04-13T00:00:00+00:00",
+        provider_results=[],
+        candidates=[
+            CandidateProfile(
+                full_name="Strong Function Precise Market",
+                current_title="Operations Director",
+                current_title_match=False,
+                location_aligned=True,
+                location_precision_bucket="named_target_location",
+                current_function_fit=0.82,
+                skill_overlap_score=0.58,
+                parser_confidence=0.72,
+                evidence_quality_score=0.61,
+                verification_status="review",
+                score=61.0,
+            ),
+            CandidateProfile(
+                full_name="Title Match Weak Market",
+                current_title="Supply Chain Manager",
+                current_title_match=True,
+                location_aligned=False,
+                location_precision_bucket="outside_target_area",
+                current_function_fit=0.28,
+                skill_overlap_score=0.2,
+                parser_confidence=0.31,
+                evidence_quality_score=0.18,
+                verification_status="review",
+                score=49.0,
+            ),
+        ],
+        summary={"pipeline_metrics": {"queries_completed": 4, "queries_total": 4, "raw_found": 2, "unique_after_dedupe": 2}},
+    )
+
+    finalized = _finalize_report_for_limit(report, requested_limit=2, internal_fetch_limit=10, brief=brief)
+
+    assert [candidate.full_name for candidate in finalized.candidates] == [
+        "Title Match Weak Market",
+        "Strong Function Precise Market",
+    ]
 
 
 def test_should_stop_after_stagnant_top_up_when_near_target():
