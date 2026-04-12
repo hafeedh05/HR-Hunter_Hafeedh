@@ -185,6 +185,60 @@ def test_apply_evidence_accepts_strong_profile_page_as_current_role_proof() -> N
     assert updated.verification_status == "verified"
 
 
+def test_apply_evidence_hard_verifies_exact_exec_match_below_default_threshold() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-hard-gate-test",
+            "role_title": "Chief Executive Officer",
+            "titles": ["Chief Executive Officer", "Managing Director", "President"],
+            "company_targets": ["Crate & Barrel"],
+            "allow_adjacent_titles": False,
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Dubai", "United Arab Emirates"],
+            },
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Jorge Example",
+            current_title="Chief Executive Officer",
+            current_company="Crate & Barrel",
+            location_name="Dubai, United Arab Emirates",
+            verification_status="review",
+            score=66.0,
+        ),
+        brief,
+    )
+    candidate.score = 66.0
+    evidence = [
+        EvidenceRecord(
+            source_url="https://example.com/leadership/jorge-example",
+            source_domain="example.com",
+            name_match=True,
+            company_match="Crate & Barrel",
+            title_matches=["Chief Executive Officer"],
+            location_match=True,
+            location_match_text="Dubai, United Arab Emirates",
+            precise_location_match=True,
+            profile_signal=True,
+            current_employment_signal=True,
+            confidence=0.82,
+        )
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.current_target_company_match is True
+    assert updated.current_title_match is True
+    assert updated.current_employment_confirmed is True
+    assert updated.precise_location_confirmed is True
+    assert updated.verification_status == "verified"
+    assert updated.score >= 72.0
+
+
 def test_build_queries_adds_location_probe_for_imprecise_location() -> None:
     verifier = PublicEvidenceVerifier({"queries_per_candidate": 2, "location_probe_queries": 1})
     brief = build_search_brief(

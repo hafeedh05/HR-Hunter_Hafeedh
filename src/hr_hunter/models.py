@@ -50,6 +50,7 @@ class SearchBrief:
     anchor_weights: Dict[str, float] = field(default_factory=dict)
     provider_settings: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     document_text: str = ""
+    allow_adjacent_titles: bool = True
 
 
 @dataclass

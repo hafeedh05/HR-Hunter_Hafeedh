@@ -313,7 +313,9 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
     titles = unique_preserving_order(config.get("titles", []))
     company_targets = unique_preserving_order(config.get("company_targets", []))
     configured_title_keywords = unique_preserving_order(config.get("title_keywords", []))
-    expand_title_keywords = bool(config.get("expand_title_keywords", True))
+    expand_title_keywords = bool(
+        config.get("allow_adjacent_titles", config.get("expand_title_keywords", True))
+    )
     title_keywords = unique_preserving_order(
         configured_title_keywords + (infer_title_keywords(titles) if expand_title_keywords else [])
     )
@@ -381,4 +383,5 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
         anchor_weights=build_anchor_weights(config),
         provider_settings=config.get("provider_settings", {}),
         document_text=document_text,
+        allow_adjacent_titles=expand_title_keywords,
     )

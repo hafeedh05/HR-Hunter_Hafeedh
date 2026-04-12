@@ -212,6 +212,66 @@ def test_score_candidate_accepts_adjacent_fmcg_title_family() -> None:
     assert scored.score >= 70.0
 
 
+def test_score_candidate_requires_adjacent_title_opt_in_for_exec_briefs() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-exec-adjacent-opt-in-test",
+            "role_title": "Chief Executive Officer",
+            "titles": ["Chief Executive Officer", "Managing Director", "President"],
+            "company_targets": ["The One"],
+            "allow_adjacent_titles": False,
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Dubai", "United Arab Emirates"],
+            },
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Adjacent Exec",
+        current_title="Chief Operating Officer",
+        current_company="The One",
+        location_name="Dubai, United Arab Emirates",
+        summary="Retail operator leading GCC expansion.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_target_company_match is True
+    assert scored.current_title_match is False
+    assert scored.verification_status != "verified"
+
+
+def test_score_candidate_avoids_generic_single_token_company_alias_false_positive() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-generic-company-alias-test",
+            "role_title": "Chief Executive Officer",
+            "titles": ["Chief Executive Officer"],
+            "company_targets": ["The One"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Dubai", "United Arab Emirates"],
+            },
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="False Positive Company",
+        current_title="Chief Executive Officer",
+        current_company="One Global Holding, Casheer",
+        location_name="Kuwait City, Kuwait",
+        summary="Regional operator across payments and consumer platforms.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_target_company_match is False
+    assert "The One" not in scored.matched_companies
+
+
 def test_score_candidate_prefers_priority_geo_matches() -> None:
     brief = build_search_brief(
         {

@@ -482,7 +482,7 @@ def company_text_matches(value: str, aliases: Iterable[str]) -> bool:
             for token in re.split(r"[^a-z0-9]+", normalized_alias)
             if token and len(token) > 2 and token not in COMPANY_TOKEN_STOPWORDS
         }
-        if alias_tokens and alias_tokens.issubset(value_tokens):
+        if len(alias_tokens) >= 2 and alias_tokens.issubset(value_tokens):
             return True
         if len(alias_tokens) == 1:
             token = next(iter(alias_tokens))
@@ -635,8 +635,9 @@ def current_role_signal_phrases(brief: SearchBrief) -> List[str]:
     families = brief_target_title_families(brief)
     for family in families:
         phrases.extend(TITLE_ROLE_SIGNAL_MAP.get(family, []))
-        for adjacent_family in ADJACENT_TITLE_FAMILY_MAP.get(family, set()):
-            phrases.extend(TITLE_ROLE_SIGNAL_MAP.get(adjacent_family, []))
+        if brief.allow_adjacent_titles:
+            for adjacent_family in ADJACENT_TITLE_FAMILY_MAP.get(family, set()):
+                phrases.extend(TITLE_ROLE_SIGNAL_MAP.get(adjacent_family, []))
     normalized_targets = [normalize_text(value) for value in [*brief.titles, *brief.title_keywords]]
     if any("product marketing" in value for value in normalized_targets):
         phrases.append("product marketing")
@@ -662,7 +663,12 @@ def evaluate_current_function_fit(
     target_signals = current_role_signal_phrases(brief)
     has_target_role_signal = any(signal in normalized_title for signal in target_signals if signal)
     family_overlap = candidate_title_families.intersection(target_title_families)
-    adjacent_overlap = adjacent_family_overlap(candidate_title_families, target_title_families)
+    adjacent_overlap = (
+        adjacent_family_overlap(candidate_title_families, target_title_families)
+        if brief.allow_adjacent_titles
+        else set()
+    )
+    strict_title_scope = bool(not brief.allow_adjacent_titles and target_title_families)
     disqualifiers = [
         keyword
         for keyword in OFF_FUNCTION_KEYWORDS
@@ -674,12 +680,18 @@ def evaluate_current_function_fit(
         notes.append(f"current_function_fit: blocked ({', '.join(disqualifiers)})")
         return 0.0, True, notes, disqualifiers, family_overlap, adjacent_overlap
     if family_overlap.difference(GENERIC_PRODUCT_FAMILY):
+        if strict_title_scope and title_similarity_score < 0.8:
+            notes.append("current_function_fit: family_overlap_but_strict_scope")
+            return 0.45, False, notes, disqualifiers, family_overlap, adjacent_overlap
         notes.append("current_function_fit: strong")
         return 1.0, False, notes, disqualifiers, family_overlap, adjacent_overlap
     if adjacent_overlap:
         notes.append("current_function_fit: adjacent_family")
         return 0.8, False, notes, disqualifiers, family_overlap, adjacent_overlap
     if title_similarity_score >= 0.6:
+        if not brief.allow_adjacent_titles and target_title_families and not family_overlap:
+            notes.append("current_function_fit: title_overlap_but_strict_scope")
+            return 0.45, False, notes, disqualifiers, family_overlap, adjacent_overlap
         notes.append("current_function_fit: title_overlap")
         return 0.72, False, notes, disqualifiers, family_overlap, adjacent_overlap
     if family_overlap:
@@ -971,11 +983,11 @@ def build_candidate_features(candidate: CandidateProfile, brief: SearchBrief) ->
     )
     low_seniority_hits = keyword_hits([candidate.current_title], LOW_SENIORITY_KEYWORDS)
 
+    strict_title_scope = bool(not brief.allow_adjacent_titles and (brief.titles or brief.title_keywords))
     current_title_match = bool(
         title_similarity_score >= 0.8
-        or family_overlap
-        or adjacent_overlap
-        or current_function_fit >= 0.72
+        or ((family_overlap or current_function_fit >= 0.72) and not strict_title_scope)
+        or (adjacent_overlap and brief.allow_adjacent_titles)
     )
     matched_title_family = ""
     if family_overlap:

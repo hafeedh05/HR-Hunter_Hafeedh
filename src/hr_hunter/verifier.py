@@ -860,6 +860,20 @@ class PublicEvidenceVerifier:
         if historical_only_records and not fresh_current_role_records:
             candidate.verification_notes.append("public evidence appears historical rather than current")
 
+        hard_verified = (
+            candidate.current_employment_confirmed
+            and candidate.current_company_confirmed
+            and candidate.current_title_confirmed
+            and candidate.current_location_confirmed
+            and candidate.precise_location_confirmed
+            and (not brief.company_targets or candidate.current_target_company_match)
+            and (not (brief.titles or brief.title_keywords) or candidate.current_title_match)
+            and (not brief.industry_keywords or candidate.industry_aligned)
+        )
+        if hard_verified:
+            candidate.score = round(max(candidate.score, 72.0), 2)
+            candidate.verification_notes.append("hard verification gate satisfied")
+
         cap_reasons = []
         if stale_data_risk:
             cap_reasons.append("stale_public_evidence")

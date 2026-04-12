@@ -2367,6 +2367,8 @@ def build_app_bootstrap() -> Dict[str, Any]:
                 "brief_clarifications": {
                     "prioritize_first_location": True,
                     "allow_adjacent_titles": False,
+                    "exact_company_scope": True,
+                    "strict_market_scope": True,
                     "expand_search_when_thin": False,
                 },
                 "jd_breakdown": {
