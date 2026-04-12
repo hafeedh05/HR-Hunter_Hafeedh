@@ -3078,6 +3078,8 @@ async function loadProject(projectId) {
     state.selectedProjectId = payload.project.id;
     state.selectedProject = payload.project;
     state.currentReport = null;
+    state.currentRuns = [];
+    state.currentReviews = [];
     state.candidateSearchQuery = "";
     state.candidateStatusFilter = "all";
     state.candidateLocationFilter = "all";
@@ -3089,10 +3091,34 @@ async function loadProject(projectId) {
     renderResults();
     renderCandidates();
     updateTopbarActions();
-    const [runsResult, reviewsResult, jobResult] = await Promise.allSettled([
-      loadProjectRuns(projectId, { suppressRender: true, selectionRequestId }),
-      loadProjectReviews(projectId, { suppressRender: true, selectionRequestId }),
-      loadLatestProjectJob(projectId, { suppressRender: true, selectionRequestId, skipReportSync: true }),
+    const projectLatestRunId = String(payload.project.latest_run_id || "").trim();
+    const runsPromise = loadProjectRuns(projectId, {
+      suppressRender: true,
+      selectionRequestId,
+      timeoutMs: 6000,
+    });
+    const reviewsPromise = loadProjectReviews(projectId, {
+      suppressRender: true,
+      selectionRequestId,
+      timeoutMs: 6000,
+    });
+    const jobPromise = loadLatestProjectJob(projectId, {
+      suppressRender: true,
+      selectionRequestId,
+      skipReportSync: true,
+      timeoutMs: 6000,
+    });
+    const reportPromise = projectLatestRunId
+      ? loadProjectRun(projectId, projectLatestRunId, {
+        timeoutMs: 12000,
+        suppressErrors: true,
+        selectionRequestId,
+      })
+      : Promise.resolve(null);
+    const [jobResult, runsResult, reviewsResult] = await Promise.allSettled([
+      jobPromise,
+      runsPromise,
+      reviewsPromise,
     ]);
     if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
       return null;
@@ -3103,21 +3129,25 @@ async function loadProject(projectId) {
     renderResults();
     renderCandidates();
     syncLiveJobStatus();
-    const latestCompletedRunId = latestCompletedRunIdForProject(projectId, {
-      runs: runsResult.status === "fulfilled" ? runsResult.value : [],
-      job: jobResult.status === "fulfilled" ? jobResult.value : null,
-    });
-    const reportLoad = loadProjectRun(projectId, latestCompletedRunId, {
-      timeoutMs: 5000,
-      suppressErrors: true,
-      selectionRequestId,
-    });
-    const failedJob = failedSearchJobForSelectedProject();
-    const activeJob = activeSearchJobForSelectedProject();
-    await reportLoad;
+    await reportPromise;
+    if (!state.currentReport) {
+      const latestCompletedRunId = projectLatestRunId || latestCompletedRunIdForProject(projectId, {
+        runs: runsResult.status === "fulfilled" ? runsResult.value : [],
+        job: jobResult.status === "fulfilled" ? jobResult.value : null,
+      });
+      if (latestCompletedRunId) {
+        await loadProjectRun(projectId, latestCompletedRunId, {
+          timeoutMs: 12000,
+          suppressErrors: true,
+          selectionRequestId,
+        });
+      }
+    }
     if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
       return null;
     }
+    const failedJob = failedSearchJobForSelectedProject();
+    const activeJob = activeSearchJobForSelectedProject();
     if (failedJob) {
       setStatus("Latest search failed.", "danger", `${failedJob.error || "The latest search did not complete successfully."} Retry when ready.`);
       return payload.project;
@@ -3153,7 +3183,11 @@ async function loadLatestProjectJob(projectId, options = {}) {
     }
     return;
   }
-  const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}/latest-job`);
+  const timeoutMs = safeNumber(options.timeoutMs, 0);
+  const payload = await fetchJSON(
+    `/app/projects/${encodeURIComponent(projectId)}/latest-job`,
+    timeoutMs > 0 ? { timeoutMs } : {},
+  );
   const incomingJob = payload?.job || null;
   if (!isCurrentProjectRequest(projectId, requestId, "latestJobRequestId")) {
     return incomingJob;
@@ -3210,7 +3244,11 @@ async function loadProjectRuns(projectId, options = {}) {
     }
     return [];
   }
-  const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}/runs?limit=25`);
+  const timeoutMs = safeNumber(options.timeoutMs, 0);
+  const payload = await fetchJSON(
+    `/app/projects/${encodeURIComponent(projectId)}/runs?limit=25`,
+    timeoutMs > 0 ? { timeoutMs } : {},
+  );
   const runs = Array.isArray(payload.runs) ? payload.runs : [];
   if (!isCurrentProjectRequest(projectId, requestId, "projectRunsRequestId")) {
     return runs;
@@ -3234,7 +3272,11 @@ async function loadProjectReviews(projectId, options = {}) {
     }
     return [];
   }
-  const payload = await fetchJSON(`/app/reviews?project_id=${encodeURIComponent(projectId)}&limit=50`);
+  const timeoutMs = safeNumber(options.timeoutMs, 0);
+  const payload = await fetchJSON(
+    `/app/reviews?project_id=${encodeURIComponent(projectId)}&limit=50`,
+    timeoutMs > 0 ? { timeoutMs } : {},
+  );
   const reviews = Array.isArray(payload.reviews) ? payload.reviews : [];
   if (!isCurrentProjectRequest(projectId, requestId, "projectReviewsRequestId")) {
     return reviews;

@@ -62,6 +62,20 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
+def _stored_run_summary(summary_json: str, *, candidate_count: int) -> Dict[str, Any]:
+    try:
+        summary = json.loads(summary_json or "{}")
+    except Exception:
+        summary = {}
+    if not isinstance(summary, dict):
+        summary = {}
+    if candidate_count > 0:
+        summary.setdefault("candidate_count", candidate_count)
+        summary.setdefault("returned_candidate_count", candidate_count)
+        summary.setdefault("requested_candidate_limit", candidate_count)
+    return summary
+
+
 def _project_status(value: str | None) -> str:
     normalized = str(value or "").strip().lower().replace(" ", "_")
     allowed = {item["id"] for item in PROJECT_STATUS_OPTIONS}
@@ -1315,14 +1329,10 @@ def list_project_runs(
         ).fetchall()
     results: List[Dict[str, Any]] = []
     for row in rows:
-        try:
-            summary = json.loads(row["summary_json"] or "{}")
-        except Exception:
-            summary = {}
-        summary = _run_summary_from_artifact(
-            summary,
-            candidate_count=int(row["candidate_count"] or 0),
-            report_json_path=str(row["report_json_path"] or ""),
+        candidate_count = int(row["candidate_count"] or 0)
+        summary = _stored_run_summary(
+            str(row["summary_json"] or ""),
+            candidate_count=candidate_count,
         )
         results.append(
             {
@@ -1330,7 +1340,7 @@ def list_project_runs(
                 "mandate_id": row["mandate_id"],
                 "brief_id": row["brief_id"],
                 "execution_backend": row["execution_backend"],
-                "candidate_count": int(row["candidate_count"] or 0),
+                "candidate_count": candidate_count,
                 "accepted_count": int(row["accepted_count"] or 0),
                 "report_json_path": row["report_json_path"] or "",
                 "report_csv_path": row["report_csv_path"] or "",

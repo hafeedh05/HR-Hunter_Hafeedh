@@ -426,7 +426,7 @@ def test_admin_can_delete_single_project_run_and_repoint_latest_run(tmp_path: Pa
         assert registry_row["search_count"] == 1
 
 
-def test_list_project_runs_recovers_summary_from_saved_report(tmp_path: Path):
+def test_list_project_runs_uses_stored_summary_without_loading_artifact(tmp_path: Path, monkeypatch):
     db_path = tmp_path / "workspace.db"
     init_workspace_db(db_path)
     admin_setup = get_user_totp_setup(email=DEFAULT_ADMIN_EMAIL, db_path=db_path)
@@ -474,7 +474,7 @@ def test_list_project_runs_recovers_summary_from_saved_report(tmp_path: Path):
                 "completed",
                 "local_engine",
                 json.dumps(["scrapingbee_google"]),
-                json.dumps({}),
+                json.dumps({"verified_count": 1, "candidate_count": 1}),
                 str(json_path),
                 str(csv_path),
                 0,
@@ -489,6 +489,8 @@ def test_list_project_runs_recovers_summary_from_saved_report(tmp_path: Path):
             "UPDATE projects SET latest_run_id = ?, latest_run_at = ? WHERE id = ?",
             (report.run_id, "2026-04-07T09:00:00+00:00", project["id"]),
         )
+
+    monkeypatch.setattr("hr_hunter.workspace.load_report", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("load_report should not run")))
 
     runs = list_project_runs(admin, project_id=project["id"], db_path=db_path)
     project_summaries = list_projects(admin, db_path=db_path)
