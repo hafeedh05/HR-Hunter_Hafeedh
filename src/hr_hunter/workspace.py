@@ -17,7 +17,7 @@ from urllib.parse import quote
 from hr_hunter.config import env_flag
 from hr_hunter.db import DbIntegrityError, connect_database, describe_database_target, resolve_database_target
 from hr_hunter.output import load_report
-from hr_hunter.state import _run_summary_from_artifact, init_state_db, list_jobs, stop_job
+from hr_hunter.state import init_state_db, list_jobs, stop_job
 
 
 DEFAULT_ADMIN_EMAIL = "admin.hrhunter@hyve"
@@ -727,14 +727,9 @@ def _project_summary_from_row(row: Any, members: List[Dict[str, Any]]) -> Dict[s
     latest_run_summary = {}
     latest_run_candidate_count = int(row["latest_run_candidate_count"] or 0) if "latest_run_candidate_count" in column_names else 0
     if "latest_run_summary_json" in column_names:
-        try:
-            latest_run_summary = json.loads(row["latest_run_summary_json"] or "{}")
-        except Exception:
-            latest_run_summary = {}
-        latest_run_summary = _run_summary_from_artifact(
-            latest_run_summary,
+        latest_run_summary = _stored_run_summary(
+            str(row["latest_run_summary_json"] or ""),
             candidate_count=latest_run_candidate_count,
-            report_json_path=str(row["latest_run_report_json_path"] or ""),
         )
     return {
         "id": row["id"],
@@ -882,14 +877,9 @@ def get_project(
     project["latest_run_status"] = str((latest_run_stats["status"] if latest_run_stats else "") or "")
     project["latest_run_execution_backend"] = str((latest_run_stats["execution_backend"] if latest_run_stats else "") or "")
     if latest_run_stats:
-        try:
-            latest_run_summary = json.loads(latest_run_stats["summary_json"] or "{}")
-        except Exception:
-            latest_run_summary = {}
-        project["latest_run_summary"] = _run_summary_from_artifact(
-            latest_run_summary,
+        project["latest_run_summary"] = _stored_run_summary(
+            str(latest_run_stats["summary_json"] or ""),
             candidate_count=project["latest_run_candidate_count"],
-            report_json_path=str(latest_run_stats["report_json_path"] or ""),
         )
     else:
         project["latest_run_summary"] = {}
