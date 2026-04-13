@@ -1,15 +1,20 @@
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.api import (
     _apply_strict_shortlist,
+    _collect_candidate_keys_from_report,
+    _collect_provider_query_exclusions_from_report,
     _finalize_report_for_limit,
     _job_actor_from_payload,
+    _quality_recovery_gap,
+    _quality_recovery_settings,
+    _quality_recovery_verification_candidates,
     _resolve_effective_verification_target,
     _resolve_pipeline_progress_percent,
     _runtime_storage_snapshot,
     _should_stop_after_stagnant_top_up,
     _verification_progress_base,
 )
-from hr_hunter.models import CandidateProfile, GeoSpec, SearchBrief, SearchRunReport
+from hr_hunter.models import CandidateProfile, GeoSpec, ProviderRunResult, SearchBrief, SearchRunReport
 
 
 def test_job_actor_from_payload_preserves_admin_flag():
@@ -209,6 +214,84 @@ def test_finalize_report_for_limit_honors_title_market_priority_brief() -> None:
         "Title Match Weak Market",
         "Strong Function Precise Market",
     ]
+
+
+def test_quality_recovery_helpers_capture_thresholds_and_fresh_candidates() -> None:
+    brief = build_search_brief(
+        {
+            "id": "quality-recovery-test",
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager"],
+            "provider_settings": {
+                "quality_recovery": {
+                    "enabled": True,
+                    "min_verified_count": 50,
+                    "max_reject_count": 50,
+                    "max_rounds": 3,
+                    "fetch_limit_increment": 120,
+                    "parallel_requests": 32,
+                    "max_queries": 96,
+                    "reranker_top_n": 300,
+                    "verification_top_n": 220,
+                    "verification_parallel_candidates": 48,
+                    "disable_history_slices": True,
+                    "disable_registry_memory": True,
+                }
+            },
+        }
+    )
+    settings = _quality_recovery_settings(brief, requested_limit=300, current_fetch_limit=420)
+
+    assert settings["enabled"] is True
+    assert settings["min_verified_count"] == 50
+    assert settings["max_reject_count"] == 50
+    assert settings["fetch_limit_increment"] == 120
+
+    gap = _quality_recovery_gap({"verified_count": 8, "reject_count": 287}, settings)
+
+    assert gap["should_retry"] is True
+    assert gap["verified_gap"] == 42
+    assert gap["reject_gap"] == 237
+
+    verified_candidate = CandidateProfile(full_name="Already Checked", verification_status="verified", last_verified_at="2026-04-13T00:00:00+00:00")
+    fresh_candidate = CandidateProfile(full_name="Fresh Candidate", verification_status="reject")
+    retry_candidate = CandidateProfile(full_name="Retry Candidate", verification_status="review")
+    selected = _quality_recovery_verification_candidates(
+        [verified_candidate, fresh_candidate, retry_candidate],
+        limit=2,
+    )
+
+    assert [candidate.full_name for candidate in selected] == ["Fresh Candidate", "Retry Candidate"]
+
+
+def test_collect_provider_query_exclusions_from_report_skips_skipped_queries() -> None:
+    report = SearchRunReport(
+        run_id="query-exclusion-test",
+        brief_id="brief-query-exclusion-test",
+        dry_run=False,
+        generated_at="2026-04-13T00:00:00+00:00",
+        provider_results=[
+            ProviderRunResult(
+                provider_name="scrapingbee_google",
+                executed=True,
+                dry_run=False,
+                diagnostics={
+                    "queries": [
+                        {"search": "supply chain manager dubai", "fingerprint": "fp-1", "skipped": False},
+                        {"search": "supply chain manager uae", "fingerprint": "fp-2", "skipped": True},
+                    ]
+                },
+            )
+        ],
+        candidates=[
+            CandidateProfile(full_name="Candidate One", linkedin_url="https://linkedin.com/in/candidate-one"),
+        ],
+    )
+
+    assert "url:linkedin.com/in/candidate-one" in _collect_candidate_keys_from_report(report)
+    assert _collect_provider_query_exclusions_from_report(report) == {
+        "scrapingbee_google": {"fp-1", "supply chain manager dubai"}
+    }
 
 
 def test_verification_progress_base_keeps_monotonic_retrieval_counts():

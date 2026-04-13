@@ -8,7 +8,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.config import (
@@ -22,6 +22,7 @@ from hr_hunter.config import (
 from hr_hunter.db import describe_database_target, resolve_database_target
 from hr_hunter.engine import SearchEngine, dedupe_candidates
 from hr_hunter.feedback import export_training_rows, init_feedback_db, load_ranker_training_rows, log_feedback
+from hr_hunter.identity import candidate_identity_keys
 from hr_hunter.output import (
     build_progress_counts,
     build_reporting_summary,
@@ -343,6 +344,107 @@ def _merge_ranked_report_candidates(report, supplemental_report, *, brief=None):
     return report
 
 
+def _collect_candidate_keys_from_report(report: Any) -> Set[str]:
+    seen: Set[str] = set()
+    for candidate in list(getattr(report, "candidates", []) or []):
+        seen.update(candidate_identity_keys(candidate))
+    return seen
+
+
+def _collect_provider_query_exclusions_from_report(report: Any) -> Dict[str, Set[str]]:
+    seen: Dict[str, Set[str]] = {}
+    for provider_result in list(getattr(report, "provider_results", []) or []):
+        provider_name = str(getattr(provider_result, "provider_name", "") or "").strip()
+        if not provider_name:
+            continue
+        diagnostics = dict(getattr(provider_result, "diagnostics", {}) or {})
+        for item in list(diagnostics.get("queries", []) or []):
+            if not isinstance(item, dict) or bool(item.get("skipped")):
+                continue
+            search_value = str(item.get("search", "") or "").strip()
+            fingerprint = str(item.get("fingerprint", "") or "").strip()
+            if not search_value and not fingerprint:
+                continue
+            bucket = seen.setdefault(provider_name, set())
+            if search_value:
+                bucket.add(search_value)
+            if fingerprint:
+                bucket.add(fingerprint)
+    return {provider_name: values for provider_name, values in seen.items() if values}
+
+
+def _quality_recovery_settings(
+    brief: Any,
+    *,
+    requested_limit: int,
+    current_fetch_limit: int,
+) -> Dict[str, Any]:
+    raw_settings = dict(getattr(brief, "provider_settings", {}).get("quality_recovery", {}) or {})
+    requested = max(1, int(requested_limit or 1))
+    fetch_limit = max(requested, int(current_fetch_limit or requested))
+    return {
+        "enabled": bool(raw_settings.get("enabled", False)),
+        "min_verified_count": max(0, min(requested, int(raw_settings.get("min_verified_count", 0) or 0))),
+        "max_reject_count": max(0, min(requested, int(raw_settings.get("max_reject_count", 0) or 0))),
+        "max_rounds": max(1, int(raw_settings.get("max_rounds", 2) or 2)),
+        "fetch_limit_increment": max(
+            40,
+            int(raw_settings.get("fetch_limit_increment", max(80, int(round(requested * 0.35)))) or 40),
+        ),
+        "parallel_requests": max(1, int(raw_settings.get("parallel_requests", 0) or 1)),
+        "max_queries": max(1, int(raw_settings.get("max_queries", 0) or fetch_limit)),
+        "max_geo_groups": max(1, int(raw_settings.get("max_geo_groups", 0) or 1)),
+        "reranker_top_n": max(requested, int(raw_settings.get("reranker_top_n", requested) or requested)),
+        "verification_top_n": max(0, int(raw_settings.get("verification_top_n", fetch_limit) or 0)),
+        "verification_parallel_candidates": max(
+            1,
+            int(raw_settings.get("verification_parallel_candidates", 1) or 1),
+        ),
+        "disable_history_slices": bool(raw_settings.get("disable_history_slices", False)),
+        "disable_registry_memory": bool(raw_settings.get("disable_registry_memory", False)),
+        "force_discovery_slices": bool(raw_settings.get("force_discovery_slices", True)),
+        "force_geo_fanout": bool(raw_settings.get("force_geo_fanout", True)),
+        "force_country_only_queries": bool(raw_settings.get("force_country_only_queries", True)),
+        "force_adjacent_titles": bool(raw_settings.get("force_adjacent_titles", True)),
+    }
+
+
+def _quality_recovery_gap(summary: Dict[str, Any] | None, settings: Dict[str, Any]) -> Dict[str, Any]:
+    resolved_summary = dict(summary or {})
+    verified_count = max(0, int(resolved_summary.get("verified_count", 0) or 0))
+    reject_count = max(0, int(resolved_summary.get("reject_count", 0) or 0))
+    needs_verified = settings["min_verified_count"] > 0 and verified_count < settings["min_verified_count"]
+    too_many_rejects = settings["max_reject_count"] > 0 and reject_count > settings["max_reject_count"]
+    return {
+        "verified_count": verified_count,
+        "reject_count": reject_count,
+        "needs_verified": needs_verified,
+        "too_many_rejects": too_many_rejects,
+        "verified_gap": max(0, settings["min_verified_count"] - verified_count),
+        "reject_gap": max(0, reject_count - settings["max_reject_count"]),
+        "should_retry": bool(needs_verified or too_many_rejects),
+    }
+
+
+def _quality_recovery_verification_candidates(candidates: List[Any], *, limit: int) -> List[Any]:
+    shortlist_limit = max(0, min(int(limit or 0), len(candidates)))
+    if shortlist_limit <= 0:
+        return []
+    unverified_candidates = [
+        candidate
+        for candidate in candidates
+        if not str(getattr(candidate, "last_verified_at", "") or "").strip()
+    ]
+    if len(unverified_candidates) >= shortlist_limit:
+        return unverified_candidates[:shortlist_limit]
+    fallback_candidates = [
+        candidate
+        for candidate in candidates
+        if str(getattr(candidate, "verification_status", "") or "").strip().lower() != "verified"
+    ]
+    return fallback_candidates[:shortlist_limit]
+
+
 def _resolve_pipeline_progress_percent(
     *,
     stage: str,
@@ -608,11 +710,33 @@ def create_app() -> "FastAPI":
         dry_run: bool,
         exclude_report_paths: List[Path] | None = None,
         exclude_history_dirs: List[Path] | None = None,
+        extra_exclude_candidate_keys: Set[str] | None = None,
+        extra_exclude_provider_queries: Dict[str, Set[str]] | None = None,
         progress_callback: Any = None,
     ):
         exclusion_sources = [*(exclude_report_paths or []), *(exclude_history_dirs or [])]
         exclude_candidate_keys = collect_seen_candidate_keys(exclusion_sources)
+        if extra_exclude_candidate_keys:
+            exclude_candidate_keys.update(
+                {
+                    str(value).strip()
+                    for value in set(extra_exclude_candidate_keys)
+                    if str(value or "").strip()
+                }
+            )
         exclude_provider_queries = collect_seen_provider_queries(exclusion_sources)
+        for provider_name, queries in dict(extra_exclude_provider_queries or {}).items():
+            normalized_provider_name = str(provider_name or "").strip()
+            if not normalized_provider_name:
+                continue
+            bucket = exclude_provider_queries.setdefault(normalized_provider_name, set())
+            bucket.update(
+                {
+                    str(value).strip()
+                    for value in set(queries or set())
+                    if str(value or "").strip()
+                }
+            )
         return await engine.run(
             brief,
             list(providers),
@@ -1220,6 +1344,222 @@ def create_app() -> "FastAPI":
                         progress_callback=_on_verification_progress,
                     )
                     refresh_report_summary(report, verification_stats, brief=brief)
+            quality_recovery_settings = _quality_recovery_settings(
+                brief,
+                requested_limit=requested_limit,
+                current_fetch_limit=internal_fetch_limit,
+            )
+            quality_recovery_summary = {
+                "enabled": bool(quality_recovery_settings.get("enabled", False)),
+                "rounds": 0,
+                "notes": [],
+            }
+            if quality_recovery_summary["enabled"] and not bool(payload.get("dry_run", False)):
+                quality_recovery_gap = _quality_recovery_gap(report.summary, quality_recovery_settings)
+                stagnant_quality_rounds = 0
+                while (
+                    quality_recovery_gap["should_retry"]
+                    and quality_recovery_summary["rounds"] < int(quality_recovery_settings["max_rounds"])
+                ):
+                    quality_recovery_summary["rounds"] += 1
+                    recovery_round = int(quality_recovery_summary["rounds"])
+                    next_fetch_limit = max(
+                        compute_top_up_fetch_limit(requested_limit, internal_fetch_limit),
+                        internal_fetch_limit + int(quality_recovery_settings["fetch_limit_increment"]),
+                    )
+                    recovery_payload = dict(payload)
+                    recovery_payload["internal_fetch_limit_override"] = next_fetch_limit
+                    recovery_payload["top_up_round"] = max(
+                        recovery_round,
+                        int(report.summary.get("top_up_rounds", 0) or 0) + recovery_round,
+                    )
+                    recovery_payload["jd_breakdown"] = dict(ui_payload.get("job_description_breakdown", {}))
+                    recovery_payload["verification_enabled"] = True
+                    recovery_payload["verification_top_n"] = max(
+                        int(quality_recovery_settings["verification_top_n"]),
+                        int(verification_target or 0),
+                    )
+                    recovery_payload["verification_parallel_candidates"] = max(
+                        int(quality_recovery_settings["verification_parallel_candidates"]),
+                        int(verification_settings.get("parallel_candidates", 0) or 0),
+                    )
+                    recovery_payload["provider_parallel_requests"] = max(
+                        int(quality_recovery_settings["parallel_requests"]),
+                        int(payload.get("provider_parallel_requests", 0) or 0),
+                    )
+                    recovery_payload["scrapingbee_max_queries"] = max(
+                        int(quality_recovery_settings["max_queries"]),
+                        int(payload.get("scrapingbee_max_queries", 0) or 0),
+                    )
+                    recovery_payload["max_geo_groups"] = max(
+                        int(quality_recovery_settings["max_geo_groups"]),
+                        int(payload.get("max_geo_groups", 0) or 0),
+                    )
+                    recovery_payload["reranker_top_n"] = max(
+                        int(quality_recovery_settings["reranker_top_n"]),
+                        int(payload.get("reranker_top_n", 0) or 0),
+                    )
+                    if bool(quality_recovery_settings.get("disable_history_slices", False)):
+                        recovery_payload["include_history_slices"] = False
+                    if bool(quality_recovery_settings.get("disable_registry_memory", False)):
+                        recovery_payload["registry_memory_enabled"] = False
+                    if bool(quality_recovery_settings.get("force_discovery_slices", False)):
+                        recovery_payload["include_discovery_slices"] = True
+                    if bool(quality_recovery_settings.get("force_geo_fanout", False)):
+                        recovery_payload["geo_fanout_enabled"] = True
+                    if bool(
+                        quality_recovery_settings.get("force_adjacent_titles", False)
+                        or quality_recovery_settings.get("force_country_only_queries", False)
+                    ):
+                        recovery_clarifications = dict(recovery_payload.get("brief_clarifications", {}) or {})
+                        recovery_clarifications["expand_search_when_thin"] = True
+                        if bool(quality_recovery_settings.get("force_country_only_queries", False)):
+                            recovery_clarifications["strict_market_scope"] = False
+                    else:
+                        recovery_clarifications = None
+                    if recovery_clarifications is not None and bool(
+                        quality_recovery_settings.get("force_adjacent_titles", False)
+                    ):
+                        recovery_clarifications["allow_adjacent_titles"] = True
+                    if recovery_clarifications is not None:
+                        recovery_payload["brief_clarifications"] = recovery_clarifications
+
+                    _push_progress(
+                        {
+                            "stage": "retrieval",
+                            "stage_label": "Retrieval",
+                            "queries_completed": int(latest_telemetry.get("queries_completed", 0) or 0),
+                            "queries_total": int(latest_telemetry.get("queries_total", 0) or 0),
+                            "raw_found": int(latest_telemetry.get("raw_found", 0) or 0),
+                            "unique_after_dedupe": len(report.candidates),
+                            "reranked_count": int(latest_telemetry.get("reranked_count", 0) or 0),
+                            "finalized_count": len(report.candidates[:requested_limit]),
+                            "verified_count": int(report.summary.get("verified_count", 0) or 0),
+                            "review_count": int(report.summary.get("review_count", 0) or 0),
+                            "reject_count": int(report.summary.get("reject_count", 0) or 0),
+                            "percent": 80,
+                            "round": recovery_round,
+                            "message": (
+                                "Verified yield is below target, so HR Hunter is expanding to fresh public candidates. "
+                                f"Recovery round {recovery_round}."
+                            ),
+                        },
+                        checkpoint_patch={"event": "quality_recovery"},
+                        force=True,
+                    )
+                    recovery_ui_payload = build_ui_brief_payload(recovery_payload)
+                    recovery_brief = build_search_brief(recovery_ui_payload["brief_config"])
+                    supplemental_report = await _run_local_search(
+                        recovery_brief,
+                        providers=list(recovery_ui_payload["providers"]),
+                        limit=next_fetch_limit,
+                        dry_run=bool(payload.get("dry_run", False)),
+                        exclude_report_paths=exclude_report_paths,
+                        exclude_history_dirs=exclude_history_dirs,
+                        extra_exclude_candidate_keys=_collect_candidate_keys_from_report(report),
+                        extra_exclude_provider_queries=_collect_provider_query_exclusions_from_report(report),
+                        progress_callback=_on_pipeline_progress,
+                    )
+                    previous_candidate_count = len(report.candidates)
+                    report = _merge_ranked_report_candidates(report, supplemental_report, brief=recovery_brief)
+                    net_new_candidates = max(0, len(report.candidates) - previous_candidate_count)
+                    if net_new_candidates <= 0:
+                        stagnant_quality_rounds += 1
+                    else:
+                        stagnant_quality_rounds = 0
+                    brief = recovery_brief
+                    verification_settings = dict(brief.provider_settings.get("verification", {}) or {})
+                    report.candidates = prioritize_verification_candidates(
+                        report.candidates,
+                        brief=brief,
+                        company_required=bool(brief.company_targets),
+                    )
+                    recovery_verifier = PublicEvidenceVerifier(
+                        {
+                            **dict(brief.provider_settings.get("scrapingbee_google", {}) or {}),
+                            **verification_settings,
+                        }
+                    )
+                    recovery_verify_limit = max(
+                        0,
+                        min(
+                            len(report.candidates),
+                            int(quality_recovery_settings["verification_top_n"] or 0),
+                        ),
+                    )
+                    recovery_verification_candidates = _quality_recovery_verification_candidates(
+                        report.candidates,
+                        limit=recovery_verify_limit,
+                    )
+                    recovery_verification_stats = None
+                    if recovery_verification_candidates and recovery_verifier.is_configured():
+                        recovery_progress_base = _verification_progress_base(
+                            dict(report.summary.get("pipeline_metrics", {}) or {}),
+                            latest_telemetry,
+                        )
+
+                        def _on_recovery_verification_progress(event: Dict[str, Any]) -> None:
+                            checked = max(0, int(event.get("candidates_checked", 0) or 0))
+                            total = max(
+                                1,
+                                int(
+                                    event.get("candidates_total", len(recovery_verification_candidates))
+                                    or len(recovery_verification_candidates)
+                                    or 1
+                                ),
+                            )
+                            coverage = min(1.0, max(0.0, checked / max(1, total)))
+                            _push_progress(
+                                {
+                                    "stage": "verifying",
+                                    "stage_label": "Verifying",
+                                    **recovery_progress_base,
+                                    "queries_in_flight": 0,
+                                    "verification_target": total,
+                                    "verified_candidates_checked": checked,
+                                    "verification_requests_used": int(event.get("requests_used", 0) or 0),
+                                    "verifying_count": int(event.get("verifying_count", max(0, total - checked)) or 0),
+                                    "verified_count": int(event.get("verified_count", 0) or 0),
+                                    "review_count": int(event.get("review_count", 0) or 0),
+                                    "reject_count": int(event.get("reject_count", 0) or 0),
+                                    "percent": max(92, min(98, 92 + int(round(coverage * 6)))),
+                                    "message": (
+                                        "Checking fresh public evidence on new candidates from recovery round "
+                                        f"{recovery_round}. {checked}/{total} reviewed."
+                                    ),
+                                },
+                                checkpoint_patch={"event": "quality_recovery_verifying"},
+                            )
+
+                        recovery_verification_stats = await recovery_verifier.verify_candidates(
+                            recovery_verification_candidates,
+                            brief,
+                            limit=len(recovery_verification_candidates),
+                            progress_callback=_on_recovery_verification_progress,
+                        )
+                        refresh_report_summary(report, recovery_verification_stats, brief=brief)
+                    report = _finalize_report_for_limit(
+                        report,
+                        requested_limit=requested_limit,
+                        internal_fetch_limit=next_fetch_limit,
+                        brief=brief,
+                    )
+                    internal_fetch_limit = next_fetch_limit
+                    quality_recovery_gap = _quality_recovery_gap(report.summary, quality_recovery_settings)
+                    quality_recovery_summary["notes"].append(
+                        (
+                            f"round {recovery_round}: +{net_new_candidates} fresh candidates, "
+                            f"{quality_recovery_gap['verified_count']} verified, "
+                            f"{quality_recovery_gap['reject_count']} rejected"
+                        )
+                    )
+                    if stagnant_quality_rounds >= 2:
+                        quality_recovery_summary["notes"].append(
+                            "stopped after repeated recovery rounds failed to add fresh candidates"
+                        )
+                        break
+                report.summary = dict(report.summary or {})
+                report.summary["quality_recovery"] = quality_recovery_summary
             report = _finalize_report_for_limit(
                 report,
                 requested_limit=requested_limit,

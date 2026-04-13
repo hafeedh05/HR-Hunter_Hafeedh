@@ -214,10 +214,16 @@ def test_build_app_bootstrap_supply_chain_preset_is_distinct_from_ceo_demo() -> 
     assert "Marina Home Interiors" not in preset["job_description"]
     assert "The One" not in preset["peer_company_targets"]
     assert "Amazon" in preset["peer_company_targets"]
+    assert "Saudi Arabia" in preset["countries"]
+    assert "Qatar" in preset["countries"]
     assert "S&OP" in preset["must_have_keywords"]
-    assert preset["brief_clarifications"]["strict_market_scope"] is True
+    assert preset["brief_clarifications"]["strict_market_scope"] is False
+    assert preset["registry_memory_enabled"] is False
     assert preset["jd_breakdown"]["titles"][0] == "Supply Chain Manager"
     assert preset["jd_breakdown"]["search_tuning"]["search_profile"] == "focused"
+    assert preset["jd_breakdown"]["search_tuning"]["include_history_slices"] is False
+    assert preset["jd_breakdown"]["search_tuning"]["quality_recovery"]["enabled"] is True
+    assert preset["jd_breakdown"]["search_tuning"]["quality_recovery"]["min_verified_count"] == 50
     assert preset["jd_breakdown"]["search_tuning"]["reranker_model_name"] == DEFAULT_UI_RERANKER_MODEL
 
 
@@ -475,6 +481,74 @@ def test_build_ui_brief_payload_accepts_explicit_search_profile_and_reranker_mod
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 54
     assert brief["provider_settings"]["reranker"]["model_name"] == DEFAULT_UI_RERANKER_MODEL
     assert brief["ui_meta"]["reranker_model_name"] == DEFAULT_UI_RERANKER_MODEL
+
+
+def test_build_ui_brief_payload_exposes_quality_recovery_settings_from_search_tuning():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager", "Demand Planning Manager"],
+            "countries": ["United Arab Emirates", "Saudi Arabia", "Qatar"],
+            "cities": ["Dubai", "Riyadh", "Doha"],
+            "must_have_keywords": ["S&OP", "Demand Planning"],
+            "job_description": "Need a GCC supply chain manager with planning, logistics, and ERP ownership.",
+            "limit": 300,
+            "registry_memory_enabled": False,
+            "jd_breakdown": {
+                "summary": "Target role: Supply Chain Manager.",
+                "titles": ["Supply Chain Manager"],
+                "required_keywords": ["s&op", "demand planning"],
+                "preferred_keywords": ["retail"],
+                "industry_keywords": ["retail", "ecommerce"],
+                "key_experience_points": ["GCC retail logistics leadership."],
+                "search_tuning": {
+                    "search_profile": "focused",
+                    "provider_parallel_requests": 28,
+                    "scrapingbee_max_queries": 72,
+                    "include_history_slices": False,
+                    "verification_top_n": 220,
+                    "verification_parallel_candidates": 40,
+                    "quality_recovery": {
+                        "enabled": True,
+                        "min_verified_count": 50,
+                        "max_reject_count": 50,
+                        "max_rounds": 3,
+                        "parallel_requests": 32,
+                        "max_queries": 96,
+                        "reranker_top_n": 300,
+                        "verification_top_n": 260,
+                        "verification_parallel_candidates": 48,
+                        "disable_history_slices": True,
+                        "disable_registry_memory": True,
+                    },
+                },
+            },
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
+    assert brief["provider_settings"]["registry_memory"]["enabled"] is False
+    assert brief["provider_settings"]["quality_recovery"] == {
+        "enabled": True,
+        "min_verified_count": 50,
+        "max_reject_count": 50,
+        "max_rounds": 3,
+        "fetch_limit_increment": 105,
+        "parallel_requests": 32,
+        "max_queries": 96,
+        "max_geo_groups": 6,
+        "reranker_top_n": 300,
+        "verification_top_n": 260,
+        "verification_parallel_candidates": 48,
+        "disable_history_slices": True,
+        "disable_registry_memory": True,
+        "force_discovery_slices": True,
+        "force_geo_fanout": True,
+        "force_country_only_queries": True,
+        "force_adjacent_titles": True,
+    }
 
 
 def test_build_ui_brief_payload_applies_brief_clarifications_and_focused_tuning():

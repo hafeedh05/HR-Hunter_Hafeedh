@@ -1981,6 +1981,9 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     tuned_verification_company_location_probe_queries = _coerce_int(
         search_tuning.get("verification_company_location_probe_queries")
     )
+    tuned_quality_recovery = search_tuning.get("quality_recovery", {})
+    if not isinstance(tuned_quality_recovery, dict):
+        tuned_quality_recovery = {}
     tuned_query_family_budgets = search_tuning.get("query_family_budgets", {})
     if not isinstance(tuned_query_family_budgets, dict):
         tuned_query_family_budgets = {}
@@ -2247,6 +2250,115 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "results_per_query": 10,
         },
     }
+    quality_recovery_enabled = _coerce_bool(payload.get("quality_recovery_enabled"))
+    if quality_recovery_enabled is None:
+        quality_recovery_enabled = _coerce_bool(tuned_quality_recovery.get("enabled"))
+    if quality_recovery_enabled:
+        quality_recovery_disable_history = _coerce_bool(payload.get("quality_recovery_disable_history_slices"))
+        if quality_recovery_disable_history is None:
+            quality_recovery_disable_history = _coerce_bool(tuned_quality_recovery.get("disable_history_slices"))
+        quality_recovery_disable_registry = _coerce_bool(payload.get("quality_recovery_disable_registry_memory"))
+        if quality_recovery_disable_registry is None:
+            quality_recovery_disable_registry = _coerce_bool(tuned_quality_recovery.get("disable_registry_memory"))
+        quality_recovery_force_discovery = _coerce_bool(payload.get("quality_recovery_force_discovery_slices"))
+        if quality_recovery_force_discovery is None:
+            quality_recovery_force_discovery = _coerce_bool(tuned_quality_recovery.get("force_discovery_slices"))
+        quality_recovery_force_geo_fanout = _coerce_bool(payload.get("quality_recovery_force_geo_fanout"))
+        if quality_recovery_force_geo_fanout is None:
+            quality_recovery_force_geo_fanout = _coerce_bool(tuned_quality_recovery.get("force_geo_fanout"))
+        quality_recovery_force_country_queries = _coerce_bool(
+            payload.get("quality_recovery_force_country_only_queries")
+        )
+        if quality_recovery_force_country_queries is None:
+            quality_recovery_force_country_queries = _coerce_bool(
+                tuned_quality_recovery.get("force_country_only_queries")
+            )
+        quality_recovery_force_adjacent_titles = _coerce_bool(payload.get("quality_recovery_force_adjacent_titles"))
+        if quality_recovery_force_adjacent_titles is None:
+            quality_recovery_force_adjacent_titles = _coerce_bool(
+                tuned_quality_recovery.get("force_adjacent_titles")
+            )
+        providers_settings["quality_recovery"] = {
+            "enabled": True,
+            "min_verified_count": max(
+                0,
+                _coerce_int(payload.get("quality_recovery_min_verified_count"))
+                or _coerce_int(tuned_quality_recovery.get("min_verified_count"))
+                or 0,
+            ),
+            "max_reject_count": max(
+                0,
+                _coerce_int(payload.get("quality_recovery_max_reject_count"))
+                or _coerce_int(tuned_quality_recovery.get("max_reject_count"))
+                or 0,
+            ),
+            "max_rounds": max(
+                1,
+                _coerce_int(payload.get("quality_recovery_max_rounds"))
+                or _coerce_int(tuned_quality_recovery.get("max_rounds"))
+                or 2,
+            ),
+            "fetch_limit_increment": max(
+                40,
+                _coerce_int(payload.get("quality_recovery_fetch_limit_increment"))
+                or _coerce_int(tuned_quality_recovery.get("fetch_limit_increment"))
+                or max(80, int(round(limit * 0.35))),
+            ),
+            "parallel_requests": max(
+                1,
+                _coerce_int(payload.get("quality_recovery_parallel_requests"))
+                or _coerce_int(tuned_quality_recovery.get("parallel_requests"))
+                or scrapingbee_parallel_requests,
+            ),
+            "max_queries": max(
+                1,
+                _coerce_int(payload.get("quality_recovery_max_queries"))
+                or _coerce_int(tuned_quality_recovery.get("max_queries"))
+                or scrapingbee_max_queries,
+            ),
+            "max_geo_groups": max(
+                1,
+                _coerce_int(payload.get("quality_recovery_max_geo_groups"))
+                or _coerce_int(tuned_quality_recovery.get("max_geo_groups"))
+                or resolved_max_geo_groups,
+            ),
+            "reranker_top_n": max(
+                limit,
+                _coerce_int(payload.get("quality_recovery_reranker_top_n"))
+                or _coerce_int(tuned_quality_recovery.get("reranker_top_n"))
+                or reranker_top_n,
+            ),
+            "verification_top_n": max(
+                0,
+                _coerce_int(payload.get("quality_recovery_verification_top_n"))
+                or _coerce_int(tuned_quality_recovery.get("verification_top_n"))
+                or verification_top_n,
+            ),
+            "verification_parallel_candidates": max(
+                1,
+                _coerce_int(payload.get("quality_recovery_verification_parallel_candidates"))
+                or _coerce_int(tuned_quality_recovery.get("verification_parallel_candidates"))
+                or verification_parallel_candidates,
+            ),
+            "disable_history_slices": bool(quality_recovery_disable_history),
+            "disable_registry_memory": bool(quality_recovery_disable_registry),
+            "force_discovery_slices": (
+                True if quality_recovery_force_discovery is None else bool(quality_recovery_force_discovery)
+            ),
+            "force_geo_fanout": (
+                True if quality_recovery_force_geo_fanout is None else bool(quality_recovery_force_geo_fanout)
+            ),
+            "force_country_only_queries": (
+                True
+                if quality_recovery_force_country_queries is None
+                else bool(quality_recovery_force_country_queries)
+            ),
+            "force_adjacent_titles": (
+                True
+                if quality_recovery_force_adjacent_titles is None
+                else bool(quality_recovery_force_adjacent_titles)
+            ),
+        }
 
     summary_lines = []
     if role_title:
@@ -2608,6 +2720,11 @@ def build_app_bootstrap() -> Dict[str, Any]:
                 ],
                 "countries": [
                     "United Arab Emirates",
+                    "Saudi Arabia",
+                    "Qatar",
+                    "Kuwait",
+                    "Oman",
+                    "Bahrain",
                 ],
                 "continents": [],
                 "cities": [
@@ -2615,6 +2732,13 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Abu Dhabi",
                     "Sharjah",
                     "Jebel Ali",
+                    "Riyadh",
+                    "Jeddah",
+                    "Dammam",
+                    "Doha",
+                    "Kuwait City",
+                    "Muscat",
+                    "Manama",
                 ],
                 "company_targets": [],
                 "peer_company_targets": [
@@ -2660,28 +2784,28 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "distribution",
                 ],
                 "job_description": (
-                    "We are hiring a UAE-based Supply Chain Manager to lead planning, inventory, logistics, and "
-                    "fulfillment performance across a fast-moving retail and ecommerce network. The brief prioritizes "
-                    "candidates with strong public evidence of S&OP ownership, demand and supply planning, inventory "
-                    "optimization, ERP-led operations, and distribution or warehouse coordination in the UAE market. "
-                    "Experience scaling service levels across omnichannel retail, consumer goods, 3PL, or regional "
-                    "distribution environments is highly valuable."
+                    "We are hiring a GCC Supply Chain Manager to lead planning, inventory, logistics, and "
+                    "fulfillment performance across the United Arab Emirates, Saudi Arabia, Qatar, Kuwait, Oman, and "
+                    "Bahrain. The brief prioritizes candidates with strong public evidence of S&OP ownership, demand "
+                    "and supply planning, inventory optimization, ERP-led operations, and distribution or warehouse "
+                    "coordination across GCC supply chains. Experience scaling service levels across omnichannel "
+                    "retail, consumer goods, 3PL, or regional distribution environments is highly valuable."
                 ),
                 "brief_clarifications": {
-                    "prioritize_first_location": True,
+                    "prioritize_first_location": False,
                     "allow_adjacent_titles": True,
-                    "strict_market_scope": True,
+                    "strict_market_scope": False,
                     "expand_search_when_thin": True,
                 },
                 "jd_breakdown": {
                     **extract_job_description_breakdown(
                         (
-                            "We are hiring a UAE-based Supply Chain Manager to lead planning, inventory, logistics, and "
-                            "fulfillment performance across a fast-moving retail and ecommerce network. The brief prioritizes "
-                            "candidates with strong public evidence of S&OP ownership, demand and supply planning, inventory "
-                            "optimization, ERP-led operations, and distribution or warehouse coordination in the UAE market. "
-                            "Experience scaling service levels across omnichannel retail, consumer goods, 3PL, or regional "
-                            "distribution environments is highly valuable."
+                            "We are hiring a GCC Supply Chain Manager to lead planning, inventory, logistics, and "
+                            "fulfillment performance across the United Arab Emirates, Saudi Arabia, Qatar, Kuwait, Oman, "
+                            "and Bahrain. The brief prioritizes candidates with strong public evidence of S&OP ownership, "
+                            "demand and supply planning, inventory optimization, ERP-led operations, and distribution or "
+                            "warehouse coordination across GCC supply chains. Experience scaling service levels across "
+                            "omnichannel retail, consumer goods, 3PL, or regional distribution environments is highly valuable."
                         ),
                         role_title="Supply Chain Manager",
                     ),
@@ -2740,8 +2864,11 @@ def build_app_bootstrap() -> Dict[str, Any]:
                             "stakeholder management",
                         ],
                         "scope_keywords": [
+                            "gcc",
                             "uae",
                             "dubai",
+                            "riyadh",
+                            "doha",
                             "jebel ali",
                             "regional distribution",
                         ],
@@ -2749,22 +2876,42 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "search_tuning": {
                         "search_profile": FOCUSED_SEARCH_PROFILE,
                         "reranker_model_name": DEFAULT_UI_RERANKER_MODEL,
-                        "internal_fetch_limit_override": 420,
-                        "reranker_top_n": 220,
-                        "provider_parallel_requests": 24,
-                        "scrapingbee_max_queries": 54,
-                        "max_geo_groups": 2,
+                        "internal_fetch_limit_override": 480,
+                        "reranker_top_n": 260,
+                        "provider_parallel_requests": 28,
+                        "scrapingbee_max_queries": 72,
+                        "max_geo_groups": 6,
                         "geo_group_size": 1,
                         "company_chunk_size": 4,
                         "company_slice_location_group_limit": 1,
                         "max_company_terms_per_query": 6,
-                        "stagnation_query_window": 8,
-                        "stagnation_min_results": 240,
-                        "include_history_slices": True,
+                        "stagnation_query_window": 10,
+                        "stagnation_min_results": 280,
+                        "include_history_slices": False,
                         "include_discovery_slices": True,
-                        "verification_top_n": 160,
-                        "verification_parallel_candidates": 32,
+                        "verification_top_n": 220,
+                        "verification_parallel_candidates": 40,
                         "verification_location_probe_queries": 1,
+                        "verification_company_location_probe_queries": 1,
+                        "quality_recovery": {
+                            "enabled": True,
+                            "min_verified_count": 50,
+                            "max_reject_count": 50,
+                            "max_rounds": 3,
+                            "fetch_limit_increment": 120,
+                            "parallel_requests": 32,
+                            "max_queries": 96,
+                            "max_geo_groups": 6,
+                            "reranker_top_n": 300,
+                            "verification_top_n": 260,
+                            "verification_parallel_candidates": 48,
+                            "disable_history_slices": True,
+                            "disable_registry_memory": True,
+                            "force_discovery_slices": True,
+                            "force_geo_fanout": True,
+                            "force_country_only_queries": True,
+                            "force_adjacent_titles": True,
+                        },
                         "query_family_budgets": {
                             "team_leadership_pages": 1,
                             "appointment_news_pages": 3,
@@ -2787,6 +2934,7 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "function": "important",
                     "semantic": "preferred",
                 },
+                "registry_memory_enabled": False,
             },
             "data_analyst_uae": {
                 "project_name": "UAE Data Analyst Search",
