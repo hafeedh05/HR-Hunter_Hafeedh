@@ -3446,10 +3446,15 @@ async function loadProject(projectId) {
 }
 
 async function loadLatestProjectJob(projectId, options = {}) {
-  const requestId = Math.max(1, safeNumber(options.selectionRequestId, 0) || (safeNumber(state.latestJobRequestId, 0) + 1));
-  state.latestJobRequestId = requestId;
+  const selectionRequestId = safeNumber(options.selectionRequestId, 0);
+  const requestId = selectionRequestId > 0
+    ? selectionRequestId
+    : Math.max(1, safeNumber(state.latestJobRequestId, 0) + 1);
+  if (selectionRequestId <= 0) {
+    state.latestJobRequestId = requestId;
+  }
   if (!projectId) {
-    if (!options.selectionRequestId || requestId === safeNumber(state.latestJobRequestId, 0)) {
+    if (selectionRequestId > 0 || requestId === safeNumber(state.latestJobRequestId, 0)) {
       state.activeJob = null;
       clearJobPolling();
       if (!options.suppressRender) {
@@ -3467,7 +3472,11 @@ async function loadLatestProjectJob(projectId, options = {}) {
     timeoutMs > 0 ? { timeoutMs } : {},
   );
   const incomingJob = payload?.job || null;
-  if (!isCurrentProjectRequest(projectId, requestId, "latestJobRequestId")) {
+  if (selectionRequestId > 0) {
+    if (!isCurrentProjectRequest(projectId)) {
+      return incomingJob;
+    }
+  } else if (!isCurrentProjectRequest(projectId, requestId, "latestJobRequestId")) {
     return incomingJob;
   }
   const polledJobActive =
