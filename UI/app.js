@@ -510,6 +510,26 @@ function switchTab(tabId) {
   persistStoredState();
   setStatus(state.selectedProject ? `${state.selectedProject.name} selected.` : "Ready", "default", TAB_META[resolvedTab].description);
   const liveStatusVisible = syncLiveJobStatus();
+  const latestRunId = state.selectedProjectId
+    ? String(
+      state.selectedProject?.latest_run_id
+      || latestCompletedRunIdForProject(state.selectedProjectId)
+      || "",
+    ).trim()
+    : "";
+  if (
+    state.selectedProjectId
+    && (resolvedTab === "results" || resolvedTab === "candidates")
+    && !state.currentReport
+    && latestRunId
+  ) {
+    void loadProjectRun(state.selectedProjectId, latestRunId, {
+      timeoutMs: RUN_LOAD_TIMEOUT_MS,
+      suppressErrors: true,
+    }).catch(() => {
+      // Non-fatal. The latest-job sync below can still recover the current run.
+    });
+  }
   if (
     state.selectedProjectId
     && (resolvedTab === "results" || resolvedTab === "candidates" || resolvedTab === "history")
@@ -1510,8 +1530,8 @@ function renderProjectList() {
   }
   root.innerHTML = state.projects.map((project) => projectCardMarkup(project, project.id === state.selectedProjectId)).join("");
   root.querySelectorAll("[data-project-id]").forEach((button) => {
-    button.addEventListener("click", () => {
-      loadProject(button.dataset.projectId);
+    button.addEventListener("click", async () => {
+      await loadProject(button.dataset.projectId);
       switchTab("projects");
     });
   });
