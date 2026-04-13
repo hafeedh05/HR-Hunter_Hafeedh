@@ -22,6 +22,7 @@ dev = [
   "pytest>=8.3.0",
 ]
 reranker = [
+  "accelerate>=0.30.0",
   "torch>=2.2.0",
   "transformers>=4.40.0",
 ]
