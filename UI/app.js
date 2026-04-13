@@ -1960,6 +1960,27 @@ function selectedProjectForView() {
   return state.selectedProject || selectedProjectFromList() || null;
 }
 
+function resetLoadedProjectState() {
+  state.currentReport = null;
+  state.currentRuns = [];
+  state.currentReviews = [];
+  state.candidateSearchQuery = "";
+  state.candidateStatusFilter = "all";
+  state.candidateLocationFilter = "all";
+  state.selectedCandidateRef = "";
+}
+
+function finishProjectLoad(requestId) {
+  if (safeNumber(requestId, 0) !== safeNumber(state.projectLoadRequestId, 0)) {
+    return;
+  }
+  state.projectLoadPending = false;
+  renderHistory();
+  renderFeedback();
+  renderResults();
+  renderCandidates();
+}
+
 function resultsRunTiming() {
   const completedJob = latestCompletedSearchJobForCurrentReport();
   if (completedJob) {
@@ -3022,11 +3043,19 @@ function attachHistoryHandlers() {
 function renderHistory() {
   const runRoot = document.getElementById("run-history-list");
   const projectRoot = document.getElementById("recent-projects-list");
+  const restoringProject = Boolean(state.projectLoadPending && state.selectedProjectId);
   if (!state.selectedProject) {
     runRoot.innerHTML = `
       <div class="empty-state compact-empty">
         <h4>Select or Create a Project</h4>
         <p>Choose a project first to see its saved runs.</p>
+      </div>
+    `;
+  } else if (restoringProject && !state.currentRuns.length) {
+    runRoot.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>Loading Project History</h4>
+        <p>Fetching the latest saved runs for <strong>${escapeHtml(state.selectedProject.name)}</strong>.</p>
       </div>
     `;
   } else if (!state.currentRuns.length) {
@@ -3201,12 +3230,19 @@ async function refreshOps() {
 
 async function loadProject(projectId) {
   if (!projectId) return null;
+  const resolvedProjectId = String(projectId || "").trim();
+  const previousProjectId = String(state.selectedProjectId || state.selectedProject?.id || "").trim();
+  const switchingProjects = previousProjectId !== resolvedProjectId;
   const selectionRequestId = safeNumber(state.projectLoadRequestId, 0) + 1;
   state.projectLoadRequestId = selectionRequestId;
   state.projectLoadPending = true;
-  const cachedProject = state.projects.find((project) => project.id === projectId) || null;
+  let backgroundLoadsScheduled = false;
+  const cachedProject = state.projects.find((project) => project.id === resolvedProjectId) || null;
   let earlyLatestJobPromise = Promise.resolve(null);
   if (cachedProject) {
+    if (switchingProjects) {
+      resetLoadedProjectState();
+    }
     state.selectedProjectId = cachedProject.id;
     if (!state.selectedProject || state.selectedProject.id !== cachedProject.id) {
       state.selectedProject = cachedProject;
@@ -3214,37 +3250,41 @@ async function loadProject(projectId) {
     persistStoredState();
     renderProjectList();
     renderProjectSummary();
+    renderHistory();
+    renderFeedback();
     renderResults();
     renderCandidates();
     updateTopbarActions();
-    earlyLatestJobPromise = loadLatestProjectJob(projectId, {
+    earlyLatestJobPromise = loadLatestProjectJob(resolvedProjectId, {
       selectionRequestId,
       timeoutMs: 6000,
       skipReportSync: true,
     }).catch(() => null);
   }
   try {
-    const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}`);
+    const payload = await fetchJSON(`/app/projects/${encodeURIComponent(resolvedProjectId)}`);
     if (selectionRequestId !== safeNumber(state.projectLoadRequestId, 0)) {
       return null;
     }
+    const projectLatestRunId = String(payload.project.latest_run_id || "").trim();
+    const loadedRunId = String(state.currentReport?.run_id || "").trim();
+    const shouldResetLoadedData =
+      switchingProjects
+      || (!projectLatestRunId && Boolean(loadedRunId))
+      || (projectLatestRunId && loadedRunId && projectLatestRunId !== loadedRunId);
     state.selectedProjectId = payload.project.id;
     state.selectedProject = payload.project;
-    state.currentReport = null;
-    state.currentRuns = [];
-    state.currentReviews = [];
-    state.candidateSearchQuery = "";
-    state.candidateStatusFilter = "all";
-    state.candidateLocationFilter = "all";
-    state.selectedCandidateRef = "";
+    if (shouldResetLoadedData) {
+      resetLoadedProjectState();
+    }
     persistStoredState();
     const earlyLatestJob = await earlyLatestJobPromise;
     if (
       earlyLatestJob
-      && jobProjectId(earlyLatestJob) === projectId
+      && jobProjectId(earlyLatestJob) === resolvedProjectId
       && (
         !state.activeJob
-        || jobProjectId(state.activeJob) !== projectId
+        || jobProjectId(state.activeJob) !== resolvedProjectId
         || String(state.activeJob.job_id || "").trim() !== String(earlyLatestJob.job_id || "").trim()
         || String(state.activeJob.status || "").trim().toLowerCase() !== String(earlyLatestJob.status || "").trim().toLowerCase()
       )
@@ -3261,25 +3301,26 @@ async function loadProject(projectId) {
     populateProjectForm(payload.project);
     renderProjectSummary();
     renderProjectList();
+    renderHistory();
+    renderFeedback();
     renderResults();
     renderCandidates();
     updateTopbarActions();
-    const projectLatestRunId = String(payload.project.latest_run_id || "").trim();
     if (projectLatestRunId) {
-      let initialReport = await loadProjectRun(projectId, projectLatestRunId, {
+      let initialReport = await loadProjectRun(resolvedProjectId, projectLatestRunId, {
         timeoutMs: RUN_LOAD_TIMEOUT_MS,
         suppressErrors: true,
         selectionRequestId,
       });
-      if (!initialReport && isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
-        await loadProjectRun(projectId, projectLatestRunId, {
+      if (!initialReport && isCurrentProjectRequest(resolvedProjectId, selectionRequestId, "projectLoadRequestId")) {
+        await loadProjectRun(resolvedProjectId, projectLatestRunId, {
           timeoutMs: RUN_LOAD_TIMEOUT_MS,
           suppressErrors: true,
           selectionRequestId,
         });
       }
     }
-    if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
+    if (!isCurrentProjectRequest(resolvedProjectId, selectionRequestId, "projectLoadRequestId")) {
       return null;
     }
     renderHistory();
@@ -3292,40 +3333,41 @@ async function loadProject(projectId) {
     const activeJob = activeSearchJobForSelectedProject() || (
       earlyLatestJob && isActiveJobStatus(earlyLatestJob.status) ? earlyLatestJob : null
     );
+    backgroundLoadsScheduled = true;
     void Promise.allSettled([
-      loadProjectRuns(projectId, {
+      loadProjectRuns(resolvedProjectId, {
         suppressRender: true,
         selectionRequestId,
         timeoutMs: 6000,
       }),
-      loadProjectReviews(projectId, {
+      loadProjectReviews(resolvedProjectId, {
         suppressRender: true,
         selectionRequestId,
         timeoutMs: 6000,
       }),
-      loadLatestProjectJob(projectId, {
+      loadLatestProjectJob(resolvedProjectId, {
         suppressRender: true,
         selectionRequestId,
         timeoutMs: 6000,
       }),
     ]).then(async ([runsResult, reviewsResult, jobResult]) => {
-      if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
+      if (!isCurrentProjectRequest(resolvedProjectId, selectionRequestId, "projectLoadRequestId")) {
         return;
       }
       if (!state.currentReport) {
-        const latestCompletedRunId = projectLatestRunId || latestCompletedRunIdForProject(projectId, {
+        const latestCompletedRunId = projectLatestRunId || latestCompletedRunIdForProject(resolvedProjectId, {
           runs: runsResult.status === "fulfilled" ? runsResult.value : [],
           job: jobResult.status === "fulfilled" ? jobResult.value : null,
         });
         if (latestCompletedRunId) {
-          await loadProjectRun(projectId, latestCompletedRunId, {
+          await loadProjectRun(resolvedProjectId, latestCompletedRunId, {
             timeoutMs: RUN_LOAD_TIMEOUT_MS,
             suppressErrors: true,
             selectionRequestId,
           });
         }
       }
-      if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
+      if (!isCurrentProjectRequest(resolvedProjectId, selectionRequestId, "projectLoadRequestId")) {
         return;
       }
       renderHistory();
@@ -3334,6 +3376,7 @@ async function loadProject(projectId) {
       renderResults();
       renderCandidates();
       syncLiveJobStatus();
+      finishProjectLoad(selectionRequestId);
     });
     if (failedJob) {
       setStatus("Latest search failed.", "danger", `${failedJob.error || "The latest search did not complete successfully."} Retry when ready.`);
@@ -3346,10 +3389,8 @@ async function loadProject(projectId) {
     setStatus(`${payload.project.name} loaded.`, "success", "The project brief, results, feedback, and history are ready.");
     return payload.project;
   } finally {
-    if (selectionRequestId === safeNumber(state.projectLoadRequestId, 0)) {
-      state.projectLoadPending = false;
-      renderResults();
-      renderCandidates();
+    if (!backgroundLoadsScheduled) {
+      finishProjectLoad(selectionRequestId);
     }
   }
 }
