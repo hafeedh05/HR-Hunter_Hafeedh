@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import hr_hunter.db as db_module
 from hr_hunter.config import resolve_database_locator, resolve_secret_manager_project, resolve_secret_manager_secret_name
-from hr_hunter.db import iter_sql_statements, resolve_database_target, translate_sql
+from hr_hunter.db import DatabaseTarget, connect_database, iter_sql_statements, resolve_database_target, translate_sql
 
 
 def test_resolve_database_locator_prefers_shared_url(monkeypatch):
@@ -63,3 +64,67 @@ def test_resolve_secret_manager_project_prefers_hr_hunter_project(monkeypatch):
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "other-project")
 
     assert resolve_secret_manager_project() == "azadea-bi"
+
+
+def test_connect_database_reuses_postgres_connection_per_thread(monkeypatch):
+    class FakeCursor:
+        def execute(self, sql, params):
+            self.sql = sql
+            self.params = params
+
+        def fetchall(self):
+            return []
+
+        def close(self):
+            self.closed = True
+
+    class FakeConnection:
+        def __init__(self):
+            self.closed = False
+            self.broken = False
+            self.commit_calls = 0
+            self.rollback_calls = 0
+            self.close_calls = 0
+
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            self.commit_calls += 1
+
+        def rollback(self):
+            self.rollback_calls += 1
+
+        def close(self):
+            self.close_calls += 1
+            self.closed = True
+
+    class FakePsycopg:
+        class IntegrityError(Exception):
+            pass
+
+        connect = None
+
+    created_connections: list[FakeConnection] = []
+
+    def fake_connect(locator, row_factory=None):
+        connection = FakeConnection()
+        created_connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(db_module, "psycopg", FakePsycopg)
+    monkeypatch.setattr(db_module, "dict_row", object())
+    monkeypatch.setattr(FakePsycopg, "connect", staticmethod(fake_connect))
+    monkeypatch.setattr(db_module, "_POSTGRES_CONNECTION_CACHE", __import__("threading").local())
+
+    target = DatabaseTarget(backend="postgres", locator="postgresql://db.example.com/hr_hunter")
+
+    with connect_database(target) as connection:
+        connection.execute("SELECT 1", ())
+    with connect_database(target) as connection:
+        connection.execute("SELECT 1", ())
+
+    assert len(created_connections) == 1
+    assert created_connections[0].commit_calls == 2
+    assert created_connections[0].rollback_calls == 0
+    assert created_connections[0].close_calls == 0

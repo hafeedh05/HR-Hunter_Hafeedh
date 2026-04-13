@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
@@ -18,6 +19,7 @@ from hr_hunter.config import resolve_database_locator
 
 
 POSTGRES_SCHEMES = ("postgres://", "postgresql://")
+_POSTGRES_CONNECTION_CACHE = threading.local()
 
 
 class DbIntegrityError(Exception):
@@ -74,6 +76,25 @@ def describe_database_target(target: DatabaseTarget) -> dict[str, Any]:
     }
 
 
+def _postgres_thread_connections() -> dict[str, Any]:
+    cache = getattr(_POSTGRES_CONNECTION_CACHE, "connections", None)
+    if isinstance(cache, dict):
+        return cache
+    cache = {}
+    _POSTGRES_CONNECTION_CACHE.connections = cache
+    return cache
+
+
+def _postgres_connection_is_usable(connection: Any) -> bool:
+    if connection is None:
+        return False
+    if bool(getattr(connection, "closed", False)):
+        return False
+    if bool(getattr(connection, "broken", False)):
+        return False
+    return True
+
+
 def connect_database(target: DatabaseTarget) -> "ConnectionWrapper":
     if target.backend == "sqlite":
         assert target.path is not None
@@ -86,8 +107,17 @@ def connect_database(target: DatabaseTarget) -> "ConnectionWrapper":
         raise RuntimeError(
             "Postgres support requires psycopg. Install hr-hunter with the database dependency available."
         )
-    connection = psycopg.connect(target.locator, row_factory=dict_row)
-    return ConnectionWrapper(connection=connection, backend="postgres")
+    cache = _postgres_thread_connections()
+    connection = cache.get(target.locator)
+    if not _postgres_connection_is_usable(connection):
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
+        connection = psycopg.connect(target.locator, row_factory=dict_row)
+        cache[target.locator] = connection
+    return ConnectionWrapper(connection=connection, backend="postgres", persistent=True)
 
 
 def _translate_placeholders(sql: str) -> str:
@@ -149,9 +179,10 @@ class CursorWrapper:
 
 
 class ConnectionWrapper:
-    def __init__(self, connection: Any, *, backend: str) -> None:
+    def __init__(self, connection: Any, *, backend: str, persistent: bool = False) -> None:
         self._connection = connection
         self.backend = backend
+        self._persistent = persistent
 
     def __enter__(self) -> "ConnectionWrapper":
         return self
@@ -161,7 +192,8 @@ class ConnectionWrapper:
             self._connection.commit()
         else:
             self._connection.rollback()
-        self._connection.close()
+        if not self._persistent:
+            self._connection.close()
 
     def execute(self, sql: str, params: Sequence[Any] | None = None) -> CursorWrapper:
         adapted_sql = translate_sql(sql, self.backend)
@@ -188,4 +220,5 @@ class ConnectionWrapper:
             self.execute(translate_sql(statement, self.backend, is_schema=True))
 
     def close(self) -> None:
-        self._connection.close()
+        if not self._persistent:
+            self._connection.close()
