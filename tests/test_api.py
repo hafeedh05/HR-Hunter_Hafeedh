@@ -266,6 +266,66 @@ def test_quality_recovery_helpers_capture_thresholds_and_fresh_candidates() -> N
     assert [candidate.full_name for candidate in selected] == ["Fresh Candidate", "Retry Candidate"]
 
 
+def test_quality_recovery_verification_candidates_prefers_verification_ready_profiles() -> None:
+    brief = build_search_brief(
+        {
+            "id": "quality-recovery-ready-test",
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+        }
+    )
+    weak_candidate = CandidateProfile(
+        full_name="Weak Candidate",
+        current_title="Operations Lead",
+        current_title_match=False,
+        location_aligned=False,
+        location_precision_bucket="outside_target_area",
+        parser_confidence=0.18,
+        evidence_quality_score=0.12,
+        current_function_fit=0.24,
+        skill_overlap_score=0.1,
+        verification_status="reject",
+    )
+    ready_candidate_one = CandidateProfile(
+        full_name="Ready Candidate One",
+        current_title="Supply Chain Manager",
+        current_title_match=True,
+        location_aligned=True,
+        location_precision_bucket="named_target_location",
+        parser_confidence=0.66,
+        evidence_quality_score=0.52,
+        current_function_fit=0.72,
+        skill_overlap_score=0.44,
+        verification_status="reject",
+        current_employment_confirmed=True,
+    )
+    ready_candidate_two = CandidateProfile(
+        full_name="Ready Candidate Two",
+        current_title="Supply Chain Manager",
+        current_title_match=True,
+        location_aligned=True,
+        location_precision_bucket="country_only",
+        parser_confidence=0.61,
+        evidence_quality_score=0.48,
+        current_function_fit=0.68,
+        skill_overlap_score=0.41,
+        verification_status="review",
+        current_role_proof_count=1,
+    )
+
+    selected = _quality_recovery_verification_candidates(
+        [weak_candidate, ready_candidate_one, ready_candidate_two],
+        limit=2,
+        brief=brief,
+    )
+
+    assert [candidate.full_name for candidate in selected] == [
+        "Ready Candidate One",
+        "Ready Candidate Two",
+    ]
+
+
 def test_rerank_merged_report_candidates_reorders_combined_recovery_pool(monkeypatch) -> None:
     brief = build_search_brief(
         {

@@ -7,7 +7,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Set, Tuple
 
-from hr_hunter.candidate_order import candidate_priority_sort_tuple
+from hr_hunter.candidate_order import (
+    candidate_is_verification_ready,
+    candidate_priority_sort_tuple,
+)
 from hr_hunter.features import looks_like_non_company_fragment
 from hr_hunter.identity import candidate_identity_keys, candidate_primary_key
 from hr_hunter.models import (
@@ -701,7 +704,50 @@ def prepare_verification_shortlist(
     shortlist_limit = max(0, min(int(verification_limit or 0), len(prioritized)))
     if shortlist_limit <= 0:
         return prioritized
-    return [*prioritized[:shortlist_limit], *prioritized[shortlist_limit:]]
+    bucketed_shortlist: List[CandidateProfile] = []
+    bucketed_remainder: List[CandidateProfile] = []
+    current_bucket: object | None = None
+    bucket_candidates: List[CandidateProfile] = []
+
+    def flush_bucket() -> None:
+        nonlocal bucket_candidates, current_bucket, bucketed_shortlist, bucketed_remainder
+        if not bucket_candidates:
+            return
+        ready_bucket_candidates = [
+            candidate
+            for candidate in bucket_candidates
+            if candidate_is_verification_ready(candidate, brief)
+        ]
+        fallback_bucket_candidates = [
+            candidate
+            for candidate in bucket_candidates
+            if candidate not in ready_bucket_candidates
+        ]
+        ordered_bucket = [*ready_bucket_candidates, *fallback_bucket_candidates]
+        remaining_slots = max(0, shortlist_limit - len(bucketed_shortlist))
+        if remaining_slots > 0:
+            bucketed_shortlist.extend(ordered_bucket[:remaining_slots])
+            bucketed_remainder.extend(ordered_bucket[remaining_slots:])
+        else:
+            bucketed_remainder.extend(ordered_bucket)
+        bucket_candidates = []
+        current_bucket = None
+
+    for candidate in prioritized:
+        bucket = candidate_priority_sort_tuple(
+            candidate,
+            brief=brief,
+            phase="verification",
+            company_required=company_required,
+        )[0]
+        if current_bucket is None:
+            current_bucket = bucket
+        if bucket != current_bucket:
+            flush_bucket()
+            current_bucket = bucket
+        bucket_candidates.append(candidate)
+    flush_bucket()
+    return [*bucketed_shortlist, *bucketed_remainder]
 
 
 def _diagnostic_issue(
@@ -864,6 +910,18 @@ def build_quality_diagnostics(
             or "missing_current_role_proof" in set(candidate.cap_reasons or [])
         ]
     )
+    verification_ready_count = len(
+        [
+            candidate
+            for candidate in hydrated_candidates
+            if candidate_is_verification_ready(candidate)
+        ]
+    )
+    verification_ready_rate = verification_ready_count / max(1, total)
+    likely_verified_ceiling = min(
+        unique_after_dedupe,
+        max(verified_count, int(round(verification_ready_count * 0.75))),
+    )
 
     issues: List[Dict[str, object]] = []
     if title_gap_count / max(1, total) >= 0.28:
@@ -974,6 +1032,24 @@ def build_quality_diagnostics(
                 ),
             )
         )
+    if verification_ready_rate < 0.28 and verified_rate < 0.2:
+        issues.append(
+            _diagnostic_issue(
+                key="verification_ready_pool_thin",
+                label="Verification-ready pool is thin",
+                count=verification_ready_count,
+                total=total,
+                severity="high" if verification_ready_rate < 0.18 else "medium",
+                message=(
+                    "Too few candidates have strong enough title, market, company, and public-evidence signals to "
+                    "convert into clean verified profiles at scale."
+                ),
+                action=(
+                    "Tighten the brief around cleaner role families and better-documented markets, or add richer data "
+                    "sources if you need a much higher verified count."
+                ),
+            )
+        )
     if executive_brief and public_evidence_gap_count / max(1, total) >= 0.28:
         issues.append(
             _diagnostic_issue(
@@ -1053,12 +1129,13 @@ def build_quality_diagnostics(
         "title_mismatch": 1,
         "geo_mismatch": 2,
         "parser_confidence": 3,
-        "public_executive_evidence_thin": 4,
-        "weak_must_have_anchors": 5,
-        "weak_company_or_industry_signals": 6,
-        "company_scope_too_strict": 7,
-        "filters_too_strict": 8,
-        "filters_too_loose": 9,
+        "verification_ready_pool_thin": 4,
+        "public_executive_evidence_thin": 5,
+        "weak_must_have_anchors": 6,
+        "weak_company_or_industry_signals": 7,
+        "company_scope_too_strict": 8,
+        "filters_too_strict": 9,
+        "filters_too_loose": 10,
     }
     issues = sorted(
         issues,
@@ -1086,6 +1163,9 @@ def build_quality_diagnostics(
         "verified_count": verified_count,
         "review_count": review_count,
         "reject_count": reject_count,
+        "verification_ready_count": verification_ready_count,
+        "verification_ready_rate": round(verification_ready_rate, 3),
+        "likely_verified_ceiling": likely_verified_ceiling,
         "raw_found": raw_found,
         "unique_after_dedupe": unique_after_dedupe,
         "issues": issues[:4],

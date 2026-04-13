@@ -159,6 +159,7 @@ def test_build_reporting_summary_adds_low_yield_quality_diagnostics() -> None:
     assert diagnostics["enabled"] is True
     assert diagnostics["yield_status"] == "low"
     assert diagnostics["verified_count"] == 1
+    assert diagnostics["verification_ready_count"] == 1
     assert diagnostics["unique_after_dedupe"] == 18
     issue_keys = [issue["key"] for issue in diagnostics["issues"]]
     assert "title_mismatch" in issue_keys
@@ -473,6 +474,69 @@ def test_prepare_verification_shortlist_prefers_precise_market_before_country_on
     assert [candidate.full_name for candidate in ordered[:2]] == [
         "Precise Scope",
         "Country Only Scope",
+    ]
+
+
+def test_prepare_verification_shortlist_prefers_verification_ready_candidates() -> None:
+    candidates = [
+        _candidate(
+            name="Weak High Score",
+            status="review",
+            score=90.0,
+            current_title_match=False,
+            location_aligned=False,
+            location_bucket="outside_target_area",
+            parser_confidence=0.18,
+            evidence_quality_score=0.12,
+            skill_overlap_score=0.16,
+            current_function_fit=0.28,
+            years_fit_score=0.4,
+            industry_fit_score=0.18,
+            cap_reasons=["outside_target_area", "parser_confidence_too_low"],
+        ),
+        _candidate(
+            name="Ready Exact One",
+            status="reject",
+            score=57.0,
+            current_title_match=True,
+            location_aligned=True,
+            location_bucket="named_target_location",
+            parser_confidence=0.66,
+            evidence_quality_score=0.52,
+            skill_overlap_score=0.5,
+            current_function_fit=0.72,
+            years_fit_score=0.56,
+            industry_fit_score=0.42,
+            cap_reasons=[],
+        ),
+        _candidate(
+            name="Ready Exact Two",
+            status="review",
+            score=55.0,
+            current_title_match=True,
+            location_aligned=True,
+            location_bucket="country_only",
+            parser_confidence=0.62,
+            evidence_quality_score=0.47,
+            skill_overlap_score=0.46,
+            current_function_fit=0.69,
+            years_fit_score=0.54,
+            industry_fit_score=0.38,
+            cap_reasons=[],
+        ),
+    ]
+    candidates[1].current_employment_confirmed = True
+    candidates[2].current_role_proof_count = 1
+
+    ordered = prepare_verification_shortlist(
+        candidates,
+        company_required=False,
+        verification_limit=2,
+    )
+
+    assert [candidate.full_name for candidate in ordered[:2]] == [
+        "Ready Exact One",
+        "Ready Exact Two",
     ]
 
 

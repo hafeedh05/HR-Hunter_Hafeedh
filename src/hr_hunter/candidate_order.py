@@ -178,6 +178,154 @@ def candidate_source_identity_rank(candidate: CandidateProfile) -> int:
     return 3
 
 
+def candidate_verification_likelihood_score(
+    candidate: CandidateProfile,
+    brief: SearchBrief | None = None,
+) -> float:
+    title_match = bool(getattr(candidate, "current_title_match", False))
+    current_company_match = bool(getattr(candidate, "current_target_company_match", False))
+    history_company_match = bool(getattr(candidate, "target_company_history_match", False))
+    market_match = candidate_is_market_match(candidate)
+    precise_market_match = candidate_is_precise_market_match(candidate)
+    anchor_supported = candidate_has_fit_anchor(candidate)
+    current_function_fit = max(0.0, float(getattr(candidate, "current_function_fit", 0.0) or 0.0))
+    skill_overlap_score = max(
+        0.0,
+        _candidate_feature_score(
+            candidate,
+            feature_key="skill_overlap",
+            attribute_name="skill_overlap_score",
+        ),
+    )
+    industry_fit_score = max(
+        0.0,
+        _candidate_feature_score(
+            candidate,
+            feature_key="industry_fit",
+            attribute_name="industry_fit_score",
+        ),
+    )
+    parser_confidence = max(0.0, float(getattr(candidate, "parser_confidence", 0.0) or 0.0))
+    evidence_quality_score = max(
+        0.0,
+        _candidate_feature_score(
+            candidate,
+            feature_key="evidence_quality",
+            attribute_name="evidence_quality_score",
+        ),
+    )
+    source_quality_score = max(0.0, float(getattr(candidate, "source_quality_score", 0.0) or 0.0))
+    current_role_proof_count = max(0, int(getattr(candidate, "current_role_proof_count", 0) or 0))
+    current_employment_confirmed = bool(getattr(candidate, "current_employment_confirmed", False))
+    current_company_confirmed = bool(getattr(candidate, "current_company_confirmed", False))
+    current_title_confirmed = bool(getattr(candidate, "current_title_confirmed", False))
+    current_location_confirmed = bool(getattr(candidate, "current_location_confirmed", False))
+    precise_location_confirmed = bool(getattr(candidate, "precise_location_confirmed", False))
+    title_similarity_score = max(
+        0.0,
+        _candidate_feature_score(
+            candidate,
+            feature_key="title_similarity",
+            attribute_name="title_similarity_score",
+        ),
+    )
+    score = 0.0
+    if title_match:
+        score += 0.18
+    else:
+        score += min(0.08, title_similarity_score * 0.08)
+    if precise_market_match:
+        score += 0.15
+    elif market_match:
+        score += 0.1
+    if current_company_match:
+        score += 0.1
+    elif history_company_match:
+        score += 0.04
+    score += min(0.14, current_function_fit * 0.14)
+    score += min(0.11, skill_overlap_score * 0.14)
+    score += min(0.07, industry_fit_score * 0.08)
+    score += min(0.08, parser_confidence * 0.08)
+    score += min(0.1, evidence_quality_score * 0.1)
+    score += min(0.08, source_quality_score * 0.09)
+    score += min(0.12, current_role_proof_count * 0.05)
+    if current_employment_confirmed:
+        score += 0.05
+    if current_company_confirmed:
+        score += 0.04
+    if current_title_confirmed:
+        score += 0.04
+    if precise_location_confirmed:
+        score += 0.04
+    elif current_location_confirmed:
+        score += 0.02
+    if title_match and market_match and anchor_supported:
+        score += 0.06
+    if current_company_match and title_match:
+        score += 0.05
+
+    cap_reasons = set(getattr(candidate, "cap_reasons", []) or [])
+    if "hard_exclude" in cap_reasons:
+        score -= 0.35
+    if "outside_target_area" in cap_reasons:
+        score -= 0.18
+    if "parser_confidence_too_low" in cap_reasons:
+        score -= 0.18
+    if "title_alignment_required" in cap_reasons and not title_match:
+        score -= 0.12
+    if "current_function_review" in cap_reasons:
+        score -= 0.08
+    if "current_target_company_required" in cap_reasons and not current_company_match:
+        score -= 0.08
+
+    return round(min(max(score, 0.0), 1.0), 3)
+
+
+def candidate_is_verification_ready(
+    candidate: CandidateProfile,
+    brief: SearchBrief | None = None,
+    *,
+    threshold: float = 0.42,
+) -> bool:
+    current_role_proof_count = max(0, int(getattr(candidate, "current_role_proof_count", 0) or 0))
+    if current_role_proof_count > 0:
+        return True
+    title_match = bool(getattr(candidate, "current_title_match", False))
+    current_title_confirmed = bool(getattr(candidate, "current_title_confirmed", False))
+    title_similarity_score = max(
+        0.0,
+        _candidate_feature_score(
+            candidate,
+            feature_key="title_similarity",
+            attribute_name="title_similarity_score",
+        ),
+    )
+    has_title_signal = title_match or current_title_confirmed or title_similarity_score >= 0.74
+    if not has_title_signal:
+        return False
+    market_match = candidate_is_market_match(candidate)
+    current_location_confirmed = bool(getattr(candidate, "current_location_confirmed", False))
+    precise_location_confirmed = bool(getattr(candidate, "precise_location_confirmed", False))
+    current_company_match = bool(getattr(candidate, "current_target_company_match", False))
+    current_employment_confirmed = bool(getattr(candidate, "current_employment_confirmed", False))
+    has_market_or_company_signal = (
+        market_match
+        or current_location_confirmed
+        or precise_location_confirmed
+        or current_company_match
+        or current_employment_confirmed
+    )
+    if not has_market_or_company_signal:
+        return False
+    if (
+        title_match
+        and market_match
+        and current_employment_confirmed
+    ):
+        return True
+    return candidate_verification_likelihood_score(candidate, brief) >= threshold
+
+
 def _candidate_priority_bucket(
     candidate: CandidateProfile,
     *,
@@ -337,6 +485,7 @@ def candidate_priority_sort_tuple(
     parser_confidence = float(getattr(candidate, "parser_confidence", 0.0) or 0.0)
     score = float(getattr(candidate, "score", 0.0) or 0.0)
     reranker_score = float(getattr(candidate, "reranker_score", 0.0) or 0.0)
+    verification_likelihood_score = candidate_verification_likelihood_score(candidate, brief)
     market_rank = candidate_market_bucket_rank(candidate)
     source_identity_rank = candidate_source_identity_rank(candidate)
     name_key = str(getattr(candidate, "full_name", "") or "").lower()
@@ -361,6 +510,7 @@ def candidate_priority_sort_tuple(
     if phase_name == "verification":
         return (
             bucket,
+            -verification_likelihood_score,
             -industry_fit_score,
             -company_match_score,
             -current_function_fit,

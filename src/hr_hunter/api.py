@@ -23,6 +23,7 @@ from hr_hunter.db import describe_database_target, resolve_database_target
 from hr_hunter.engine import SearchEngine, dedupe_candidates
 from hr_hunter.feedback import export_training_rows, init_feedback_db, load_ranker_training_rows, log_feedback
 from hr_hunter.identity import candidate_identity_keys
+from hr_hunter.candidate_order import candidate_is_verification_ready
 from hr_hunter.output import (
     build_progress_counts,
     build_reporting_summary,
@@ -461,7 +462,12 @@ def _quality_recovery_gap(summary: Dict[str, Any] | None, settings: Dict[str, An
     }
 
 
-def _quality_recovery_verification_candidates(candidates: List[Any], *, limit: int) -> List[Any]:
+def _quality_recovery_verification_candidates(
+    candidates: List[Any],
+    *,
+    limit: int,
+    brief: Any | None = None,
+) -> List[Any]:
     shortlist_limit = max(0, min(int(limit or 0), len(candidates)))
     if shortlist_limit <= 0:
         return []
@@ -470,6 +476,22 @@ def _quality_recovery_verification_candidates(candidates: List[Any], *, limit: i
         for candidate in candidates
         if not str(getattr(candidate, "last_verified_at", "") or "").strip()
     ]
+    verification_ready_candidates = [
+        candidate
+        for candidate in unverified_candidates
+        if candidate_is_verification_ready(candidate, brief)
+    ]
+    if verification_ready_candidates:
+        shortlisted_ready = verification_ready_candidates[:shortlist_limit]
+        if len(shortlisted_ready) >= min(shortlist_limit, max(20, shortlist_limit // 3 or 1)):
+            if len(shortlisted_ready) < shortlist_limit:
+                fallback_ready = [
+                    candidate
+                    for candidate in unverified_candidates
+                    if candidate not in shortlisted_ready
+                ]
+                shortlisted_ready.extend(fallback_ready[: max(0, shortlist_limit - len(shortlisted_ready))])
+            return shortlisted_ready
     if len(unverified_candidates) >= shortlist_limit:
         return unverified_candidates[:shortlist_limit]
     fallback_candidates = [
@@ -1620,6 +1642,7 @@ def create_app() -> "FastAPI":
                     recovery_verification_candidates = _quality_recovery_verification_candidates(
                         report.candidates,
                         limit=recovery_verify_limit,
+                        brief=brief,
                     )
                     recovery_verification_stats = None
                     if recovery_verification_candidates and recovery_verifier.is_configured():
