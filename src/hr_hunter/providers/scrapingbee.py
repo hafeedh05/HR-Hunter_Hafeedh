@@ -57,6 +57,80 @@ DEFAULT_BLOCKED_HOSTNAMES = {
     "rocketreach.co",
     "signalhire.com",
 }
+CORPORATE_PROFILE_PATH_HINTS = (
+    "/team/",
+    "/leadership/",
+    "/management/",
+    "/staff/",
+    "/people/",
+    "/our-team",
+    "/our-people",
+    "/our-leadership",
+    "/executive-team",
+    "/leadership-team",
+)
+HOST_ORG_SKIP_LABELS = {
+    "ae",
+    "app",
+    "asia",
+    "blog",
+    "careers",
+    "co",
+    "com",
+    "global",
+    "group",
+    "info",
+    "io",
+    "jobs",
+    "linkedin",
+    "me",
+    "mena",
+    "net",
+    "news",
+    "org",
+    "press",
+    "team",
+    "the",
+    "uk",
+    "us",
+    "www",
+    "example",
+}
+GENERIC_HOST_ORG_TOKENS = {
+    "article",
+    "articles",
+    "award",
+    "awards",
+    "bio",
+    "biography",
+    "board",
+    "business",
+    "committee",
+    "conference",
+    "contact",
+    "daily",
+    "directory",
+    "executive",
+    "leadership",
+    "magazine",
+    "management",
+    "media",
+    "member",
+    "members",
+    "news",
+    "people",
+    "person",
+    "post",
+    "press",
+    "profile",
+    "profiles",
+    "review",
+    "speaker",
+    "speakers",
+    "staff",
+    "team",
+    "today",
+}
 ROLE_LIKE_TOKENS = {
     "analyst",
     "analytics",
@@ -678,6 +752,48 @@ class ScrapingBeeGoogleProvider(SearchProvider):
             return ""
         return " ".join(part.upper() if len(part) <= 3 and part.isalpha() else part.capitalize() for part in parts)
 
+    @staticmethod
+    def _host_org_slug(host: str) -> str:
+        labels = [label for label in host.lower().split(".") if label]
+        if not labels:
+            return ""
+        for label in reversed(labels[:-1] or labels):
+            if label in HOST_ORG_SKIP_LABELS:
+                continue
+            if label.isdigit() or len(label) < 3:
+                continue
+            return label
+        return ""
+
+    @classmethod
+    def _looks_like_corporate_people_url(cls, url: str) -> bool:
+        lowered = (url or "").lower()
+        if not lowered:
+            return False
+        if "linkedin.com/in/" in lowered or "theorg.com/org/" in lowered:
+            return True
+        return any(hint in lowered for hint in CORPORATE_PROFILE_PATH_HINTS)
+
+    @classmethod
+    def _infer_company_from_description(cls, description: str, brief: SearchBrief) -> str:
+        if not description:
+            return ""
+        for pattern in (
+            r"\b(?:at|@|with|for)\s+(?P<company>[A-Z][A-Za-z0-9&'()./-]*(?:\s+[A-Z][A-Za-z0-9&'()./-]*){0,4})",
+            r"\bjoining\s+(?P<company>[A-Z][A-Za-z0-9&'()./-]*(?:\s+[A-Z][A-Za-z0-9&'()./-]*){0,4})",
+        ):
+            for match in re.finditer(pattern, description):
+                company = cls._clean_title_fragment(match.group("company"))
+                normalized_company = normalize_text(company)
+                if not normalized_company:
+                    continue
+                if normalized_company in {"dubai", "abu dhabi", "united arab emirates", "saudi arabia"}:
+                    continue
+                if looks_like_non_company_fragment(company, brief):
+                    continue
+                return company
+        return ""
+
     def _extract_org_from_url(self, url: str) -> str:
         parsed = urlparse(url)
         host = parsed.netloc.lower()
@@ -685,6 +801,16 @@ class ScrapingBeeGoogleProvider(SearchProvider):
 
         if "theorg.com" in host and len(segments) >= 2 and segments[0] == "org":
             return self._humanize_org_slug(segments[1])
+
+        if not self._looks_like_corporate_people_url(url):
+            return ""
+        org_slug = self._host_org_slug(host.removeprefix("www."))
+        if not org_slug:
+            return ""
+        org_tokens = {token for token in re.split(r"[^a-z0-9]+", org_slug) if token}
+        if org_tokens.intersection(GENERIC_HOST_ORG_TOKENS):
+            return ""
+        return self._humanize_org_slug(org_slug)
 
         return ""
 
@@ -839,6 +965,11 @@ class ScrapingBeeGoogleProvider(SearchProvider):
             name = pipe_segments[0]
             current_title = pipe_segments[1]
             current_company = pipe_segments[2]
+        elif len(pipe_segments) == 2:
+            first_segment, second_segment = pipe_segments
+            if self._looks_like_person_name(first_segment) and not self._looks_like_person_name(second_segment):
+                name = first_segment
+                current_title = second_segment
 
         dash_segments = [self._clean_title_fragment(segment) for segment in title.split(" - ") if self._clean_title_fragment(segment)]
         if len(dash_segments) >= 3:
@@ -854,7 +985,7 @@ class ScrapingBeeGoogleProvider(SearchProvider):
             for segment in current_title.split("|")
             if self._clean_title_fragment(segment)
         ]
-        if len(trailing_pipe_segments) >= 2:
+        if len(trailing_pipe_segments) >= 2 and not self._looks_like_person_name(trailing_pipe_segments[0]):
             current_title = trailing_pipe_segments[0]
             current_company = current_company or trailing_pipe_segments[1]
 
@@ -867,9 +998,6 @@ class ScrapingBeeGoogleProvider(SearchProvider):
 
         if normalize_text(current_company) in {"linkedin", "the org"}:
             current_company = ""
-
-        if not current_company:
-            current_company = self._extract_org_from_url(url)
 
         return (
             self._clean_title_fragment(name),
@@ -923,9 +1051,14 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         name_guess, current_title, current_company = self._parse_title_fields(title, url or "")
         location_name = self._extract_location_name(brief, f"{title} {description}")
 
-        if not current_company and not self._looks_historical_role_text(description):
+        description_is_historical = self._looks_historical_role_text(description)
+        if not current_company and not description_is_historical:
             current_company = self._find_company_match(f"{title} {description} {url or ''}", brief)
+        if not current_company and not description_is_historical:
+            current_company = self._infer_company_from_description(description, brief)
         current_company = self._sanitize_company_fragment(current_company, brief)
+        if not current_company and not description_is_historical:
+            current_company = self._sanitize_company_fragment(self._extract_org_from_url(url or ""), brief)
         if self._should_infer_current_title(title, current_title, current_company, brief):
             inferred_title = self._infer_title_from_description(description, brief, current_company)
             if inferred_title:

@@ -164,6 +164,60 @@ def test_candidate_parser_clears_skill_fragment_misparsed_as_company() -> None:
     assert candidate.current_company == ""
 
 
+def test_candidate_parser_infers_company_from_public_description() -> None:
+    provider = ScrapingBeeGoogleProvider({})
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-description-company-test",
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager", "Distribution Manager"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+        }
+    )
+
+    candidate = provider._candidate_from_result(
+        {
+            "title": "Muhammed Riaz | Supply Chain Manager",
+            "description": "Supply Chain Manager at Truebell in Dubai, United Arab Emirates.",
+            "url": "https://example.com/people/muhammed-riaz",
+        },
+        brief,
+    )
+
+    assert candidate is not None
+    assert candidate.current_title == "Supply Chain Manager"
+    assert candidate.current_company == "Truebell"
+
+
+def test_candidate_parser_infers_company_from_corporate_people_domain() -> None:
+    provider = ScrapingBeeGoogleProvider({})
+    brief = build_search_brief(
+        {
+            "id": "scrapingbee-domain-company-test",
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+        }
+    )
+
+    candidate = provider._candidate_from_result(
+        {
+            "title": "Jane Search - Supply Chain Manager",
+            "description": "Dubai, United Arab Emirates.",
+            "url": "https://www.truebell.ae/team/jane-search",
+        },
+        brief,
+    )
+
+    assert candidate is not None
+    assert candidate.current_company == "Truebell"
+
+
+def test_publication_profile_domains_do_not_infer_company_from_host() -> None:
+    provider = ScrapingBeeGoogleProvider({})
+    assert provider._extract_org_from_url("https://www.gulfbusiness.com/profile/jane-search") == ""
+
+
 def test_candidate_parser_does_not_infer_current_role_from_historical_snippet() -> None:
     provider = ScrapingBeeGoogleProvider({})
     brief = build_search_brief(
