@@ -741,6 +741,39 @@ def test_score_candidate_country_only_market_counts_as_aligned_for_country_brief
     assert scored.score >= 50.0
 
 
+def test_score_candidate_does_not_treat_product_manager_as_data_analyst_title_match() -> None:
+    brief = build_search_brief(
+        {
+            "id": "score-data-analyst-product-leak-test",
+            "role_title": "Data Analyst",
+            "titles": ["Senior Data Analyst", "Data Analyst", "Business Intelligence Analyst", "Product Analyst"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Dubai", "United Arab Emirates"],
+            },
+            "required_keywords": ["SQL", "Python", "Dashboarding", "KPI"],
+            "preferred_keywords": ["Product Analytics"],
+            "peer_company_targets": ["Careem"],
+        }
+    )
+
+    candidate = CandidateProfile(
+        full_name="Sanket Purohit",
+        current_title="Lead Product Manager",
+        current_company="Careem",
+        location_name="Dubai, United Arab Emirates",
+        linkedin_url="https://ae.linkedin.com/in/sanket-purohit",
+        summary="Product leader who built teams that included analysts and dashboarding support.",
+    )
+
+    scored = score_candidate(candidate, brief)
+
+    assert scored.current_title_match is False
+    assert scored.current_function_fit < 0.45
+    assert scored.verification_status == "reject"
+
+
 def test_score_candidate_outside_search_area_is_rejected() -> None:
     brief = build_search_brief(
         {

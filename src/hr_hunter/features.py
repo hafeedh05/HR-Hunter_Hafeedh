@@ -66,6 +66,11 @@ TITLE_TOKEN_STOPWORDS = {
     "senior",
     "vice",
 }
+GENERIC_SINGLETON_TITLE_MATCH_TOKENS = {
+    "category",
+    "portfolio",
+    "product",
+}
 NON_PERSON_NAME_TOKENS = {
     "about",
     "blog",
@@ -589,6 +594,8 @@ def title_similarity(title: str, options: Iterable[str]) -> tuple[float, List[st
     for option in options:
         option_tokens = _expanded_title_tokens(option)
         if not option_tokens:
+            continue
+        if len(option_tokens) == 1 and next(iter(option_tokens)) in GENERIC_SINGLETON_TITLE_MATCH_TOKENS:
             continue
         overlap = current_tokens.intersection(option_tokens)
         if not overlap:

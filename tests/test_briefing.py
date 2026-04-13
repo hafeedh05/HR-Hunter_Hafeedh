@@ -93,6 +93,24 @@ def test_build_search_brief_infers_adjacent_fmcg_titles() -> None:
     assert "category and insights manager" in [value.lower() for value in brief.title_keywords]
 
 
+def test_build_search_brief_strips_generic_singleton_title_keywords() -> None:
+    brief = build_search_brief(
+        {
+            "id": "test-brief-generic-singleton-title-keyword",
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst", "Product Analyst"],
+            "title_keywords": ["product"],
+            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
+        }
+    )
+
+    lowered_keywords = [value.lower() for value in brief.title_keywords]
+
+    assert "product" not in lowered_keywords
+    assert "product analyst" in lowered_keywords
+    assert "product development manager" not in lowered_keywords
+
+
 def test_build_search_brief_resolves_anchor_priorities_and_numeric_weights() -> None:
     brief = build_search_brief(
         {

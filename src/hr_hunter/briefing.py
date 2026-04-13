@@ -51,6 +51,11 @@ DEFAULT_ANCHOR_WEIGHTS = {
     "evidence_quality": 0.35,
     "semantic_similarity": 0.0,
 }
+GENERIC_SINGLETON_TITLE_KEYWORDS = {
+    "category",
+    "portfolio",
+    "product",
+}
 
 
 def normalize_text(value: str) -> str:
@@ -135,9 +140,10 @@ def infer_title_keywords(titles: List[str]) -> List[str]:
         if "product marketing" in lowered:
             keywords.append("product marketing")
             keywords.append("proposition manager")
-        if "product" in lowered:
+        if "product" in lowered and "product marketing" not in lowered:
             keywords.append("product")
-            keywords.append("product development manager")
+            if any(token in lowered for token in ("manager", "director", "lead", "head", "owner", "vp", "chief")):
+                keywords.append("product development manager")
         if "portfolio" in lowered:
             keywords.append("portfolio")
             keywords.append("portfolio manager")
@@ -157,6 +163,24 @@ def infer_title_keywords(titles: List[str]) -> List[str]:
         if "global" in lowered:
             keywords.append("global product")
     return unique_preserving_order(keywords)
+
+
+def sanitize_title_keywords(title_keywords: List[str], titles: List[str]) -> List[str]:
+    title_contexts = [normalize_text(value) for value in titles if normalize_text(value)]
+    sanitized: List[str] = []
+    for keyword in title_keywords:
+        normalized_keyword = normalize_text(keyword)
+        if (
+            normalized_keyword in GENERIC_SINGLETON_TITLE_KEYWORDS
+            and any(
+                len(title_context.split()) >= 2
+                and normalized_keyword in title_context.split()
+                for title_context in title_contexts
+            )
+        ):
+            continue
+        sanitized.append(keyword)
+    return unique_preserving_order(sanitized)
 
 
 def coerce_int(value: Any) -> int | None:
@@ -318,8 +342,11 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
     expand_title_keywords = bool(
         config.get("allow_adjacent_titles", config.get("expand_title_keywords", True))
     )
-    title_keywords = unique_preserving_order(
-        configured_title_keywords + (infer_title_keywords(titles) if expand_title_keywords else [])
+    title_keywords = sanitize_title_keywords(
+        unique_preserving_order(
+            configured_title_keywords + (infer_title_keywords(titles) if expand_title_keywords else [])
+        ),
+        [config.get("role_title", ""), *titles],
     )
 
     geography_config = config.get("geography", {})
