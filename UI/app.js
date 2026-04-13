@@ -1543,10 +1543,28 @@ function handleBeforeUnload(event) {
 }
 
 function jobRequestedLimit(job) {
+  const formLimit = document.getElementById("candidate-limit")?.value;
+  const savedLimit =
+    state.selectedProject?.latest_brief_json?.ui_meta?.candidate_limit
+    ?? state.selectedProject?.latest_brief_json?.max_profiles
+    ?? state.settings.limit;
+  const fallbackLimit = Math.max(1, safeNumber(formLimit || savedLimit, state.settings.limit || 20));
   return Math.max(
     1,
-    safeNumber(job?.payload?.limit || job?.payload?.csv_export_limit || currentRequestedCandidateLimit(), currentRequestedCandidateLimit()),
+    safeNumber(
+      job?.payload?.limit || job?.payload?.csv_export_limit || reportRequestedCandidateLimit() || fallbackLimit,
+      fallbackLimit,
+    ),
   );
+}
+
+function reportRequestedCandidateLimit(report = state.currentReport) {
+  const summary = report?.summary || {};
+  const summaryRequested = safeNumber(summary.requested_candidate_limit, 0);
+  if (summaryRequested > 0) {
+    return Math.max(1, summaryRequested);
+  }
+  return 0;
 }
 
 function parseTimestamp(value) {
@@ -1698,29 +1716,28 @@ function runningJobProgress(job) {
   const rerankTarget = rerankTargetValue > 0 ? rerankTargetValue : 0;
   const finalizedCount = safeNumber(backendProgress.finalized_count, 0);
   const explicitPercent = safeNumber(backendProgress.percent, NaN);
-  const explicitPercentUsable = Number.isFinite(explicitPercent)
-    && !((stage === "rerank" && rerankTarget > 0 && rerankedCount <= 0)
-      || (stage === "finalizing" && finalizedCount <= 0));
-  let estimatedSeconds = estimatedJobDurationSeconds(job, backendProgress, elapsedSeconds);
-  if (backendEstimatedTotal > 0) {
-    estimatedSeconds = Math.max(elapsedSeconds, Math.round(backendEstimatedTotal));
-  }
+  const backendPercentUsable = Number.isFinite(explicitPercent) && explicitPercent >= 0;
+  let estimatedSeconds = backendEstimatedTotal > 0
+    ? Math.max(elapsedSeconds, Math.round(backendEstimatedTotal))
+    : estimatedJobDurationSeconds(job, backendProgress, elapsedSeconds);
   estimatedSeconds = Math.max(elapsedSeconds + (status === "completed" ? 0 : 2), estimatedSeconds);
   const elapsedFloorPercent = status === "queued"
     ? 4
     : Math.max(3, Math.min(97, Math.round((elapsedSeconds / Math.max(elapsedSeconds, estimatedSeconds || 1)) * 100)));
-  let progressPercent = explicitPercentUsable
-    ? Math.max(1, Math.min(99, Math.round(explicitPercent)))
+  let progressPercent = backendPercentUsable
+    ? Math.max(1, Math.min(status === "completed" ? 100 : 99, Math.round(explicitPercent)))
     : elapsedFloorPercent;
-  if (stage === "rerank" && rerankTarget > 0 && rerankedCount <= 0) {
-    progressPercent = Math.min(progressPercent, 88);
-  }
-  if (stage === "rerank" && rerankTarget > 0 && rerankedCount > 0) {
-    const rerankPercent = 80 + Math.min(15, Math.round((rerankedCount / rerankTarget) * 15));
-    progressPercent = Math.max(progressPercent, rerankPercent);
-  }
-  if (stage === "finalizing" && progressPercent < 95) {
-    progressPercent = 95;
+  if (!backendPercentUsable) {
+    if (stage === "rerank" && rerankTarget > 0 && rerankedCount <= 0) {
+      progressPercent = Math.min(progressPercent, 88);
+    }
+    if (stage === "rerank" && rerankTarget > 0 && rerankedCount > 0) {
+      const rerankPercent = 80 + Math.min(15, Math.round((rerankedCount / rerankTarget) * 15));
+      progressPercent = Math.max(progressPercent, rerankPercent);
+    }
+    if (stage === "finalizing" && progressPercent < 95) {
+      progressPercent = 95;
+    }
   }
   const queriesCompleted = safeNumber(backendProgress.queries_completed, 0);
   const queriesTotal = safeNumber(backendProgress.queries_total, 0);
@@ -1743,13 +1760,18 @@ function runningJobProgress(job) {
     .replace(/\(\s*\d+\s*s\s*elapsed\s*\)\.?/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
-  const etaKnown = !(stage === "rerank" && rerankTarget > 0 && rerankedCount <= 0);
-  const displayedEstimatedSeconds = etaKnown ? estimatedSeconds : 0;
+  const displayedEstimatedSeconds = estimatedSeconds;
+  const etaKnown =
+    status === "completed"
+    || Number.isFinite(backendEta)
+    || backendEstimatedTotal > 0
+    || displayedEstimatedSeconds > elapsedSeconds;
+  const stableEstimatedSeconds = etaKnown ? displayedEstimatedSeconds : 0;
   const remainingSeconds = etaKnown
     ? (
       Number.isFinite(backendEta)
         ? Math.max(0, Math.round(backendEta))
-        : Math.max(0, displayedEstimatedSeconds - elapsedSeconds)
+        : Math.max(0, stableEstimatedSeconds - elapsedSeconds)
     )
     : 0;
   const inScopeCount = safeNumber(backendProgress.in_scope_count, 0);
@@ -1764,7 +1786,7 @@ function runningJobProgress(job) {
   );
   return {
     elapsedSeconds,
-    estimatedSeconds: displayedEstimatedSeconds,
+    estimatedSeconds: stableEstimatedSeconds,
     remainingSeconds,
     etaKnown,
     progressPercent,
@@ -1835,17 +1857,17 @@ function latestCompletedRunIdForProject(projectId, options = {}) {
   ) {
     return String(job.result.run_id).trim();
   }
-  const runs = Array.isArray(options.runs) ? options.runs : state.currentRuns;
-  const firstRunId = String(runs?.[0]?.run_id || "").trim();
-  if (firstRunId) {
-    return firstRunId;
-  }
   const project = options.project || selectedProjectFromList() || state.selectedProject;
   if (project && String(project.id || "").trim() === normalizedProjectId) {
     const projectLatestRunId = String(project.latest_run_id || "").trim();
     if (projectLatestRunId) {
       return projectLatestRunId;
     }
+  }
+  const runs = Array.isArray(options.runs) ? options.runs : state.currentRuns;
+  const firstRunId = String(runs?.[0]?.run_id || "").trim();
+  if (firstRunId) {
+    return firstRunId;
   }
   return "";
 }
@@ -1942,6 +1964,10 @@ function runningJobMarkup(job, options = {}) {
         <span>
           <small>Estimated Total</small>
           <strong>${escapeHtml(estimatedTotalValue)}</strong>
+        </span>
+        <span>
+          <small>Target Runtime</small>
+          <strong>${escapeHtml(formatDuration(progress.targetRuntimeSeconds))}</strong>
         </span>
       </div>
       <div class="job-progress-meta">
@@ -2050,6 +2076,14 @@ function candidateLocationBuckets() {
 }
 
 function currentRequestedCandidateLimit() {
+  const reportLimit = reportRequestedCandidateLimit();
+  if (reportLimit > 0) {
+    return reportLimit;
+  }
+  const activeJob = activeSearchJobForSelectedProject();
+  if (activeJob) {
+    return jobRequestedLimit(activeJob);
+  }
   const formLimit = document.getElementById("candidate-limit")?.value;
   const savedLimit =
     state.selectedProject?.latest_brief_json?.ui_meta?.candidate_limit
@@ -2269,6 +2303,7 @@ function renderResultsSummary() {
     { label: "Rejected", value: safeNumber(summary.reject_count) },
   ];
   const timing = resultsRunTiming();
+  const targetRuntime = formatDuration(runtimeTargetSeconds(currentRequestedCandidateLimit()));
   const finalRuntime = timing.runtimeSeconds > 0 ? formatDuration(timing.runtimeSeconds) : "Not available";
   const estimatedRuntime = timing.estimatedSeconds > 0 ? formatDuration(timing.estimatedSeconds) : "Not available";
   const topLocationBuckets = candidateLocationBuckets().slice(0, 8);
@@ -2312,6 +2347,10 @@ function renderResultsSummary() {
           <div class="summary-timing-card">
             <span>Estimated Time</span>
             <strong>${escapeHtml(estimatedRuntime)}</strong>
+          </div>
+          <div class="summary-timing-card">
+            <span>Target Runtime</span>
+            <strong>${escapeHtml(targetRuntime)}</strong>
           </div>
         </div>
         ${topLocationsMarkup}
@@ -2760,7 +2799,9 @@ function renderResults() {
   renderCsvSummary();
   const root = document.getElementById("results-snapshot");
   const card = document.getElementById("results-snapshot-card");
+  const activeJob = activeSearchJobForSelectedProject();
   const failedJob = failedSearchJobForSelectedProject();
+  const restoringProject = Boolean(state.projectLoadPending && state.selectedProjectId);
   if (!state.selectedProject) {
     if (card) card.hidden = true;
     root.innerHTML = `
@@ -2773,6 +2814,25 @@ function renderResults() {
   }
   if (!state.currentReport || !Array.isArray(state.currentReport.candidates) || !state.currentReport.candidates.length) {
     if (card) card.hidden = true;
+    if (restoringProject) {
+      root.innerHTML = `
+        <div class="empty-state">
+          <h4>Loading Latest Results</h4>
+          <p>Fetching the latest completed run for <strong>${escapeHtml(state.selectedProject.name)}</strong>.</p>
+        </div>
+      `;
+      return;
+    }
+    if (activeJob) {
+      root.innerHTML = runningJobMarkup(activeJob, {
+        compact: true,
+        heading: "Latest Search In Progress",
+        lead: `The ${titleCaseWords(activeJob.status)} search requested up to ${jobRequestedLimit(activeJob)} candidates.`,
+        note: "This view will switch to the new completed run automatically when the job finishes.",
+      });
+      if (card) card.hidden = false;
+      return;
+    }
     root.innerHTML = `
       <div class="empty-state">
         <h4>${failedJob ? "Latest Search Failed" : "No Results Yet"}</h4>
@@ -2787,7 +2847,6 @@ function renderResults() {
   const summary = state.currentReport.summary || {};
   const requested = currentRequestedCandidateLimit();
   const returned = currentCandidates().length;
-  const activeJob = activeSearchJobForSelectedProject();
   root.innerHTML = `
     <div class="list-row list-row-detail">
       <div>

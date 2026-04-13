@@ -182,6 +182,61 @@ def test_sort_candidates_prioritizes_in_scope_fit_over_blunt_status_score() -> N
     ]
 
 
+def test_sort_candidates_prefers_anchor_depth_within_same_scope_bucket() -> None:
+    brief = build_search_brief(
+        {
+            "id": "sort-anchor-depth-test",
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager"],
+            "industry_keywords": ["retail", "ecommerce", "logistics"],
+            "peer_company_targets": ["Amazon", "noon"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Dubai", "United Arab Emirates"],
+            },
+        }
+    )
+
+    generic_title_match = CandidateProfile(
+        full_name="Generic Title Match",
+        verification_status="review",
+        score=66.0,
+        current_title_match=True,
+        location_aligned=True,
+        location_precision_bucket="named_target_location",
+        current_function_fit=0.58,
+        skill_overlap_score=0.18,
+        industry_fit_score=0.1,
+        company_match_score=0.05,
+        parser_confidence=0.7,
+        evidence_quality_score=0.42,
+        source_url="https://example.com/company/news",
+    )
+    anchor_rich_candidate = CandidateProfile(
+        full_name="Anchor Rich Candidate",
+        verification_status="review",
+        score=61.0,
+        current_title_match=True,
+        location_aligned=True,
+        location_precision_bucket="named_target_location",
+        current_function_fit=0.82,
+        skill_overlap_score=0.62,
+        industry_fit_score=0.64,
+        company_match_score=0.48,
+        parser_confidence=0.64,
+        evidence_quality_score=0.38,
+        linkedin_url="https://www.linkedin.com/in/anchor-rich-candidate",
+    )
+
+    ordered = sort_candidates([generic_title_match, anchor_rich_candidate], brief)
+
+    assert [candidate.full_name for candidate in ordered] == [
+        "Anchor Rich Candidate",
+        "Generic Title Match",
+    ]
+
+
 def test_score_candidate_does_not_treat_peer_source_company_as_hard_company_match() -> None:
     brief = build_search_brief(
         {

@@ -399,6 +399,7 @@ def test_build_ui_brief_payload_accepts_explicit_search_profile_and_reranker_mod
                 "search_tuning": {
                     "search_profile": "focused",
                     "reranker_model_name": DEFAULT_UI_RERANKER_MODEL,
+                    "provider_parallel_requests": 24,
                     "scrapingbee_max_queries": 54,
                 },
             },
@@ -408,6 +409,7 @@ def test_build_ui_brief_payload_accepts_explicit_search_profile_and_reranker_mod
     brief = payload["brief_config"]
 
     assert brief["brief_search_profile"] == "focused"
+    assert brief["provider_settings"]["scrapingbee_google"]["parallel_requests"] == 24
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 54
     assert brief["provider_settings"]["reranker"]["model_name"] == DEFAULT_UI_RERANKER_MODEL
     assert brief["ui_meta"]["reranker_model_name"] == DEFAULT_UI_RERANKER_MODEL

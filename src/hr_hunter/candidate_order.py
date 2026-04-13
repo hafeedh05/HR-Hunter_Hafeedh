@@ -21,6 +21,21 @@ MARKET_MATCH_BUCKETS = {
     "profile_text",
 }
 EXECUTIVE_TITLE_HINTS = ("ceo", "chief", "president", "managing director", "vice president", "vp")
+PROFILE_SOURCE_PATH_HINTS = (
+    "/in/",
+    "/bio",
+    "/speaker/",
+    "/speakers/",
+    "/profile",
+    "/people/",
+    "/person/",
+    "/staff/",
+    "/team/",
+    "/our-team/",
+    "/our-people/",
+    "/leadership/",
+    "/management/",
+)
 
 
 def is_title_market_priority_brief(brief: SearchBrief | None) -> bool:
@@ -81,6 +96,24 @@ def candidate_is_in_scope(candidate: CandidateProfile) -> bool:
         and candidate_is_market_match(candidate)
         and parser_confidence >= 0.35
     )
+
+
+def candidate_source_identity_rank(candidate: CandidateProfile) -> int:
+    source_quality_score = float(getattr(candidate, "source_quality_score", 0.0) or 0.0)
+    source_url = str(
+        getattr(candidate, "linkedin_url", "")
+        or getattr(candidate, "source_url", "")
+        or ""
+    ).lower()
+    if "linkedin.com/in/" in source_url:
+        return 0
+    if any(hint in source_url for hint in PROFILE_SOURCE_PATH_HINTS):
+        return 0
+    if source_quality_score >= 0.45:
+        return 1
+    if source_url or source_quality_score >= 0.2:
+        return 2
+    return 3
 
 
 def _candidate_priority_bucket(
@@ -201,20 +234,24 @@ def candidate_priority_sort_tuple(
     company_match_score = float(getattr(candidate, "company_match_score", 0.0) or 0.0)
     location_match_score = float(getattr(candidate, "location_match_score", 0.0) or 0.0)
     evidence_quality_score = float(getattr(candidate, "evidence_quality_score", 0.0) or 0.0)
+    source_quality_score = float(getattr(candidate, "source_quality_score", 0.0) or 0.0)
     parser_confidence = float(getattr(candidate, "parser_confidence", 0.0) or 0.0)
     score = float(getattr(candidate, "score", 0.0) or 0.0)
     reranker_score = float(getattr(candidate, "reranker_score", 0.0) or 0.0)
     market_rank = candidate_market_bucket_rank(candidate)
+    source_identity_rank = candidate_source_identity_rank(candidate)
     name_key = str(getattr(candidate, "full_name", "") or "").lower()
 
     if phase_name == "rerank":
         return (
             bucket,
             market_rank,
-            -current_function_fit,
-            -skill_overlap_score,
             -industry_fit_score,
             -company_match_score,
+            -current_function_fit,
+            -skill_overlap_score,
+            source_identity_rank,
+            -source_quality_score,
             -location_match_score,
             -parser_confidence,
             -evidence_quality_score,
@@ -225,17 +262,19 @@ def candidate_priority_sort_tuple(
     if phase_name == "verification":
         return (
             bucket,
+            -industry_fit_score,
+            -company_match_score,
+            -current_function_fit,
+            -skill_overlap_score,
+            source_identity_rank,
+            -source_quality_score,
             current_employment_confirmed,
             precise_location_confirmed,
             current_location_confirmed,
             current_company_confirmed,
             current_title_confirmed,
             -current_role_proof_count,
-            -industry_fit_score,
-            -company_match_score,
             market_rank,
-            -current_function_fit,
-            -skill_overlap_score,
             -evidence_quality_score,
             -parser_confidence,
             status_rank,
@@ -245,6 +284,12 @@ def candidate_priority_sort_tuple(
     return (
         bucket,
         status_rank,
+        -industry_fit_score,
+        -company_match_score,
+        -current_function_fit,
+        -skill_overlap_score,
+        source_identity_rank,
+        -source_quality_score,
         current_employment_confirmed,
         precise_location_confirmed,
         current_location_confirmed,
@@ -252,10 +297,6 @@ def candidate_priority_sort_tuple(
         current_title_confirmed,
         -current_role_proof_count,
         market_rank,
-        -industry_fit_score,
-        -company_match_score,
-        -current_function_fit,
-        -skill_overlap_score,
         -location_match_score,
         -evidence_quality_score,
         -parser_confidence,

@@ -237,11 +237,23 @@ def _resolve_effective_verification_target(
     )
     scope_buffer = max(8, min(36, int(round(requested * 0.12))))
     precise_buffer = max(4, min(18, int(round(requested * 0.06))))
+    scope_goal = max(0, int(scope_target or 0))
+    scope_density_target = min(shortlist_limit, shortlist_scope_count + scope_buffer)
+    precise_density_target = min(shortlist_limit, shortlist_precise_scope_count + precise_buffer)
+    scope_goal_target = 0
+    if scope_goal > 0:
+        scope_goal_target = min(
+            shortlist_limit,
+            max(
+                shortlist_scope_count,
+                min(scope_goal, shortlist_scope_count + scope_buffer),
+            ),
+        )
     effective_target = max(
         verification_floor,
-        min(shortlist_limit, max(0, int(scope_target or 0))),
-        min(shortlist_limit, shortlist_scope_count + scope_buffer),
-        min(shortlist_limit, shortlist_precise_scope_count + precise_buffer),
+        scope_density_target,
+        precise_density_target,
+        scope_goal_target,
     )
     if company_required and shortlist_scope_count > 0:
         effective_target = max(
@@ -1267,13 +1279,50 @@ def create_app() -> "FastAPI":
                     }
                 )
                 if verifier.is_configured():
+                    verification_pipeline_metrics = dict(report.summary.get("pipeline_metrics", {}) or {})
                     verification_progress_base = {
-                        "queries_completed": int(latest_telemetry.get("queries_completed", 0) or 0),
-                        "queries_total": int(latest_telemetry.get("queries_total", 0) or 0),
-                        "raw_found": int(latest_telemetry.get("raw_found", 0) or 0),
-                        "unique_after_dedupe": int(latest_telemetry.get("unique_after_dedupe", 0) or 0),
-                        "rerank_target": int(latest_telemetry.get("rerank_target", 0) or 0),
-                        "reranked_count": int(latest_telemetry.get("reranked_count", 0) or 0),
+                        "queries_completed": int(
+                            verification_pipeline_metrics.get(
+                                "queries_completed",
+                                latest_telemetry.get("queries_completed", 0),
+                            )
+                            or 0
+                        ),
+                        "queries_total": int(
+                            verification_pipeline_metrics.get(
+                                "queries_total",
+                                latest_telemetry.get("queries_total", 0),
+                            )
+                            or 0
+                        ),
+                        "raw_found": int(
+                            verification_pipeline_metrics.get(
+                                "raw_found",
+                                latest_telemetry.get("raw_found", 0),
+                            )
+                            or 0
+                        ),
+                        "unique_after_dedupe": int(
+                            verification_pipeline_metrics.get(
+                                "unique_after_dedupe",
+                                latest_telemetry.get("unique_after_dedupe", 0),
+                            )
+                            or 0
+                        ),
+                        "rerank_target": int(
+                            verification_pipeline_metrics.get(
+                                "rerank_target",
+                                latest_telemetry.get("rerank_target", 0),
+                            )
+                            or 0
+                        ),
+                        "reranked_count": int(
+                            verification_pipeline_metrics.get(
+                                "reranked_count",
+                                latest_telemetry.get("reranked_count", 0),
+                            )
+                            or 0
+                        ),
                     }
 
                     def _on_verification_progress(event: Dict[str, Any]) -> None:

@@ -304,6 +304,49 @@ def test_resolve_effective_verification_target_trims_weak_tail() -> None:
     assert plan["effective_target"] >= 42
 
 
+def test_resolve_effective_verification_target_does_not_blindly_follow_oversized_scope_goal() -> None:
+    candidates = [
+        CandidateProfile(
+            full_name=f"Precise In Scope {index}",
+            current_title="Chief Executive Officer",
+            current_title_match=True,
+            location_aligned=True,
+            location_precision_bucket="named_target_location",
+            parser_confidence=0.76,
+            verification_status="review",
+            score=72.0,
+        )
+        for index in range(41)
+    ] + [
+        CandidateProfile(
+            full_name=f"Adjacent Executive {index}",
+            current_title="Managing Director",
+            current_title_match=False,
+            location_aligned=True,
+            location_precision_bucket="country_only",
+            parser_confidence=0.3,
+            verification_status="reject",
+            score=45.0,
+        )
+        for index in range(99)
+    ]
+
+    plan = _resolve_effective_verification_target(
+        candidates,
+        requested_limit=300,
+        verification_target=140,
+        scope_target=140,
+        company_required=False,
+    )
+
+    assert plan["requested_target"] == 140
+    assert plan["shortlist_scope_count"] == 41
+    assert plan["shortlist_precise_scope_count"] == 41
+    assert plan["effective_target"] < plan["requested_target"]
+    assert plan["effective_target"] <= 80
+    assert plan["effective_target"] >= 70
+
+
 def test_should_stop_after_stagnant_top_up_when_near_target():
     assert _should_stop_after_stagnant_top_up(
         requested_limit=50,

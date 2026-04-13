@@ -450,3 +450,58 @@ def test_prepare_verification_candidate_order_honors_title_market_priority_brief
         "Title Match Weak Market",
         "Strong Function Precise Market",
     ]
+
+
+def test_prepare_verification_candidate_order_prefers_anchor_rich_precise_profiles() -> None:
+    candidates = [
+        CandidateProfile(
+            full_name="Generic Precise Match",
+            current_title="Supply Chain Manager",
+            current_company="Generic Retailer",
+            location_name="Dubai",
+            current_title_match=True,
+            location_aligned=True,
+            location_precision_bucket="named_target_location",
+            parser_confidence=0.74,
+            evidence_quality_score=0.44,
+            source_quality_score=0.22,
+            current_function_fit=0.56,
+            skill_overlap_score=0.2,
+            industry_fit_score=0.12,
+            company_match_score=0.08,
+            verification_status="review",
+            score=67.0,
+            source_url="https://example.com/company/news",
+        ),
+        CandidateProfile(
+            full_name="Anchor Rich Precise Match",
+            current_title="Supply Chain Manager",
+            current_company="Amazon",
+            location_name="Dubai",
+            current_title_match=True,
+            location_aligned=True,
+            location_precision_bucket="named_target_location",
+            parser_confidence=0.66,
+            evidence_quality_score=0.38,
+            source_quality_score=0.55,
+            current_function_fit=0.84,
+            skill_overlap_score=0.64,
+            industry_fit_score=0.62,
+            company_match_score=0.52,
+            verification_status="review",
+            score=61.0,
+            linkedin_url="https://www.linkedin.com/in/anchor-rich-precise-match",
+        ),
+    ]
+
+    ordered = prepare_verification_candidate_order(
+        candidates,
+        company_required=False,
+        verification_limit=2,
+        scope_target=0,
+    )
+
+    assert [candidate.full_name for candidate in ordered[:2]] == [
+        "Anchor Rich Precise Match",
+        "Generic Precise Match",
+    ]

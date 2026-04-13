@@ -1967,14 +1967,16 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     if search_profile == FOCUSED_SEARCH_PROFILE:
         reranker_top_n = min(reranker_top_n, max(limit * 2, 80))
+    explicit_provider_parallel_requests = _coerce_int(payload.get("provider_parallel_requests"))
+    if explicit_provider_parallel_requests is None:
+        explicit_provider_parallel_requests = _coerce_int(search_tuning.get("provider_parallel_requests"))
     scrapingbee_parallel_requests = max(
         4,
-        _coerce_int(payload.get("provider_parallel_requests"))
-        or _coerce_int(search_tuning.get("provider_parallel_requests"))
+        explicit_provider_parallel_requests
         or (10 if common_volume_search and limit >= 80 else 0)
         or (16 if limit >= 220 else (12 if limit >= 120 else 8)),
     )
-    if search_profile == FOCUSED_SEARCH_PROFILE:
+    if search_profile == FOCUSED_SEARCH_PROFILE and explicit_provider_parallel_requests is None:
         focused_parallel_cap = 10 if common_volume_search and limit >= 80 else 8
         scrapingbee_parallel_requests = min(scrapingbee_parallel_requests, focused_parallel_cap)
     scrapingbee_pages_per_query = max(
