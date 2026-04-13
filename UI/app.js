@@ -3156,6 +3156,12 @@ async function loadProject(projectId) {
     state.candidateLocationFilter = "all";
     state.selectedCandidateRef = "";
     persistStoredState();
+    const earlyLatestJob = await loadLatestProjectJob(projectId, {
+      suppressRender: true,
+      selectionRequestId,
+      timeoutMs: 6000,
+      skipReportSync: true,
+    });
     populateProjectForm(payload.project);
     renderProjectSummary();
     renderProjectList();
@@ -3180,7 +3186,9 @@ async function loadProject(projectId) {
     renderCandidates();
     syncLiveJobStatus();
     const failedJob = failedSearchJobForSelectedProject();
-    const activeJob = activeSearchJobForSelectedProject();
+    const activeJob = activeSearchJobForSelectedProject() || (
+      earlyLatestJob && isActiveJobStatus(earlyLatestJob.status) ? earlyLatestJob : null
+    );
     void Promise.allSettled([
       loadProjectRuns(projectId, {
         suppressRender: true,
