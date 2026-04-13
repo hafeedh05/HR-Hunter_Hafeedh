@@ -49,6 +49,14 @@ def _json_object(value: Any) -> Dict[str, Any]:
     return dict(parsed) if isinstance(parsed, dict) else {}
 
 
+def _job_project_id_from_values(payload_value: Any, result_value: Any) -> str:
+    payload = payload_value if isinstance(payload_value, dict) else _json_object(payload_value)
+    result = result_value if isinstance(result_value, dict) else _json_object(result_value)
+    project = result.get("project")
+    project_payload = dict(project) if isinstance(project, dict) else {}
+    return str(payload.get("project_id") or project_payload.get("id") or "").strip()
+
+
 def _sanitize_database_fields(value: Any) -> Any:
     if isinstance(value, dict):
         sanitized: Dict[str, Any] = {}
@@ -174,39 +182,65 @@ def _default_job_progress(*, target: int = 0, stage: str = "queued", status: str
 def _ensure_jobs_columns(connection: Any) -> None:
     backend = getattr(connection, "backend", "sqlite")
     additions = [
+        ("project_id", "TEXT DEFAULT ''"),
         ("progress_json", "TEXT DEFAULT '{}'"),
         ("checkpoint_json", "TEXT DEFAULT '{}'"),
         ("heartbeat_at", "TEXT DEFAULT ''"),
     ]
     if backend == "postgres":
-        for column_name, definition in additions:
-            try:
+        existing_columns = {column_name for column_name, _definition in additions}
+        try:
+            for column_name, definition in additions:
                 connection.execute(f"ALTER TABLE jobs ADD COLUMN IF NOT EXISTS {column_name} {definition}")
+        except Exception:
+            # Column may already exist or the table may not be visible yet.
+            pass
+    else:
+        existing_columns: set[str] = set()
+        try:
+            rows = connection.execute("PRAGMA table_info(jobs)").fetchall()
+        except Exception:
+            rows = []
+        for row in rows:
+            try:
+                name = str(row["name"]).strip()
             except Exception:
-                # Column may already exist or the table may not be visible yet.
+                name = str(getattr(row, "name", "")).strip()
+            if name:
+                existing_columns.add(name)
+        for column_name, definition in additions:
+            if column_name in existing_columns:
+                continue
+            try:
+                connection.execute(f"ALTER TABLE jobs ADD COLUMN {column_name} {definition}")
+            except Exception:
+                # Column may already exist on non-SQLite backends or race conditions.
                 pass
-        return
-
-    existing_columns: set[str] = set()
     try:
-        rows = connection.execute("PRAGMA table_info(jobs)").fetchall()
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_project_created ON jobs(project_id, created_at DESC)"
+        )
+    except Exception:
+        pass
+    try:
+        rows = connection.execute(
+            """
+            SELECT id, payload_json, result_json
+            FROM jobs
+            WHERE COALESCE(project_id, '') = ''
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
     except Exception:
         rows = []
     for row in rows:
-        try:
-            name = str(row["name"]).strip()
-        except Exception:
-            name = str(getattr(row, "name", "")).strip()
-        if name:
-            existing_columns.add(name)
-    for column_name, definition in additions:
-        if column_name in existing_columns:
+        project_id = _job_project_id_from_values(row["payload_json"], row["result_json"])
+        if not project_id:
             continue
         try:
-            connection.execute(f"ALTER TABLE jobs ADD COLUMN {column_name} {definition}")
+            connection.execute("UPDATE jobs SET project_id = ? WHERE id = ?", (project_id, row["id"]))
         except Exception:
-            # Column may already exist on non-SQLite backends or race conditions.
-            pass
+            continue
 
 
 def _parse_iso_timestamp(value: str) -> datetime | None:
@@ -1139,19 +1173,21 @@ def enqueue_job(job_type: str, payload: Dict[str, Any], *, db_path: Path | None 
         target = 0
     initial_progress = _default_job_progress(target=target, stage="queued", status="queued")
     now = _now()
+    project_id = _job_project_id_from_values(payload, {})
     with _connect(resolved) as connection:
         connection.execute(
             """
             INSERT INTO jobs (
-                id, job_type, status, payload_json, result_json, progress_json, checkpoint_json,
+                id, job_type, status, project_id, payload_json, result_json, progress_json, checkpoint_json,
                 error_text, created_at, started_at, finished_at, heartbeat_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
                 job_type,
                 "queued",
+                project_id,
                 _json(payload),
                 "{}",
                 _json(initial_progress),
@@ -1372,7 +1408,7 @@ def load_job(job_id: str, *, db_path: Path | None = None) -> Dict[str, Any] | No
     with _connect(resolved) as connection:
         row = connection.execute(
             """
-            SELECT id, job_type, status, payload_json, result_json, progress_json, checkpoint_json,
+            SELECT id, job_type, status, project_id, payload_json, result_json, progress_json, checkpoint_json,
                    error_text, created_at, started_at, finished_at, heartbeat_at
             FROM jobs
             WHERE id = ?
@@ -1394,21 +1430,34 @@ def list_jobs(
 ) -> List[Dict[str, Any]]:
     resolved = init_state_db(db_path)
     fetch_limit = max(int(limit) * 5, 50)
-    with _connect(resolved) as connection:
-        rows = connection.execute(
-            """
-            SELECT id, job_type, status, payload_json, result_json, progress_json, checkpoint_json,
-                   error_text, created_at, started_at, finished_at, heartbeat_at
-            FROM jobs
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (fetch_limit,),
-        ).fetchall()
-    results: List[Dict[str, Any]] = []
     expected_type = str(job_type or "").strip().lower()
     expected_status = str(status or "").strip().lower()
     expected_project = str(project_id or "").strip()
+    conditions: List[str] = []
+    params: List[Any] = []
+    if expected_type:
+        conditions.append("LOWER(job_type) = ?")
+        params.append(expected_type)
+    if expected_status:
+        conditions.append("LOWER(status) = ?")
+        params.append(expected_status)
+    if expected_project:
+        conditions.append("project_id = ?")
+        params.append(expected_project)
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    with _connect(resolved) as connection:
+        rows = connection.execute(
+            f"""
+            SELECT id, job_type, status, project_id, payload_json, result_json, progress_json, checkpoint_json,
+                   error_text, created_at, started_at, finished_at, heartbeat_at
+            FROM jobs
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (*params, fetch_limit),
+        ).fetchall()
+    results: List[Dict[str, Any]] = []
     for row in rows:
         job = _job_record_from_row(row)
         if expected_type and str(job["job_type"]).strip().lower() != expected_type:
@@ -1416,7 +1465,7 @@ def list_jobs(
         if expected_status and str(job["status"]).strip().lower() != expected_status:
             continue
         if expected_project:
-            job_project_id = str(job["payload"].get("project_id") or job["result"].get("project", {}).get("id") or "").strip()
+            job_project_id = str(row["project_id"] or _job_project_id_from_values(job["payload"], job["result"])).strip()
             if job_project_id != expected_project:
                 continue
         results.append(job)

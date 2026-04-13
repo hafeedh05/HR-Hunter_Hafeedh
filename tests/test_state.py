@@ -411,6 +411,71 @@ def test_stop_job_marks_running_job_failed_and_latest_project_job_returns_it(tmp
     assert latest["status"] == "failed"
 
 
+def test_latest_project_job_backfills_legacy_project_ids(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy-state.db"
+    target = db_path
+    with connect_database(
+        resolve_database_target(
+            target,
+            env_var="HR_HUNTER_STATE_DB",
+            default_path="output/state/hr_hunter_state.db",
+        )
+    ) as connection:
+        connection.execute(
+            """
+            CREATE TABLE jobs (
+                id TEXT PRIMARY KEY,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                payload_json TEXT DEFAULT '{}',
+                result_json TEXT DEFAULT '{}',
+                error_text TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                started_at TEXT DEFAULT '',
+                finished_at TEXT DEFAULT '',
+                heartbeat_at TEXT DEFAULT ''
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO jobs (
+                id, job_type, status, payload_json, result_json, error_text,
+                created_at, started_at, finished_at, heartbeat_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "job_legacy",
+                "search",
+                "completed",
+                json.dumps({"project_id": "project_legacy"}),
+                json.dumps({"project": {"id": "project_legacy"}}),
+                "",
+                "2026-04-13T00:00:00+00:00",
+                "2026-04-13T00:00:01+00:00",
+                "2026-04-13T00:00:10+00:00",
+                "2026-04-13T00:00:10+00:00",
+            ),
+        )
+
+    latest = latest_project_job("project_legacy", db_path=db_path)
+
+    assert latest is not None
+    assert latest["job_id"] == "job_legacy"
+
+    with connect_database(
+        resolve_database_target(
+            target,
+            env_var="HR_HUNTER_STATE_DB",
+            default_path="output/state/hr_hunter_state.db",
+        )
+    ) as connection:
+        row = connection.execute("SELECT project_id FROM jobs WHERE id = ?", ("job_legacy",)).fetchone()
+    assert row is not None
+    assert row["project_id"] == "project_legacy"
+
+
 def test_expire_stale_jobs_marks_old_running_jobs_failed(tmp_path: Path) -> None:
     db_path = tmp_path / "state.db"
     queued = enqueue_job("search", {"project_id": "project_456", "role_title": "Senior Brand Manager"}, db_path=db_path)

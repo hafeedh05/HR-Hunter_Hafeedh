@@ -3215,6 +3215,7 @@ async function loadProject(projectId) {
   state.projectLoadRequestId = selectionRequestId;
   state.projectLoadPending = true;
   const cachedProject = state.projects.find((project) => project.id === projectId) || null;
+  let earlyLatestJobPromise = Promise.resolve(null);
   if (cachedProject) {
     state.selectedProjectId = cachedProject.id;
     if (!state.selectedProject || state.selectedProject.id !== cachedProject.id) {
@@ -3226,6 +3227,11 @@ async function loadProject(projectId) {
     renderResults();
     renderCandidates();
     updateTopbarActions();
+    earlyLatestJobPromise = loadLatestProjectJob(projectId, {
+      selectionRequestId,
+      timeoutMs: 6000,
+      skipReportSync: true,
+    }).catch(() => null);
   }
   try {
     const payload = await fetchJSON(`/app/projects/${encodeURIComponent(projectId)}`);
@@ -3242,12 +3248,7 @@ async function loadProject(projectId) {
     state.candidateLocationFilter = "all";
     state.selectedCandidateRef = "";
     persistStoredState();
-    const earlyLatestJob = await loadLatestProjectJob(projectId, {
-      suppressRender: true,
-      selectionRequestId,
-      timeoutMs: 6000,
-      skipReportSync: true,
-    });
+    const earlyLatestJob = await earlyLatestJobPromise;
     populateProjectForm(payload.project);
     renderProjectSummary();
     renderProjectList();
