@@ -3119,19 +3119,41 @@ function renderOwnerJobs() {
   document.getElementById("owner-retry-search")?.addEventListener("click", retrySearchForSelectedProject);
 }
 
-async function refreshProjects(query = state.projectSearchQuery) {
+async function refreshProjects(query = state.projectSearchQuery, options = {}) {
   if (!state.user) return;
   state.projectSearchQuery = query;
   const payload = await fetchJSON(`/app/projects?query=${encodeURIComponent(query)}&limit=60`);
   state.projects = Array.isArray(payload.projects) ? payload.projects : [];
+  const ensuredProject = options.ensureProject && typeof options.ensureProject === "object"
+    ? options.ensureProject
+    : null;
+  if (
+    ensuredProject?.id
+    && !state.projects.some((project) => String(project.id || "").trim() === String(ensuredProject.id || "").trim())
+  ) {
+    state.projects = [ensuredProject, ...state.projects];
+  }
   const selected = selectedProjectFromList();
   if (selected) {
     state.selectedProject = state.selectedProject && state.selectedProject.id === selected.id
       ? { ...state.selectedProject, ...selected }
       : selected;
   } else if (!selected && state.selectedProjectId) {
-    state.selectedProjectId = "";
-    state.selectedProject = null;
+    const preservedSelected = (
+      ensuredProject && String(ensuredProject.id || "").trim() === String(state.selectedProjectId || "").trim()
+    )
+      ? ensuredProject
+      : (
+        state.selectedProject && String(state.selectedProject.id || "").trim() === String(state.selectedProjectId || "").trim()
+          ? state.selectedProject
+          : null
+      );
+    if (preservedSelected) {
+      state.selectedProject = preservedSelected;
+    } else {
+      state.selectedProjectId = "";
+      state.selectedProject = null;
+    }
   }
   renderProjectList();
   renderProjectSummary();
@@ -3473,7 +3495,7 @@ async function saveProject() {
   state.selectedProject = response.project;
   persistStoredState();
   populateProjectForm(response.project);
-  await refreshProjects(state.projectSearchQuery);
+  await refreshProjects(state.projectSearchQuery, { ensureProject: response.project });
   renderProjectSummary();
   updateTopbarActions();
   setStatus("Project saved.", "success", "The hunt brief and project metadata are now stored.");
