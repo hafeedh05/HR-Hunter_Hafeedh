@@ -3249,6 +3249,25 @@ async function loadProject(projectId) {
     state.selectedCandidateRef = "";
     persistStoredState();
     const earlyLatestJob = await earlyLatestJobPromise;
+    if (
+      earlyLatestJob
+      && jobProjectId(earlyLatestJob) === projectId
+      && (
+        !state.activeJob
+        || jobProjectId(state.activeJob) !== projectId
+        || String(state.activeJob.job_id || "").trim() !== String(earlyLatestJob.job_id || "").trim()
+        || String(state.activeJob.status || "").trim().toLowerCase() !== String(earlyLatestJob.status || "").trim().toLowerCase()
+      )
+    ) {
+      state.activeJob = earlyLatestJob;
+      if (isActiveJobStatus(earlyLatestJob.status) && String(earlyLatestJob.job_id || "").trim()) {
+        if (state.polledJobId !== String(earlyLatestJob.job_id)) {
+          startJobPolling(earlyLatestJob.job_id);
+        } else {
+          startLiveProgressTicker();
+        }
+      }
+    }
     populateProjectForm(payload.project);
     renderProjectSummary();
     renderProjectList();
