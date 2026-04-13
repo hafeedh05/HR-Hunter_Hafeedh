@@ -1,5 +1,6 @@
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.recruiter_app import (
+    DEFAULT_UI_RERANKER_MODEL,
     assess_ui_brief_quality,
     build_app_bootstrap,
     build_ui_brief_payload,
@@ -173,6 +174,7 @@ def test_build_app_bootstrap_exposes_supported_ui_options():
     assert defaults["company_match_mode"] == "both"
     assert defaults["employment_status_mode"] == "any"
     assert defaults["theme"] == "bright"
+    assert defaults["reranker_model_name"] == DEFAULT_UI_RERANKER_MODEL
     assert preset["company_match_mode"] == "both"
     assert preset["employment_status_mode"] == "any"
     assert preset["jd_breakdown"]["key_experience_points"]
@@ -199,6 +201,18 @@ def test_build_app_bootstrap_supply_chain_preset_is_distinct_from_ceo_demo() -> 
     assert "S&OP" in preset["must_have_keywords"]
     assert preset["brief_clarifications"]["strict_market_scope"] is True
     assert preset["jd_breakdown"]["titles"][0] == "Supply Chain Manager"
+    assert preset["jd_breakdown"]["search_tuning"]["search_profile"] == "focused"
+    assert preset["jd_breakdown"]["search_tuning"]["reranker_model_name"] == DEFAULT_UI_RERANKER_MODEL
+
+
+def test_build_app_bootstrap_data_analyst_preset_is_available() -> None:
+    preset = build_app_bootstrap()["presets"]["data_analyst_uae"]
+
+    assert preset["role_title"] == "Data Analyst"
+    assert preset["max_profiles"] == 100
+    assert "Careem" in preset["peer_company_targets"]
+    assert preset["jd_breakdown"]["search_tuning"]["search_profile"] == "focused"
+    assert preset["jd_breakdown"]["search_tuning"]["reranker_model_name"] == DEFAULT_UI_RERANKER_MODEL
 
 
 def test_build_app_bootstrap_can_enable_code_only_login(monkeypatch):
@@ -363,6 +377,40 @@ def test_build_ui_brief_payload_preserves_zero_verification_probe_overrides():
     assert verification["parallel_candidates"] == 24
     assert verification["location_probe_queries"] == 0
     assert verification["company_location_probe_queries"] == 0
+
+
+def test_build_ui_brief_payload_accepts_explicit_search_profile_and_reranker_model_from_search_tuning():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager", "Demand Planning Manager"],
+            "countries": ["United Arab Emirates"],
+            "cities": ["Dubai"],
+            "must_have_keywords": ["S&OP", "Demand Planning"],
+            "job_description": "Need a UAE supply chain manager with planning, logistics, and ERP ownership.",
+            "limit": 300,
+            "jd_breakdown": {
+                "summary": "Target role: Supply Chain Manager.",
+                "titles": ["Supply Chain Manager"],
+                "required_keywords": ["s&op", "demand planning"],
+                "preferred_keywords": ["retail"],
+                "industry_keywords": ["retail", "ecommerce"],
+                "key_experience_points": ["UAE retail logistics leadership."],
+                "search_tuning": {
+                    "search_profile": "focused",
+                    "reranker_model_name": DEFAULT_UI_RERANKER_MODEL,
+                    "scrapingbee_max_queries": 54,
+                },
+            },
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["brief_search_profile"] == "focused"
+    assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 54
+    assert brief["provider_settings"]["reranker"]["model_name"] == DEFAULT_UI_RERANKER_MODEL
+    assert brief["ui_meta"]["reranker_model_name"] == DEFAULT_UI_RERANKER_MODEL
 
 
 def test_build_ui_brief_payload_applies_brief_clarifications_and_focused_tuning():

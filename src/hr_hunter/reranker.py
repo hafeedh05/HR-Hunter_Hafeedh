@@ -14,17 +14,22 @@ from hr_hunter.ranker import cap_candidate_score, status_from_score
 
 DEFAULT_RERANKER_MODEL = "disabled"
 PLANNED_RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+LOW_MEMORY_CPU_RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
 DEFAULT_RERANKER_TOP_N = 40
 DEFAULT_RERANKER_WEIGHT = 0.35
 RERANKER_MAX_LENGTH = 384
 RERANKER_CPU_BATCH_SIZE = 12
 RERANKER_GPU_BATCH_SIZE = 32
+LOW_MEMORY_RERANKER_CPU_BATCH_SIZE = 4
 MAX_BRIEF_SUMMARY_CHARS = 800
 MAX_BRIEF_DOC_CHARS = 1200
 MAX_CANDIDATE_SUMMARY_CHARS = 520
 MAX_EXPERIENCE_SUMMARY_CHARS = 180
 DEFAULT_MIN_TOTAL_MEMORY_GB = 3.0
 DEFAULT_MIN_AVAILABLE_MEMORY_GB = 1.25
+LOW_MEMORY_MODEL_MIN_TOTAL_MEMORY_GB = 1.5
+LOW_MEMORY_MODEL_MIN_AVAILABLE_MEMORY_GB = 0.35
+AUTO_DOWNGRADE_TOTAL_MEMORY_GB = 2.5
 
 
 @dataclass
@@ -49,6 +54,62 @@ def _safe_float(value: object, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _normalized_model_name(model_name: str | None) -> str:
+    return str(model_name or "").strip()
+
+
+def _low_memory_reranker_model_name() -> str:
+    return (
+        str(os.getenv("HR_HUNTER_RERANKER_LOW_MEMORY_MODEL", LOW_MEMORY_CPU_RERANKER_MODEL)).strip()
+        or LOW_MEMORY_CPU_RERANKER_MODEL
+    )
+
+
+def _uses_low_memory_profile(model_name: str | None) -> bool:
+    return _normalized_model_name(model_name).lower() == _low_memory_reranker_model_name().lower()
+
+
+def _resolve_transformer_model_name(model_name: str, device: str | None) -> str:
+    requested_model = _normalized_model_name(model_name) or PLANNED_RERANKER_MODEL
+    if "cuda" in str(device or "").lower():
+        return requested_model
+    if _uses_low_memory_profile(requested_model):
+        return requested_model
+    auto_downgrade_enabled = str(os.getenv("HR_HUNTER_RERANKER_AUTO_DOWNGRADE", "true")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not auto_downgrade_enabled:
+        return requested_model
+    total_bytes, _ = _memory_snapshot_bytes()
+    auto_downgrade_total_bytes = max(
+        0,
+        int(
+            _safe_float(
+                os.getenv(
+                    "HR_HUNTER_RERANKER_AUTO_DOWNGRADE_MAX_TOTAL_MEMORY_GB",
+                    AUTO_DOWNGRADE_TOTAL_MEMORY_GB,
+                ),
+                AUTO_DOWNGRADE_TOTAL_MEMORY_GB,
+            )
+            * (1024 ** 3)
+        ),
+    )
+    if (
+        total_bytes is not None
+        and total_bytes < auto_downgrade_total_bytes
+        and requested_model.startswith("BAAI/bge-reranker")
+    ):
+        return _low_memory_reranker_model_name()
+    return requested_model
+
+
+def _cpu_batch_size_for_model(model_name: str | None) -> int:
+    return LOW_MEMORY_RERANKER_CPU_BATCH_SIZE if _uses_low_memory_profile(model_name) else RERANKER_CPU_BATCH_SIZE
 
 
 def _memory_snapshot_bytes() -> tuple[int | None, int | None]:
@@ -89,16 +150,22 @@ def _low_memory_reranker_override_enabled() -> bool:
     }
 
 
-def _ensure_transformer_reranker_memory_budget(device: str | None) -> None:
+def _ensure_transformer_reranker_memory_budget(device: str | None, model_name: str | None = None) -> None:
     if "cuda" in str(device or "").lower() or _low_memory_reranker_override_enabled():
         return
     total_bytes, available_bytes = _memory_snapshot_bytes()
+    low_memory_profile = _uses_low_memory_profile(model_name)
     min_total_bytes = max(
         0,
         int(
             _safe_float(
-                os.getenv("HR_HUNTER_RERANKER_MIN_TOTAL_MEMORY_GB", DEFAULT_MIN_TOTAL_MEMORY_GB),
-                DEFAULT_MIN_TOTAL_MEMORY_GB,
+                os.getenv(
+                    "HR_HUNTER_RERANKER_MIN_TOTAL_MEMORY_GB_LOWMEM"
+                    if low_memory_profile
+                    else "HR_HUNTER_RERANKER_MIN_TOTAL_MEMORY_GB",
+                    LOW_MEMORY_MODEL_MIN_TOTAL_MEMORY_GB if low_memory_profile else DEFAULT_MIN_TOTAL_MEMORY_GB,
+                ),
+                LOW_MEMORY_MODEL_MIN_TOTAL_MEMORY_GB if low_memory_profile else DEFAULT_MIN_TOTAL_MEMORY_GB,
             )
             * (1024 ** 3)
         ),
@@ -107,8 +174,15 @@ def _ensure_transformer_reranker_memory_budget(device: str | None) -> None:
         0,
         int(
             _safe_float(
-                os.getenv("HR_HUNTER_RERANKER_MIN_AVAILABLE_MEMORY_GB", DEFAULT_MIN_AVAILABLE_MEMORY_GB),
-                DEFAULT_MIN_AVAILABLE_MEMORY_GB,
+                os.getenv(
+                    "HR_HUNTER_RERANKER_MIN_AVAILABLE_MEMORY_GB_LOWMEM"
+                    if low_memory_profile
+                    else "HR_HUNTER_RERANKER_MIN_AVAILABLE_MEMORY_GB",
+                    LOW_MEMORY_MODEL_MIN_AVAILABLE_MEMORY_GB
+                    if low_memory_profile
+                    else DEFAULT_MIN_AVAILABLE_MEMORY_GB,
+                ),
+                LOW_MEMORY_MODEL_MIN_AVAILABLE_MEMORY_GB if low_memory_profile else DEFAULT_MIN_AVAILABLE_MEMORY_GB,
             )
             * (1024 ** 3)
         ),
@@ -230,7 +304,6 @@ class TransformersCrossEncoderBackend(BaseRerankerBackend):
                 "Reranker dependencies are missing. Run `uv sync --extra reranker`."
             ) from exc
 
-        self.model_name = model_name
         self._torch = torch
         allow_download = str(os.getenv("HR_HUNTER_RERANKER_ALLOW_DOWNLOAD", "false")).strip().lower() in {
             "1",
@@ -239,16 +312,18 @@ class TransformersCrossEncoderBackend(BaseRerankerBackend):
             "on",
         }
         selected_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        _ensure_transformer_reranker_memory_budget(selected_device)
+        selected_model_name = _resolve_transformer_model_name(model_name, selected_device)
+        _ensure_transformer_reranker_memory_budget(selected_device, selected_model_name)
         self._tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
+            selected_model_name,
             local_files_only=not allow_download,
         )
         model = AutoModelForSequenceClassification.from_pretrained(
-            model_name,
+            selected_model_name,
             local_files_only=not allow_download,
             low_cpu_mem_usage=True,
         )
+        self.model_name = selected_model_name
         self._device = selected_device
         self._model = model.to(selected_device)
         self._model.eval()
@@ -262,7 +337,11 @@ class TransformersCrossEncoderBackend(BaseRerankerBackend):
             return []
         tokenizer = self._tokenizer
         torch = self._torch
-        batch_size = RERANKER_GPU_BATCH_SIZE if "cuda" in str(self._device).lower() else RERANKER_CPU_BATCH_SIZE
+        batch_size = (
+            RERANKER_GPU_BATCH_SIZE
+            if "cuda" in str(self._device).lower()
+            else _cpu_batch_size_for_model(self.model_name)
+        )
         all_scores: List[float] = []
         total_pairs = len(pairs)
         if progress_callback:
@@ -308,7 +387,8 @@ def rerank_candidate(brief: SearchBrief, candidate: CandidateProfile) -> Reranke
     try:
         backend = _load_backend(settings.model_name, settings.device)
         score = backend.score_pairs([(build_brief_text(brief), build_candidate_text(candidate))])[0]
-        return RerankerResult(score=round(score, 4), model_name=settings.model_name, enabled=True)
+        effective_model_name = str(getattr(backend, "model_name", settings.model_name) or settings.model_name)
+        return RerankerResult(score=round(score, 4), model_name=effective_model_name, enabled=True)
     except Exception as exc:  # pragma: no cover - runtime fallback
         return RerankerResult(
             score=0.0,
@@ -338,6 +418,7 @@ def rerank_candidates(
     passthrough = list(ordered_candidates[settings.top_n :])
     try:
         backend = _load_backend(settings.model_name, settings.device)
+        effective_model_name = str(getattr(backend, "model_name", settings.model_name) or settings.model_name)
         query_text = build_brief_text(brief)
         pairs = [(query_text, build_candidate_text(candidate)) for candidate in rerank_window]
         pair_scores: List[float] = []
@@ -365,12 +446,12 @@ def rerank_candidates(
                     progress_callback(min(total_pairs, completed_pairs), total_pairs)
         for candidate, score in zip(rerank_window, pair_scores):
             candidate.reranker_score = round(float(score), 4)
-            candidate.ranking_model_version = settings.model_name
+            candidate.ranking_model_version = effective_model_name
             blended = (candidate.score * (1.0 - settings.weight)) + ((score * 100.0) * settings.weight)
             candidate.score = round(min(max(cap_candidate_score(blended, candidate), 0.0), 100.0), 2)
             candidate.verification_status = status_from_score(candidate.score)
             candidate.verification_notes = list(
-                dict.fromkeys([*candidate.verification_notes, f"reranker:{settings.model_name}"])
+                dict.fromkeys([*candidate.verification_notes, f"reranker:{effective_model_name}"])
             )
         rerank_window.sort(
             key=lambda candidate: (

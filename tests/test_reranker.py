@@ -1,7 +1,9 @@
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.models import CandidateProfile
 from hr_hunter.reranker import (
+    LOW_MEMORY_CPU_RERANKER_MODEL,
     _ensure_transformer_reranker_memory_budget,
+    _resolve_transformer_model_name,
     parse_reranker_settings,
     rerank_candidates,
 )
@@ -195,6 +197,25 @@ def test_low_memory_guard_skips_transformer_reranker(monkeypatch) -> None:
         assert "low-memory host" in str(exc)
     else:  # pragma: no cover - guard should always fire in this scenario
         raise AssertionError("expected low-memory guard to skip transformer reranker")
+
+
+def test_low_memory_guard_allows_small_cross_encoder_profile(monkeypatch) -> None:
+    monkeypatch.setattr("hr_hunter.reranker._memory_snapshot_bytes", lambda: (2 * 1024**3, 900 * 1024**2))
+    monkeypatch.delenv("HR_HUNTER_RERANKER_ALLOW_LOW_MEMORY", raising=False)
+    monkeypatch.delenv("HR_HUNTER_RERANKER_MIN_TOTAL_MEMORY_GB_LOWMEM", raising=False)
+    monkeypatch.delenv("HR_HUNTER_RERANKER_MIN_AVAILABLE_MEMORY_GB_LOWMEM", raising=False)
+
+    _ensure_transformer_reranker_memory_budget("cpu", LOW_MEMORY_CPU_RERANKER_MODEL)
+
+
+def test_resolve_transformer_model_name_auto_downgrades_bge_on_low_memory_cpu(monkeypatch) -> None:
+    monkeypatch.setattr("hr_hunter.reranker._memory_snapshot_bytes", lambda: (2 * 1024**3, 900 * 1024**2))
+    monkeypatch.delenv("HR_HUNTER_RERANKER_AUTO_DOWNGRADE", raising=False)
+    monkeypatch.delenv("HR_HUNTER_RERANKER_AUTO_DOWNGRADE_MAX_TOTAL_MEMORY_GB", raising=False)
+
+    resolved = _resolve_transformer_model_name("BAAI/bge-reranker-v2-m3", "cpu")
+
+    assert resolved == LOW_MEMORY_CPU_RERANKER_MODEL
 
 
 def test_rerank_candidates_fallbacks_when_backend_load_is_blocked(monkeypatch) -> None:

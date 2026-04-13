@@ -1035,6 +1035,12 @@ def _resolve_year_bounds(
 FOCUSED_SEARCH_PROFILE = "focused"
 BALANCED_SEARCH_PROFILE = "balanced"
 EXPLORATORY_SEARCH_PROFILE = "exploratory"
+SUPPORTED_SEARCH_PROFILES = {
+    FOCUSED_SEARCH_PROFILE,
+    BALANCED_SEARCH_PROFILE,
+    EXPLORATORY_SEARCH_PROFILE,
+}
+DEFAULT_UI_RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
 FOCUSED_QUERY_FAMILY_BUDGETS = {
     "org_chart_profile_pages": 8,
     "profile_like_public_pages": 8,
@@ -1843,17 +1849,26 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     feedback_db = resolve_feedback_db_path(payload.get("feedback_db"))
     model_dir = resolve_ranker_model_dir(payload.get("model_dir"))
     limit = max(1, int(payload.get("limit", 20) or 20))
-    search_profile = _derive_search_profile(
-        role_title=role_title,
-        titles=titles,
-        location_targets=location_targets,
-        sourcing_company_targets=sourcing_companies,
-        required_keywords=required_keywords,
-        preferred_keywords=preferred_keywords,
-        industry_keywords=industry_keywords,
-        document_text=job_description,
-        limit=limit,
-    )
+    configured_search_profile = str(
+        payload.get("search_profile")
+        or payload.get("brief_search_profile")
+        or search_tuning.get("search_profile")
+        or ""
+    ).strip().lower()
+    if configured_search_profile in SUPPORTED_SEARCH_PROFILES:
+        search_profile = configured_search_profile
+    else:
+        search_profile = _derive_search_profile(
+            role_title=role_title,
+            titles=titles,
+            location_targets=location_targets,
+            sourcing_company_targets=sourcing_companies,
+            required_keywords=required_keywords,
+            preferred_keywords=preferred_keywords,
+            industry_keywords=industry_keywords,
+            document_text=job_description,
+            limit=limit,
+        )
     explicit_title_scope = _has_explicit_title_scope(titles)
     common_volume_search = bool(limit >= 40 and not sourcing_companies and len(titles) <= 2 and not executive_brief)
     brief_follow_up_questions = _build_brief_follow_up_questions(
@@ -2198,6 +2213,12 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         for family, value in dict(top_up_strategy["query_family_budgets"]).items()
         if str(family).strip()
     }
+    reranker_model_name = str(
+        payload.get("reranker_model_name")
+        or search_tuning.get("reranker_model_name")
+        or DEFAULT_UI_RERANKER_MODEL
+    ).strip() or DEFAULT_UI_RERANKER_MODEL
+
     providers_settings = {
         "retrieval": {
             "company_chunk_size": int(payload.get("company_chunk_size", tuned_company_chunk_size or 5) or 5),
@@ -2226,7 +2247,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         },
         "reranker": {
             "enabled": reranker_enabled,
-            "model_name": str(payload.get("reranker_model_name", "BAAI/bge-reranker-v2-m3")),
+            "model_name": reranker_model_name,
             "top_n": reranker_top_n,
             "weight": float(payload.get("reranker_weight", 0.35) or 0.35),
         },
@@ -2380,6 +2401,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "anchors": anchors,
             "search_tuning": search_tuning,
             "search_profile": search_profile,
+            "reranker_model_name": reranker_model_name,
             "brief_clarifications": brief_clarifications,
             "top_up_round": top_up_round,
             "top_up_strategy": top_up_strategy["strategy"],
@@ -2443,7 +2465,7 @@ def build_app_bootstrap() -> Dict[str, Any]:
             "include_discovery_slices": True,
             "reranker_enabled": True,
             "learned_ranker_enabled": False,
-            "reranker_model_name": "BAAI/bge-reranker-v2-m3",
+            "reranker_model_name": DEFAULT_UI_RERANKER_MODEL,
             "feedback_db": default_feedback_db,
             "model_dir": default_model_dir,
             "output_dir": default_output_dir,
@@ -2604,6 +2626,8 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         ],
                     },
                     "search_tuning": {
+                        "search_profile": FOCUSED_SEARCH_PROFILE,
+                        "reranker_model_name": DEFAULT_UI_RERANKER_MODEL,
                         "internal_fetch_limit_override": 360,
                         "reranker_top_n": 180,
                         "provider_parallel_requests": 24,
@@ -2794,6 +2818,8 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         ],
                     },
                     "search_tuning": {
+                        "search_profile": FOCUSED_SEARCH_PROFILE,
+                        "reranker_model_name": DEFAULT_UI_RERANKER_MODEL,
                         "internal_fetch_limit_override": 420,
                         "reranker_top_n": 220,
                         "provider_parallel_requests": 24,
@@ -2828,6 +2854,189 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "location": "important",
                     "company": "preferred",
                     "years": "preferred",
+                    "industry": "important",
+                    "function": "important",
+                    "semantic": "preferred",
+                },
+            },
+            "data_analyst_uae": {
+                "project_name": "UAE Data Analyst Search",
+                "client_name": "Demo Data Search",
+                "role_title": "Data Analyst",
+                "titles": [
+                    "Senior Data Analyst",
+                    "Data Analyst",
+                    "Business Intelligence Analyst",
+                    "Product Analyst",
+                ],
+                "countries": [
+                    "United Arab Emirates",
+                ],
+                "continents": [],
+                "cities": [
+                    "Dubai",
+                    "Abu Dhabi",
+                    "Sharjah",
+                ],
+                "company_targets": [],
+                "peer_company_targets": [
+                    "Careem",
+                    "talabat",
+                    "noon",
+                    "dubizzle",
+                    "Property Finder",
+                    "Bayzat",
+                    "Emirates NBD",
+                    "e&",
+                ],
+                "company_match_mode": "both",
+                "employment_status_mode": "any",
+                "years_mode": "range",
+                "years_value": None,
+                "years_tolerance": 0,
+                "max_profiles": 100,
+                "must_have_keywords": [
+                    "SQL",
+                    "Python",
+                    "Dashboarding",
+                    "KPI",
+                    "Stakeholder Management",
+                ],
+                "nice_to_have_keywords": [
+                    "Tableau",
+                    "Power BI",
+                    "Experimentation",
+                    "Forecasting",
+                    "Product Analytics",
+                    "Cohort Analysis",
+                ],
+                "industry_keywords": [
+                    "marketplace",
+                    "ecommerce",
+                    "fintech",
+                    "digital product",
+                    "analytics",
+                ],
+                "job_description": (
+                    "We are hiring a UAE-based Data Analyst to turn product, commercial, and operational data into "
+                    "clear business decisions. Prioritize candidates with strong public evidence of SQL and Python, "
+                    "hands-on dashboarding, KPI design, experimentation or forecasting exposure, and experience "
+                    "partnering with product, growth, finance, or operations stakeholders in the UAE market."
+                ),
+                "brief_clarifications": {
+                    "prioritize_first_location": True,
+                    "allow_adjacent_titles": True,
+                    "strict_market_scope": True,
+                    "expand_search_when_thin": False,
+                },
+                "jd_breakdown": {
+                    **extract_job_description_breakdown(
+                        (
+                            "We are hiring a UAE-based Data Analyst to turn product, commercial, and operational data "
+                            "into clear business decisions. Prioritize candidates with strong public evidence of SQL "
+                            "and Python, hands-on dashboarding, KPI design, experimentation or forecasting exposure, "
+                            "and experience partnering with product, growth, finance, or operations stakeholders in "
+                            "the UAE market."
+                        ),
+                        role_title="Data Analyst",
+                    ),
+                    "titles": [
+                        "Senior Data Analyst",
+                        "Data Analyst",
+                        "Business Intelligence Analyst",
+                        "Product Analyst",
+                    ],
+                    "required_keywords": [
+                        "sql",
+                        "python",
+                        "dashboarding",
+                        "kpi",
+                        "stakeholder management",
+                    ],
+                    "preferred_keywords": [
+                        "tableau",
+                        "power bi",
+                        "experimentation",
+                        "forecasting",
+                        "product analytics",
+                        "cohort analysis",
+                    ],
+                    "industry_keywords": [
+                        "marketplace",
+                        "ecommerce",
+                        "fintech",
+                        "digital product",
+                        "analytics",
+                    ],
+                    "years": {
+                        "mode": "range",
+                        "value": None,
+                        "min": 4,
+                        "max": 9,
+                        "tolerance": 0,
+                    },
+                    "keyword_tracks": {
+                        "portfolio_keywords": [
+                            "dashboarding",
+                            "kpi",
+                            "reporting",
+                            "business insights",
+                        ],
+                        "commercial_keywords": [
+                            "growth",
+                            "revenue",
+                            "conversion",
+                            "retention",
+                        ],
+                        "leadership_keywords": [
+                            "stakeholder management",
+                            "cross-functional",
+                            "business partnership",
+                        ],
+                        "scope_keywords": [
+                            "uae",
+                            "dubai",
+                            "abu dhabi",
+                            "united arab emirates",
+                        ],
+                    },
+                    "search_tuning": {
+                        "search_profile": FOCUSED_SEARCH_PROFILE,
+                        "reranker_model_name": DEFAULT_UI_RERANKER_MODEL,
+                        "internal_fetch_limit_override": 240,
+                        "reranker_top_n": 140,
+                        "provider_parallel_requests": 18,
+                        "scrapingbee_max_queries": 48,
+                        "max_geo_groups": 2,
+                        "geo_group_size": 1,
+                        "company_chunk_size": 4,
+                        "company_slice_location_group_limit": 1,
+                        "max_company_terms_per_query": 6,
+                        "stagnation_query_window": 10,
+                        "stagnation_min_results": 140,
+                        "include_history_slices": False,
+                        "include_discovery_slices": True,
+                        "verification_top_n": 80,
+                        "verification_parallel_candidates": 20,
+                        "verification_location_probe_queries": 1,
+                        "query_family_budgets": {
+                            "team_leadership_pages": 1,
+                            "appointment_news_pages": 1,
+                            "speaker_bio_pages": 1,
+                            "award_industry_pages": 0,
+                            "industry_association_pages": 3,
+                            "trade_directory_pages": 4,
+                            "org_chart_profile_pages": 1,
+                            "profile_like_public_pages": 16,
+                        },
+                    },
+                },
+                "anchors": {
+                    "title": "critical",
+                    "skills": "critical",
+                    "location": "important",
+                    "company": "preferred",
+                    "years": "important",
                     "industry": "important",
                     "function": "important",
                     "semantic": "preferred",
