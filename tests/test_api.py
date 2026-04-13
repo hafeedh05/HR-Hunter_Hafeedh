@@ -6,6 +6,7 @@ from hr_hunter.api import (
     _finalize_report_for_limit,
     _job_actor_from_payload,
     _quality_recovery_gap,
+    _rerank_merged_report_candidates,
     _quality_recovery_settings,
     _quality_recovery_verification_candidates,
     _resolve_effective_verification_target,
@@ -262,6 +263,99 @@ def test_quality_recovery_helpers_capture_thresholds_and_fresh_candidates() -> N
     )
 
     assert [candidate.full_name for candidate in selected] == ["Fresh Candidate", "Retry Candidate"]
+
+
+def test_rerank_merged_report_candidates_reorders_combined_recovery_pool(monkeypatch) -> None:
+    brief = build_search_brief(
+        {
+            "id": "quality-recovery-rerank-test",
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+            },
+            "provider_settings": {
+                "reranker": {
+                    "enabled": True,
+                    "model_name": "fake-reranker",
+                    "top_n": 4,
+                    "weight": 0.4,
+                }
+            },
+        }
+    )
+    report = SearchRunReport(
+        run_id="quality-recovery-rerank-run",
+        brief_id="quality-recovery-rerank-brief",
+        dry_run=False,
+        generated_at="2026-04-13T00:00:00+00:00",
+        provider_results=[],
+        candidates=[
+            CandidateProfile(
+                full_name="Noisy Legacy Candidate",
+                current_title="Operations Lead",
+                current_title_match=False,
+                location_aligned=False,
+                location_precision_bucket="outside_target_area",
+                parser_confidence=0.72,
+                evidence_quality_score=0.66,
+                current_function_fit=0.34,
+                skill_overlap_score=0.18,
+                score=84.0,
+                verification_status="review",
+            ),
+            CandidateProfile(
+                full_name="Fresh Precise Candidate",
+                current_title="Supply Chain Manager",
+                current_title_match=True,
+                location_aligned=True,
+                location_precision_bucket="named_target_location",
+                parser_confidence=0.58,
+                evidence_quality_score=0.44,
+                current_function_fit=0.81,
+                skill_overlap_score=0.52,
+                score=57.0,
+                verification_status="reject",
+            ),
+        ],
+        summary={},
+    )
+
+    def _fake_rerank(_brief, candidates, progress_callback=None):
+        if progress_callback:
+            progress_callback(0, len(candidates))
+        for candidate in candidates:
+            if candidate.full_name == "Fresh Precise Candidate":
+                candidate.reranker_score = 0.96
+                candidate.score = 96.0
+                candidate.verification_status = "verified"
+                candidate.ranking_model_version = "fake-reranker"
+            else:
+                candidate.reranker_score = 0.1
+                candidate.score = 58.0
+                candidate.ranking_model_version = "fake-reranker"
+        if progress_callback:
+            progress_callback(len(candidates), len(candidates))
+        return list(candidates)
+
+    monkeypatch.setattr("hr_hunter.api.rerank_candidates", _fake_rerank)
+
+    reranked_report, rerank_metrics = _rerank_merged_report_candidates(
+        report,
+        brief=brief,
+        rerank_top_n=10,
+    )
+
+    assert rerank_metrics == {
+        "enabled": True,
+        "rerank_target": 2,
+        "reranked_count": 2,
+    }
+    assert [candidate.full_name for candidate in reranked_report.candidates] == [
+        "Fresh Precise Candidate",
+        "Noisy Legacy Candidate",
+    ]
 
 
 def test_collect_provider_query_exclusions_from_report_skips_skipped_queries() -> None:

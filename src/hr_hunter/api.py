@@ -45,6 +45,7 @@ from hr_hunter.recruiter_app import (
 )
 from hr_hunter.remote import RemoteSourcingClient, RemoteSourcingError, candidate_from_remote
 from hr_hunter.ranker import train_learned_ranker
+from hr_hunter.reranker import parse_reranker_settings, rerank_candidates
 from hr_hunter.scoring import sort_candidates
 from hr_hunter.state import (
     complete_job,
@@ -342,6 +343,40 @@ def _merge_ranked_report_candidates(report, supplemental_report, *, brief=None):
         brief,
     )
     return report
+
+
+def _rerank_merged_report_candidates(
+    report,
+    *,
+    brief=None,
+    rerank_top_n: int | None = None,
+):
+    if brief is None or not list(getattr(report, "candidates", []) or []):
+        return report, {"enabled": False, "rerank_target": 0, "reranked_count": 0}
+
+    provider_settings = getattr(brief, "provider_settings", None)
+    if not isinstance(provider_settings, dict):
+        provider_settings = {}
+        brief.provider_settings = provider_settings
+    reranker_settings = provider_settings.get("reranker")
+    if not isinstance(reranker_settings, dict):
+        reranker_settings = {}
+        provider_settings["reranker"] = reranker_settings
+    if rerank_top_n is not None:
+        reranker_settings["top_n"] = max(1, int(rerank_top_n or 1))
+
+    parsed_settings = parse_reranker_settings(brief)
+    if not parsed_settings.enabled:
+        report.candidates = sort_candidates(report.candidates, brief)
+        return report, {"enabled": False, "rerank_target": 0, "reranked_count": 0}
+
+    rerank_target = min(len(report.candidates), max(1, int(parsed_settings.top_n or 1)))
+    report.candidates = sort_candidates(rerank_candidates(brief, report.candidates), brief)
+    return report, {
+        "enabled": True,
+        "rerank_target": rerank_target,
+        "reranked_count": rerank_target,
+    }
 
 
 def _collect_candidate_keys_from_report(report: Any) -> Set[str]:
@@ -1468,6 +1503,86 @@ def create_app() -> "FastAPI":
                     else:
                         stagnant_quality_rounds = 0
                     brief = recovery_brief
+                    rerank_window_target = max(
+                        int(quality_recovery_settings["reranker_top_n"] or 0),
+                        int(len(report.candidates) or 0),
+                    )
+                    _push_progress(
+                        {
+                            "stage": "rerank",
+                            "stage_label": "Rerank",
+                            "queries_completed": int(latest_telemetry.get("queries_completed", 0) or 0),
+                            "queries_total": int(latest_telemetry.get("queries_total", 0) or 0),
+                            "raw_found": max(
+                                int(latest_telemetry.get("raw_found", 0) or 0),
+                                len(report.candidates),
+                            ),
+                            "unique_after_dedupe": len(report.candidates),
+                            "reranked_count": 0,
+                            "rerank_target": min(len(report.candidates), max(1, rerank_window_target)),
+                            "finalized_count": min(requested_limit, len(report.candidates)),
+                            "verified_count": int(report.summary.get("verified_count", 0) or 0),
+                            "review_count": int(report.summary.get("review_count", 0) or 0),
+                            "reject_count": int(report.summary.get("reject_count", 0) or 0),
+                            "percent": 88,
+                            "round": recovery_round,
+                            "message": (
+                                "Re-ranking the combined candidate pool after expanding recovery round "
+                                f"{recovery_round}."
+                            ),
+                        },
+                        checkpoint_patch={"event": "quality_recovery_rerank"},
+                        force=True,
+                    )
+                    report, rerank_metrics = await asyncio.to_thread(
+                        _rerank_merged_report_candidates,
+                        report,
+                        brief=brief,
+                        rerank_top_n=int(quality_recovery_settings["reranker_top_n"] or 0),
+                    )
+                    report.summary = dict(report.summary or {})
+                    rerank_pipeline_metrics = dict(report.summary.get("pipeline_metrics", {}) or {})
+                    rerank_pipeline_metrics["raw_found"] = max(
+                        len(report.candidates),
+                        int(rerank_pipeline_metrics.get("raw_found", 0) or 0),
+                    )
+                    rerank_pipeline_metrics["unique_after_dedupe"] = max(
+                        len(report.candidates),
+                        int(rerank_pipeline_metrics.get("unique_after_dedupe", 0) or 0),
+                    )
+                    rerank_pipeline_metrics["rerank_target"] = max(
+                        int(rerank_pipeline_metrics.get("rerank_target", 0) or 0),
+                        int(rerank_metrics.get("rerank_target", 0) or 0),
+                    )
+                    rerank_pipeline_metrics["reranked_count"] = max(
+                        int(rerank_pipeline_metrics.get("reranked_count", 0) or 0),
+                        int(rerank_metrics.get("reranked_count", 0) or 0),
+                    )
+                    report.summary["pipeline_metrics"] = rerank_pipeline_metrics
+                    _push_progress(
+                        {
+                            "stage": "rerank",
+                            "stage_label": "Rerank",
+                            "queries_completed": int(latest_telemetry.get("queries_completed", 0) or 0),
+                            "queries_total": int(latest_telemetry.get("queries_total", 0) or 0),
+                            "raw_found": int(rerank_pipeline_metrics.get("raw_found", 0) or 0),
+                            "unique_after_dedupe": int(rerank_pipeline_metrics.get("unique_after_dedupe", 0) or 0),
+                            "reranked_count": int(rerank_pipeline_metrics.get("reranked_count", 0) or 0),
+                            "rerank_target": int(rerank_pipeline_metrics.get("rerank_target", 0) or 0),
+                            "finalized_count": min(requested_limit, len(report.candidates)),
+                            "verified_count": int(report.summary.get("verified_count", 0) or 0),
+                            "review_count": int(report.summary.get("review_count", 0) or 0),
+                            "reject_count": int(report.summary.get("reject_count", 0) or 0),
+                            "percent": 91,
+                            "round": recovery_round,
+                            "message": (
+                                "Combined recovery pool reranked. Stronger fresh candidates are now moved up for "
+                                f"verification in round {recovery_round}."
+                            ),
+                        },
+                        checkpoint_patch={"event": "quality_recovery_rerank_complete"},
+                        force=True,
+                    )
                     verification_settings = dict(brief.provider_settings.get("verification", {}) or {})
                     report.candidates = prioritize_verification_candidates(
                         report.candidates,
