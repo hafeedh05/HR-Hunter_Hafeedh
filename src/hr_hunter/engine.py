@@ -51,6 +51,32 @@ def dedupe_candidates(candidates: List[CandidateProfile]) -> List[CandidateProfi
     return deduped
 
 
+def provider_candidate_limit(
+    *,
+    brief: SearchBrief,
+    requested_limit: int,
+    current_pool_size: int,
+    in_scope_count: int,
+) -> int:
+    requested = max(1, int(requested_limit or 1))
+    current = max(0, int(current_pool_size or 0))
+    if current <= 0:
+        return requested
+
+    remaining = max(0, requested - current)
+    quality_buffer = max(30, min(160, int(round(requested * 0.2))))
+    scope_gap = 0
+    if bool(getattr(brief, "scope_first_enabled", False)):
+        scope_gap = max(0, int(getattr(brief, "in_scope_target", 0) or 0) - max(0, int(in_scope_count or 0)))
+    if scope_gap > 0:
+        quality_buffer = max(quality_buffer, min(requested, max(45, int(round(scope_gap * 2.0)))))
+
+    return min(
+        requested,
+        max(40, remaining + quality_buffer),
+    )
+
+
 class SearchEngine:
     async def run(
         self,
@@ -249,10 +275,16 @@ class SearchEngine:
                         ),
                     }
                 )
+            current_provider_limit = provider_candidate_limit(
+                brief=brief,
+                requested_limit=limit,
+                current_pool_size=len(candidate_pool),
+                in_scope_count=int(last_scope_counts.get("in_scope_count", 0) or 0),
+            )
             result = await provider.run(
                 brief,
                 slices,
-                limit,
+                current_provider_limit,
                 dry_run,
                 exclude_queries=exclude_provider_queries.get(provider_name, set()),
                 progress_callback=_provider_progress,

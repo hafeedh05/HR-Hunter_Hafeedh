@@ -362,6 +362,58 @@ def test_build_ui_brief_payload_supports_top_level_search_tuning_overrides() -> 
     assert brief["provider_settings"]["retrieval"]["company_chunk_size"] == 4
 
 
+def test_build_ui_brief_payload_preserves_saved_ui_meta_search_tuning() -> None:
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "Data Analyst",
+            "titles": ["Data Analyst"],
+            "countries": ["United Arab Emirates"],
+            "cities": ["Dubai"],
+            "limit": 100,
+            "job_description": "Need a UAE data analyst with SQL, Python, dashboards, and ecommerce exposure.",
+            "jd_breakdown": {
+                "summary": "Target role: Data Analyst.",
+                "titles": ["Data Analyst"],
+                "required_keywords": ["sql", "python"],
+                "preferred_keywords": ["dashboarding"],
+                "industry_keywords": ["ecommerce"],
+                "keyword_tracks": {
+                    "scope_keywords": ["dubai", "uae"],
+                },
+            },
+            "ui_meta": {
+                "search_tuning": {
+                    "search_profile": "focused",
+                    "provider_parallel_requests": 18,
+                    "scrapingbee_max_queries": 48,
+                    "stagnation_query_window": 10,
+                    "include_history_slices": False,
+                },
+                "search_profile": "focused",
+                "scope_first_enabled": True,
+                "in_scope_target": 45,
+                "verification_scope_target": 30,
+                "brief_clarifications": {
+                    "allow_adjacent_titles": False,
+                    "strict_market_scope": True,
+                },
+            },
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["jd_breakdown"]["search_tuning"]["scrapingbee_max_queries"] == 48
+    assert brief["jd_breakdown"]["search_tuning"]["provider_parallel_requests"] == 18
+    assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 48
+    assert brief["provider_settings"]["scrapingbee_google"]["parallel_requests"] == 18
+    assert brief["scope_first_enabled"] is True
+    assert brief["in_scope_target"] == 45
+    assert brief["verification_scope_target"] == 30
+    assert brief["brief_search_profile"] == "focused"
+    assert brief["brief_clarifications"]["allow_adjacent_titles"] is False
+
+
 def test_build_ui_brief_payload_preserves_zero_verification_probe_overrides():
     payload = build_ui_brief_payload(
         {

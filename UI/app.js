@@ -52,6 +52,7 @@ const FEATURE_LABELS = {
   parser_confidence: "Parser Confidence",
   evidence_quality: "Evidence Quality",
 };
+const RUN_LOAD_TIMEOUT_MS = 25000;
 const VALID_TABS = new Set(Object.keys(TAB_META));
 const state = {
   config: null,
@@ -898,6 +899,18 @@ function startNewProject() {
 function buildUiMeta(options = {}) {
   const commitPending = options.commitPending !== false;
   const includePending = Boolean(options.includePending);
+  const savedMeta = state.selectedProject?.latest_brief_json?.ui_meta || {};
+  const savedBrief = state.selectedProject?.latest_brief_json || {};
+  const breakdownSearchTuning = state.currentBreakdown?.search_tuning;
+  const preservedSearchTuning = (
+    breakdownSearchTuning && typeof breakdownSearchTuning === "object" && !Array.isArray(breakdownSearchTuning)
+      ? breakdownSearchTuning
+      : (
+        savedMeta.search_tuning && typeof savedMeta.search_tuning === "object" && !Array.isArray(savedMeta.search_tuning)
+          ? savedMeta.search_tuning
+          : {}
+      )
+  );
   if (commitPending) {
     Object.values(state.tokenFields).forEach((field) => field?.commitPending?.());
   }
@@ -929,6 +942,11 @@ function buildUiMeta(options = {}) {
     uploaded_job_description_parser: state.uploadedJobDescription?.parser || "",
     anchors: currentAnchorValues(),
     brief_clarifications: { ...state.briefClarifications },
+    search_tuning: { ...preservedSearchTuning },
+    search_profile: savedMeta.search_profile || savedBrief.brief_search_profile || "",
+    scope_first_enabled: savedMeta.scope_first_enabled ?? savedBrief.scope_first_enabled ?? null,
+    in_scope_target: savedMeta.in_scope_target ?? savedBrief.in_scope_target ?? null,
+    verification_scope_target: savedMeta.verification_scope_target ?? savedBrief.verification_scope_target ?? null,
   };
 }
 
@@ -962,8 +980,13 @@ function buildBriefPayload(options = {}) {
     uploaded_job_description_name: uiMeta.uploaded_job_description_name,
     uploaded_job_description_text: uiMeta.uploaded_job_description_text,
     jd_breakdown: state.currentBreakdown,
+    search_tuning: uiMeta.search_tuning,
+    search_profile: uiMeta.search_profile,
     anchors: uiMeta.anchors,
     brief_clarifications: uiMeta.brief_clarifications,
+    scope_first_enabled: uiMeta.scope_first_enabled,
+    in_scope_target: uiMeta.in_scope_target,
+    verification_scope_target: uiMeta.verification_scope_target,
     providers: state.settings.providers,
     limit: candidateLimit,
     csv_export_limit: candidateLimit,
@@ -1269,6 +1292,18 @@ function formValuesFromProject(project) {
   const brief = project?.latest_brief_json || {};
   const meta = brief.ui_meta || {};
   const geography = brief.geography || {};
+  const breakdown = brief.jd_breakdown && typeof brief.jd_breakdown === "object" && !Array.isArray(brief.jd_breakdown)
+    ? { ...brief.jd_breakdown }
+    : null;
+  if (
+    breakdown
+    && (!breakdown.search_tuning || typeof breakdown.search_tuning !== "object" || Array.isArray(breakdown.search_tuning))
+    && meta.search_tuning
+    && typeof meta.search_tuning === "object"
+    && !Array.isArray(meta.search_tuning)
+  ) {
+    breakdown.search_tuning = { ...meta.search_tuning };
+  }
   return {
     projectName: project?.name || "",
     clientName: project?.client_name || "",
@@ -1303,7 +1338,7 @@ function formValuesFromProject(project) {
     uploadedJobDescriptionExtension: meta.uploaded_job_description_extension || "",
     uploadedJobDescriptionParser: meta.uploaded_job_description_parser || "",
     anchors: meta.anchors || brief.anchors || {},
-    breakdown: brief.jd_breakdown || null,
+    breakdown,
     briefClarifications: meta.brief_clarifications || brief.brief_clarifications || {},
   };
 }
@@ -3170,11 +3205,18 @@ async function loadProject(projectId) {
     updateTopbarActions();
     const projectLatestRunId = String(payload.project.latest_run_id || "").trim();
     if (projectLatestRunId) {
-      await loadProjectRun(projectId, projectLatestRunId, {
-        timeoutMs: 12000,
+      let initialReport = await loadProjectRun(projectId, projectLatestRunId, {
+        timeoutMs: RUN_LOAD_TIMEOUT_MS,
         suppressErrors: true,
         selectionRequestId,
       });
+      if (!initialReport && isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
+        await loadProjectRun(projectId, projectLatestRunId, {
+          timeoutMs: RUN_LOAD_TIMEOUT_MS,
+          suppressErrors: true,
+          selectionRequestId,
+        });
+      }
     }
     if (!isCurrentProjectRequest(projectId, selectionRequestId, "projectLoadRequestId")) {
       return null;
@@ -3216,7 +3258,7 @@ async function loadProject(projectId) {
         });
         if (latestCompletedRunId) {
           await loadProjectRun(projectId, latestCompletedRunId, {
-            timeoutMs: 12000,
+            timeoutMs: RUN_LOAD_TIMEOUT_MS,
             suppressErrors: true,
             selectionRequestId,
           });

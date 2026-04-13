@@ -1789,18 +1789,30 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     breakdown = payload.get("jd_breakdown")
     if not isinstance(breakdown, dict):
         breakdown = extract_job_description_breakdown(job_description, role_title=role_title)
+    ui_meta = payload.get("ui_meta", {})
+    if not isinstance(ui_meta, dict):
+        ui_meta = {}
     keyword_tracks = breakdown.get("keyword_tracks", {})
     if not isinstance(keyword_tracks, dict):
         keyword_tracks = {}
     breakdown_search_tuning = breakdown.get("search_tuning", {})
     if not isinstance(breakdown_search_tuning, dict):
         breakdown_search_tuning = {}
+    ui_meta_search_tuning = ui_meta.get("search_tuning", {})
+    if not isinstance(ui_meta_search_tuning, dict):
+        ui_meta_search_tuning = {}
     payload_search_tuning = payload.get("search_tuning", {})
     if not isinstance(payload_search_tuning, dict):
         payload_search_tuning = {}
     search_tuning = {
         **dict(breakdown_search_tuning),
+        **dict(ui_meta_search_tuning),
         **dict(payload_search_tuning),
+    }
+    breakdown = {
+        **dict(breakdown),
+        "keyword_tracks": dict(keyword_tracks),
+        "search_tuning": dict(search_tuning),
     }
 
     years_mode = str(payload.get("years_mode", breakdown.get("years", {}).get("mode", "range")) or "range")
@@ -1852,6 +1864,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     configured_search_profile = str(
         payload.get("search_profile")
         or payload.get("brief_search_profile")
+        or ui_meta.get("search_profile")
         or search_tuning.get("search_profile")
         or ""
     ).strip().lower()
@@ -1887,6 +1900,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         search_profile=search_profile,
     )
     raw_brief_clarifications = dict(payload.get("brief_clarifications", {})) if isinstance(payload.get("brief_clarifications"), dict) else {}
+    if not raw_brief_clarifications and isinstance(ui_meta.get("brief_clarifications"), dict):
+        raw_brief_clarifications = dict(ui_meta.get("brief_clarifications", {}))
     brief_clarifications, brief_follow_up_questions = _resolve_brief_clarifications(
         raw_brief_clarifications,
         brief_follow_up_questions,
@@ -2055,6 +2070,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         verification_top_n = min(verification_top_n, max(limit, 50))
     scope_first_enabled = _coerce_bool(payload.get("scope_first_enabled"))
     if scope_first_enabled is None:
+        scope_first_enabled = _coerce_bool(ui_meta.get("scope_first_enabled"))
+    if scope_first_enabled is None:
         scope_first_enabled = _recommended_scope_first_enabled(
             search_profile=search_profile,
             executive_brief=executive_brief,
@@ -2063,6 +2080,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             company_count=len(companies),
         )
     in_scope_target = _coerce_int(payload.get("in_scope_target"))
+    if in_scope_target is None:
+        in_scope_target = _coerce_int(ui_meta.get("in_scope_target"))
     if in_scope_target is None:
         in_scope_target = _recommended_in_scope_target(
             limit=limit,
@@ -2074,6 +2093,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
     in_scope_target = min(limit, max(0, int(in_scope_target or 0)))
     verification_scope_target = _coerce_int(payload.get("verification_scope_target"))
+    if verification_scope_target is None:
+        verification_scope_target = _coerce_int(ui_meta.get("verification_scope_target"))
     if verification_scope_target is None:
         verification_scope_target = _recommended_verification_scope_target(
             limit=limit,
