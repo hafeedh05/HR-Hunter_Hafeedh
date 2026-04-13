@@ -480,6 +480,21 @@ def _quality_recovery_verification_candidates(candidates: List[Any], *, limit: i
     return fallback_candidates[:shortlist_limit]
 
 
+def _resolve_top_up_max_rounds(payload: Dict[str, Any] | None) -> int:
+    raw_value: Any = None
+    if isinstance(payload, dict):
+        raw_value = payload.get("top_up_max_rounds")
+        if raw_value is None:
+            search_tuning = payload.get("search_tuning")
+            if isinstance(search_tuning, dict):
+                raw_value = search_tuning.get("top_up_max_rounds")
+    try:
+        resolved = int(raw_value) if raw_value is not None else 8
+    except (TypeError, ValueError):
+        resolved = 8
+    return max(0, resolved)
+
+
 def _resolve_pipeline_progress_percent(
     *,
     stage: str,
@@ -799,7 +814,7 @@ def create_app() -> "FastAPI":
         current_unique_count = len(report.candidates)
         top_up_rounds = 0
         top_up_notes: List[str] = []
-        max_rounds = max(1, int(payload.get("top_up_max_rounds", 8) or 8))
+        max_rounds = _resolve_top_up_max_rounds(payload)
         stagnant_rounds = 0
         source_exhausted = False
 

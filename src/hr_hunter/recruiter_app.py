@@ -2717,6 +2717,10 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Senior Supply Chain Manager",
                     "Supply Planning Manager",
                     "Demand Planning Manager",
+                    "Logistics & Supply Chain Manager",
+                    "S&OP Manager",
+                    "Distribution Manager",
+                    "Inventory Planning Manager",
                 ],
                 "countries": [
                     "United Arab Emirates",
@@ -2725,6 +2729,8 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Kuwait",
                     "Oman",
                     "Bahrain",
+                    "Egypt",
+                    "Jordan",
                 ],
                 "continents": [],
                 "cities": [
@@ -2739,6 +2745,9 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Kuwait City",
                     "Muscat",
                     "Manama",
+                    "Cairo",
+                    "Alexandria",
+                    "Amman",
                 ],
                 "company_targets": [],
                 "peer_company_targets": [
@@ -2752,6 +2761,12 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "DHL",
                     "Unilever",
                     "Nestle",
+                    "PepsiCo",
+                    "P&G",
+                    "Lulu Group",
+                    "Carrefour",
+                    "DP World",
+                    "Almarai",
                 ],
                 "company_match_mode": "both",
                 "employment_status_mode": "any",
@@ -2775,6 +2790,9 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "IBP",
                     "Regional Distribution",
                     "SAP",
+                    "Warehouse Management",
+                    "Supply Network Planning",
+                    "Transportation",
                 ],
                 "industry_keywords": [
                     "retail",
@@ -2782,14 +2800,18 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "consumer goods",
                     "logistics",
                     "distribution",
+                    "fmcg",
+                    "manufacturing",
+                    "food distribution",
                 ],
                 "job_description": (
-                    "We are hiring a GCC Supply Chain Manager to lead planning, inventory, logistics, and "
-                    "fulfillment performance across the United Arab Emirates, Saudi Arabia, Qatar, Kuwait, Oman, and "
-                    "Bahrain. The brief prioritizes candidates with strong public evidence of S&OP ownership, demand "
-                    "and supply planning, inventory optimization, ERP-led operations, and distribution or warehouse "
-                    "coordination across GCC supply chains. Experience scaling service levels across omnichannel "
-                    "retail, consumer goods, 3PL, or regional distribution environments is highly valuable."
+                    "We are hiring a regional Supply Chain Manager to lead planning, inventory, logistics, and "
+                    "fulfillment performance across the United Arab Emirates, Saudi Arabia, Qatar, Kuwait, Oman, "
+                    "Bahrain, Egypt, and Jordan. The brief prioritizes candidates with strong public evidence of "
+                    "S&OP ownership, demand and supply planning, inventory optimization, ERP-led operations, and "
+                    "distribution or warehouse coordination across GCC or wider MENA supply chains. Experience "
+                    "scaling service levels across omnichannel retail, consumer goods, 3PL, manufacturing, or "
+                    "regional distribution environments is highly valuable."
                 ),
                 "brief_clarifications": {
                     "prioritize_first_location": False,
@@ -2800,12 +2822,13 @@ def build_app_bootstrap() -> Dict[str, Any]:
                 "jd_breakdown": {
                     **extract_job_description_breakdown(
                         (
-                            "We are hiring a GCC Supply Chain Manager to lead planning, inventory, logistics, and "
+                            "We are hiring a regional Supply Chain Manager to lead planning, inventory, logistics, and "
                             "fulfillment performance across the United Arab Emirates, Saudi Arabia, Qatar, Kuwait, Oman, "
-                            "and Bahrain. The brief prioritizes candidates with strong public evidence of S&OP ownership, "
-                            "demand and supply planning, inventory optimization, ERP-led operations, and distribution or "
-                            "warehouse coordination across GCC supply chains. Experience scaling service levels across "
-                            "omnichannel retail, consumer goods, 3PL, or regional distribution environments is highly valuable."
+                            "Bahrain, Egypt, and Jordan. The brief prioritizes candidates with strong public evidence of "
+                            "S&OP ownership, demand and supply planning, inventory optimization, ERP-led operations, and "
+                            "distribution or warehouse coordination across GCC or wider MENA supply chains. Experience "
+                            "scaling service levels across omnichannel retail, consumer goods, 3PL, manufacturing, or "
+                            "regional distribution environments is highly valuable."
                         ),
                         role_title="Supply Chain Manager",
                     ),
@@ -2814,6 +2837,10 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         "Senior Supply Chain Manager",
                         "Supply Planning Manager",
                         "Demand Planning Manager",
+                        "Logistics & Supply Chain Manager",
+                        "S&OP Manager",
+                        "Distribution Manager",
+                        "Inventory Planning Manager",
                     ],
                     "required_keywords": [
                         "s&op",
@@ -2836,6 +2863,9 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         "consumer goods",
                         "logistics",
                         "distribution",
+                        "fmcg",
+                        "manufacturing",
+                        "food distribution",
                     ],
                     "years": {
                         "mode": "plus_minus",
@@ -2871,16 +2901,20 @@ def build_app_bootstrap() -> Dict[str, Any]:
                             "doha",
                             "jebel ali",
                             "regional distribution",
+                            "mena",
+                            "cairo",
+                            "amman",
                         ],
                     },
                     "search_tuning": {
-                        "search_profile": FOCUSED_SEARCH_PROFILE,
+                        "search_profile": BALANCED_SEARCH_PROFILE,
                         "reranker_model_name": DEFAULT_UI_RERANKER_MODEL,
-                        "internal_fetch_limit_override": 480,
-                        "reranker_top_n": 260,
-                        "provider_parallel_requests": 28,
-                        "scrapingbee_max_queries": 72,
-                        "max_geo_groups": 6,
+                        "internal_fetch_limit_override": 540,
+                        "top_up_max_rounds": 1,
+                        "reranker_top_n": 300,
+                        "provider_parallel_requests": 32,
+                        "scrapingbee_max_queries": 96,
+                        "max_geo_groups": 8,
                         "geo_group_size": 1,
                         "company_chunk_size": 4,
                         "company_slice_location_group_limit": 1,
@@ -2889,22 +2923,22 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         "stagnation_min_results": 280,
                         "include_history_slices": False,
                         "include_discovery_slices": True,
-                        "verification_top_n": 220,
-                        "verification_parallel_candidates": 40,
+                        "verification_top_n": 260,
+                        "verification_parallel_candidates": 48,
                         "verification_location_probe_queries": 1,
-                        "verification_company_location_probe_queries": 1,
+                        "verification_company_location_probe_queries": 2,
                         "quality_recovery": {
                             "enabled": True,
                             "min_verified_count": 50,
                             "max_reject_count": 50,
                             "max_rounds": 3,
                             "fetch_limit_increment": 120,
-                            "parallel_requests": 32,
-                            "max_queries": 96,
-                            "max_geo_groups": 6,
-                            "reranker_top_n": 300,
-                            "verification_top_n": 260,
-                            "verification_parallel_candidates": 48,
+                            "parallel_requests": 36,
+                            "max_queries": 120,
+                            "max_geo_groups": 8,
+                            "reranker_top_n": 320,
+                            "verification_top_n": 300,
+                            "verification_parallel_candidates": 56,
                             "disable_history_slices": True,
                             "disable_registry_memory": True,
                             "force_discovery_slices": True,
@@ -2913,14 +2947,14 @@ def build_app_bootstrap() -> Dict[str, Any]:
                             "force_adjacent_titles": True,
                         },
                         "query_family_budgets": {
-                            "team_leadership_pages": 1,
+                            "team_leadership_pages": 2,
                             "appointment_news_pages": 3,
                             "speaker_bio_pages": 1,
                             "award_industry_pages": 0,
-                            "industry_association_pages": 2,
+                            "industry_association_pages": 3,
                             "trade_directory_pages": 2,
-                            "org_chart_profile_pages": 2,
-                            "profile_like_public_pages": 18,
+                            "org_chart_profile_pages": 3,
+                            "profile_like_public_pages": 24,
                         },
                     },
                 },

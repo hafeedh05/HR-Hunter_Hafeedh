@@ -216,11 +216,15 @@ def test_build_app_bootstrap_supply_chain_preset_is_distinct_from_ceo_demo() -> 
     assert "Amazon" in preset["peer_company_targets"]
     assert "Saudi Arabia" in preset["countries"]
     assert "Qatar" in preset["countries"]
+    assert "Egypt" in preset["countries"]
+    assert "Jordan" in preset["countries"]
+    assert "Logistics & Supply Chain Manager" in preset["titles"]
     assert "S&OP" in preset["must_have_keywords"]
     assert preset["brief_clarifications"]["strict_market_scope"] is False
     assert preset["registry_memory_enabled"] is False
     assert preset["jd_breakdown"]["titles"][0] == "Supply Chain Manager"
-    assert preset["jd_breakdown"]["search_tuning"]["search_profile"] == "focused"
+    assert preset["jd_breakdown"]["search_tuning"]["search_profile"] == "balanced"
+    assert preset["jd_breakdown"]["search_tuning"]["top_up_max_rounds"] == 1
     assert preset["jd_breakdown"]["search_tuning"]["include_history_slices"] is False
     assert preset["jd_breakdown"]["search_tuning"]["quality_recovery"]["enabled"] is True
     assert preset["jd_breakdown"]["search_tuning"]["quality_recovery"]["min_verified_count"] == 50

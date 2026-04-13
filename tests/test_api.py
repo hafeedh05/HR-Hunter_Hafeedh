@@ -9,6 +9,7 @@ from hr_hunter.api import (
     _rerank_merged_report_candidates,
     _quality_recovery_settings,
     _quality_recovery_verification_candidates,
+    _resolve_top_up_max_rounds,
     _resolve_effective_verification_target,
     _resolve_pipeline_progress_percent,
     _runtime_storage_snapshot,
@@ -356,6 +357,13 @@ def test_rerank_merged_report_candidates_reorders_combined_recovery_pool(monkeyp
         "Fresh Precise Candidate",
         "Noisy Legacy Candidate",
     ]
+
+
+def test_resolve_top_up_max_rounds_reads_payload_and_search_tuning() -> None:
+    assert _resolve_top_up_max_rounds(None) == 8
+    assert _resolve_top_up_max_rounds({}) == 8
+    assert _resolve_top_up_max_rounds({"search_tuning": {"top_up_max_rounds": 1}}) == 1
+    assert _resolve_top_up_max_rounds({"top_up_max_rounds": 0}) == 0
 
 
 def test_collect_provider_query_exclusions_from_report_skips_skipped_queries() -> None:
