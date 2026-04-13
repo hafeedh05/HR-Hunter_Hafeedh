@@ -108,6 +108,16 @@ def _repair_display_text(value: object) -> str:
     return cleaned
 
 
+def _feature_score(candidate: CandidateProfile, key: str) -> float | None:
+    feature_scores = getattr(candidate, "feature_scores", None)
+    if not isinstance(feature_scores, dict) or key not in feature_scores:
+        return None
+    try:
+        return float(feature_scores.get(key, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _company_match_context(candidate: CandidateProfile) -> str:
     if candidate.current_target_company_match and candidate.target_company_history_match:
         return "Current and past target company"
@@ -252,8 +262,13 @@ def _infer_evidence_freshness_year(candidate: CandidateProfile) -> int | None:
 
 
 def _infer_current_function_fit(candidate: CandidateProfile, matched_title_family: str) -> float:
+    explicit_feature_score = _feature_score(candidate, "current_function_fit")
+    if explicit_feature_score is not None:
+        return explicit_feature_score
     if candidate.current_function_fit > 0.0:
         return candidate.current_function_fit
+    if any(str(note).startswith("current_function_fit: blocked") for note in candidate.verification_notes):
+        return 0.0
     if candidate.current_title_match:
         return 1.0
     if matched_title_family != "other" and candidate.matched_titles:

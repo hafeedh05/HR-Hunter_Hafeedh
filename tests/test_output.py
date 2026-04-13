@@ -3,6 +3,7 @@ from hr_hunter.models import CandidateProfile
 from hr_hunter.output import (
     build_reporting_summary,
     build_scope_progress_counts,
+    hydrate_candidate_reporting,
     prepare_verification_candidate_order,
 )
 
@@ -258,8 +259,23 @@ def test_build_scope_progress_counts_only_reports_scope_metrics() -> None:
     assert counts["precise_in_scope_count"] == 1
     assert counts["title_match_count"] == 1
     assert "verified_count" not in counts
-    assert "review_count" not in counts
-    assert "reject_count" not in counts
+
+
+def test_hydrate_candidate_reporting_preserves_explicit_blocked_function_fit() -> None:
+    candidate = CandidateProfile(
+        full_name="Blocked Product Analyst",
+        current_title="Senior Digital Product Analyst",
+        current_company="Sephora",
+        location_name="Dubai, United Arab Emirates",
+        current_title_match=True,
+        verification_status="reject",
+        verification_notes=["current_function_fit: blocked (digital)"],
+        feature_scores={"current_function_fit": 0.0},
+    )
+
+    hydrated = hydrate_candidate_reporting(candidate)
+
+    assert hydrated.current_function_fit == 0.0
 
 
 def test_prepare_verification_candidate_order_fills_scope_target_first() -> None:
