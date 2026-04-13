@@ -5,6 +5,8 @@ from hr_hunter.output import (
     build_reporting_summary,
     hydrate_candidate_reporting,
     prepare_verification_shortlist,
+    sanitize_brief_payload,
+    sanitize_report_summary,
 )
 
 
@@ -217,6 +219,67 @@ def test_build_reporting_summary_keeps_non_executive_diagnostics_copy_generic() 
     assert diagnostics["enabled"] is True
     assert all("executive" not in issue["message"].lower() for issue in diagnostics["issues"])
     assert all("executive" not in issue["action"].lower() for issue in diagnostics["issues"])
+
+
+def test_sanitize_scope_legacy_fields_from_brief_and_summary() -> None:
+    brief = sanitize_brief_payload(
+        {
+            "role_title": "Supply Chain Manager",
+            "in_scope_target": 150,
+            "verification_scope_target": 120,
+            "scope_first_enabled": True,
+        }
+    )
+    summary = sanitize_report_summary(
+        {
+            "verified_count": 8,
+            "in_scope_count": 13,
+            "precise_in_scope_count": 13,
+            "scope_counts": {"in_scope": 13},
+            "verification_scope_target": 120,
+            "verification_shortlist_scope_count": 25,
+            "verification_shortlist_precise_scope_count": 21,
+        }
+    )
+
+    assert brief == {"role_title": "Supply Chain Manager"}
+    assert summary == {"verified_count": 8}
+
+
+def test_build_reporting_summary_drops_legacy_scope_counts() -> None:
+    summary = build_reporting_summary(
+        [
+            _candidate(
+                name="Verified",
+                status="verified",
+                score=82.0,
+                current_title_match=True,
+                location_aligned=True,
+                location_bucket="named_target_location",
+                parser_confidence=0.9,
+                evidence_quality_score=0.8,
+                skill_overlap_score=0.75,
+                current_function_fit=0.78,
+                years_fit_score=0.72,
+                industry_fit_score=0.7,
+                cap_reasons=[],
+            )
+        ],
+        {
+            "verified_count": 1,
+            "in_scope_count": 1,
+            "precise_in_scope_count": 1,
+            "scope_counts": {"in_scope": 1},
+            "verification_scope_target": 10,
+            "verification_shortlist_scope_count": 1,
+        },
+    )
+
+    assert "in_scope_count" not in summary
+    assert "precise_in_scope_count" not in summary
+    assert "scope_counts" not in summary
+    assert "verification_scope_target" not in summary
+    assert "verification_shortlist_scope_count" not in summary
 
 
 def test_build_progress_counts_only_reports_match_metrics() -> None:

@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 from hr_hunter.config import env_flag
 from hr_hunter.db import DbIntegrityError, connect_database, describe_database_target, resolve_database_target
-from hr_hunter.output import load_report
+from hr_hunter.output import load_report, sanitize_brief_payload, sanitize_report_summary
 from hr_hunter.state import init_state_db, list_jobs, stop_job
 
 
@@ -720,16 +720,18 @@ def _validated_member_ids(
 def _project_summary_from_row(row: Any, members: List[Dict[str, Any]]) -> Dict[str, Any]:
     brief_payload = {}
     try:
-        brief_payload = json.loads(row["latest_brief_json"] or "{}")
+        brief_payload = sanitize_brief_payload(json.loads(row["latest_brief_json"] or "{}"))
     except Exception:
         brief_payload = {}
     column_names = set(row.keys())
     latest_run_summary = {}
     latest_run_candidate_count = int(row["latest_run_candidate_count"] or 0) if "latest_run_candidate_count" in column_names else 0
     if "latest_run_summary_json" in column_names:
-        latest_run_summary = _stored_run_summary(
-            str(row["latest_run_summary_json"] or ""),
-            candidate_count=latest_run_candidate_count,
+        latest_run_summary = sanitize_report_summary(
+            _stored_run_summary(
+                str(row["latest_run_summary_json"] or ""),
+                candidate_count=latest_run_candidate_count,
+            )
         )
     return {
         "id": row["id"],
@@ -877,9 +879,11 @@ def get_project(
     project["latest_run_status"] = str((latest_run_stats["status"] if latest_run_stats else "") or "")
     project["latest_run_execution_backend"] = str((latest_run_stats["execution_backend"] if latest_run_stats else "") or "")
     if latest_run_stats:
-        project["latest_run_summary"] = _stored_run_summary(
-            str(latest_run_stats["summary_json"] or ""),
-            candidate_count=project["latest_run_candidate_count"],
+        project["latest_run_summary"] = sanitize_report_summary(
+            _stored_run_summary(
+                str(latest_run_stats["summary_json"] or ""),
+                candidate_count=project["latest_run_candidate_count"],
+            )
         )
     else:
         project["latest_run_summary"] = {}

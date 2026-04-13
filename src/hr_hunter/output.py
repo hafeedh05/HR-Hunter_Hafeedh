@@ -51,6 +51,19 @@ CSV_FIELDNAMES = [
     "source_url",
     "source",
 ]
+LEGACY_SCOPE_SUMMARY_KEYS = {
+    "in_scope_count",
+    "precise_in_scope_count",
+    "scope_counts",
+    "verification_scope_target",
+    "verification_shortlist_scope_count",
+    "verification_shortlist_precise_scope_count",
+}
+LEGACY_SCOPE_BRIEF_KEYS = {
+    "scope_first_enabled",
+    "in_scope_target",
+    "verification_scope_target",
+}
 
 
 def _clean_reason_values(values: Iterable[str]) -> List[str]:
@@ -69,6 +82,24 @@ def _clean_reason_values(values: Iterable[str]) -> List[str]:
 
 def _serialize_multi_value(values: Iterable[str]) -> str:
     return "; ".join(_clean_reason_values(values))
+
+
+def sanitize_brief_payload(payload: Dict[str, object] | None) -> Dict[str, object]:
+    if not isinstance(payload, dict):
+        return {}
+    sanitized = dict(payload)
+    for key in LEGACY_SCOPE_BRIEF_KEYS:
+        sanitized.pop(key, None)
+    return sanitized
+
+
+def sanitize_report_summary(summary: Dict[str, object] | None) -> Dict[str, object]:
+    if not isinstance(summary, dict):
+        return {}
+    sanitized = dict(summary)
+    for key in LEGACY_SCOPE_SUMMARY_KEYS:
+        sanitized.pop(key, None)
+    return sanitized
 
 
 def _repair_display_text(value: object) -> str:
@@ -565,7 +596,7 @@ def build_reporting_summary(
         ),
         "weak": len([candidate for candidate in hydrated_candidates if candidate.qualification_tier == "weak"]),
     }
-    summary = dict(base_summary or {})
+    summary = sanitize_report_summary(base_summary)
     summary.update(
         {
             "candidate_count": len(hydrated_candidates),
@@ -1190,7 +1221,7 @@ def load_report(path: Path) -> SearchRunReport:
         generated_at=payload.get("generated_at", ""),
         provider_results=provider_results,
         candidates=[build_candidate(candidate) for candidate in payload.get("candidates", [])],
-        summary=payload.get("summary", {}),
+        summary=sanitize_report_summary(payload.get("summary", {})),
     )
     return hydrate_report_reporting(report)
 

@@ -504,6 +504,100 @@ def test_list_project_runs_uses_stored_summary_without_loading_artifact(tmp_path
     assert project_summary["latest_run_status"] == "completed"
 
 
+def test_project_summaries_strip_legacy_scope_fields(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "workspace.db"
+    init_workspace_db(db_path)
+    admin_setup = get_user_totp_setup(email=DEFAULT_ADMIN_EMAIL, db_path=db_path)
+    admin = authenticate_user(
+        DEFAULT_ADMIN_EMAIL,
+        generate_totp_code(admin_setup["totp"]["secret"]),
+        db_path=db_path,
+    )["user"]
+
+    project = create_project(
+        admin,
+        name="Legacy Scope Project",
+        client_name="Client",
+        role_title="Supply Chain Manager",
+        target_geography="UAE",
+        brief_json={
+            "role_title": "Supply Chain Manager",
+            "in_scope_target": 150,
+            "verification_scope_target": 120,
+            "scope_first_enabled": True,
+        },
+        db_path=db_path,
+    )
+
+    report = SearchRunReport(
+        run_id="workspace-legacy-scope-run",
+        brief_id="brief",
+        dry_run=False,
+        generated_at="2026-04-07T00:00:00+00:00",
+        provider_results=[],
+        candidates=[CandidateProfile(full_name="Verified Candidate", verification_status="verified", score=82.0)],
+        summary={"verified_count": 1},
+    )
+    json_path, csv_path = write_report(report, tmp_path)
+
+    with sqlite3.connect(str(db_path)) as connection:
+        connection.execute(
+            """
+            INSERT INTO search_runs (
+                id, mandate_id, brief_id, org_id, status, execution_backend, provider_order_json,
+                summary_json, report_json_path, report_csv_path, dry_run, candidate_count,
+                accepted_count, limit_requested, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report.run_id,
+                project["id"],
+                "brief",
+                "local:project:" + project["id"],
+                "completed",
+                "local_engine",
+                json.dumps(["scrapingbee_google"]),
+                json.dumps(
+                    {
+                        "verified_count": 1,
+                        "candidate_count": 1,
+                        "in_scope_count": 1,
+                        "precise_in_scope_count": 1,
+                        "scope_counts": {"in_scope": 1},
+                        "verification_scope_target": 10,
+                    }
+                ),
+                str(json_path),
+                str(csv_path),
+                0,
+                1,
+                1,
+                25,
+                "2026-04-07T09:00:00+00:00",
+                "2026-04-07T09:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "UPDATE projects SET latest_run_id = ?, latest_run_at = ? WHERE id = ?",
+            (report.run_id, "2026-04-07T09:00:00+00:00", project["id"]),
+        )
+
+    monkeypatch.setattr("hr_hunter.workspace.load_report", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("load_report should not run")))
+
+    project_summary = get_project(admin, project_id=project["id"], db_path=db_path)
+    project_summaries = list_projects(admin, db_path=db_path)
+    listed = next(item for item in project_summaries if item["id"] == project["id"])
+
+    for payload in (project_summary, listed):
+        assert "in_scope_target" not in payload["latest_brief_json"]
+        assert "verification_scope_target" not in payload["latest_brief_json"]
+        assert "scope_first_enabled" not in payload["latest_brief_json"]
+        assert "in_scope_count" not in payload["latest_run_summary"]
+        assert "precise_in_scope_count" not in payload["latest_run_summary"]
+        assert "scope_counts" not in payload["latest_run_summary"]
+        assert "verification_scope_target" not in payload["latest_run_summary"]
+
+
 def test_get_project_run_report_trims_provider_and_candidate_payload(tmp_path: Path):
     db_path = tmp_path / "workspace.db"
     init_workspace_db(db_path)

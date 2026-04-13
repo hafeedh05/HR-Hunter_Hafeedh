@@ -566,10 +566,14 @@ function updateTopbarActions() {
   const runButton = document.getElementById("top-run-button");
   const onProjects = state.activeTab === "projects";
   const onHunt = state.activeTab === "recruiter";
+  const pendingRoleValue = String(document.getElementById("role-title")?.value || "").trim();
+  const loadingCurrentProject = Boolean(onHunt && state.projectLoadPending && state.selectedProjectId && !pendingRoleValue);
 
   saveButton.hidden = !onProjects;
   deleteButton.hidden = !(onProjects && state.selectedProjectId);
   runButton.hidden = !onHunt;
+  runButton.disabled = loadingCurrentProject;
+  runButton.textContent = loadingCurrentProject ? "Loading Project..." : "Run Search";
 }
 
 function selectedProjectFromList() {
@@ -3292,6 +3296,7 @@ async function loadProject(projectId) {
     if (!state.selectedProject || state.selectedProject.id !== cachedProject.id) {
       state.selectedProject = cachedProject;
     }
+    populateProjectForm(cachedProject);
     persistStoredState();
     renderProjectList();
     renderProjectSummary();
