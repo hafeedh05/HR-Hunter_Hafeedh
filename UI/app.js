@@ -509,7 +509,16 @@ function switchTab(tabId) {
   closeNav();
   persistStoredState();
   setStatus(state.selectedProject ? `${state.selectedProject.name} selected.` : "Ready", "default", TAB_META[resolvedTab].description);
-  syncLiveJobStatus();
+  const liveStatusVisible = syncLiveJobStatus();
+  if (
+    state.selectedProjectId
+    && (resolvedTab === "results" || resolvedTab === "candidates" || resolvedTab === "history")
+    && (!liveStatusVisible || (resolvedTab === "results" && !state.currentReport))
+  ) {
+    void loadLatestProjectJob(state.selectedProjectId, { timeoutMs: 6000 }).catch(() => {
+      // Non-fatal. The next scheduled refresh can recover if this one times out.
+    });
+  }
 }
 
 function restoreTabAfterSessionBootstrap() {
