@@ -91,6 +91,18 @@ def test_persist_search_run_populates_history_and_registry(tmp_path: Path) -> No
     assert memory_results
     assert memory_results[0].full_name == "Registry Candidate"
 
+    import sqlite3
+
+    with sqlite3.connect(str(db_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT latest_candidate_json FROM candidate_registry WHERE identity_key = ?",
+            ("url:linkedin.com/in/registry-candidate",),
+        ).fetchone()
+    registry_payload = json.loads(row["latest_candidate_json"] or "{}")
+    assert registry_payload["raw"] == {}
+    assert registry_payload["evidence_records"] == []
+
 
 def test_review_and_similar_candidates_are_persisted(tmp_path: Path) -> None:
     brief = _build_brief()

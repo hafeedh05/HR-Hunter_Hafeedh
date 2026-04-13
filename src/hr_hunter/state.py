@@ -448,6 +448,16 @@ def _mandate_id(org_id: str, brief: SearchBrief) -> str:
     return f"mandate:{org_id}:{brief.id}"
 
 
+def _candidate_registry_snapshot(candidate: CandidateProfile) -> Dict[str, Any]:
+    snapshot = asdict(candidate)
+    snapshot["raw"] = {}
+    snapshot["evidence_records"] = []
+    snapshot["experience"] = list(candidate.experience[:4])
+    snapshot["verification_notes"] = list(candidate.verification_notes[:12])
+    snapshot["search_strategies"] = list(candidate.search_strategies[:8])
+    return snapshot
+
+
 def _candidate_registry_row(
     connection: Any,
     *,
@@ -506,7 +516,7 @@ def _candidate_registry_row(
             candidate.location_name,
             candidate.linkedin_url or "",
             candidate.source_url or "",
-            _json(asdict(candidate)),
+            _json(_candidate_registry_snapshot(candidate)),
             _json(search_ids),
             len(search_ids),
             created_at,
