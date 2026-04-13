@@ -541,6 +541,16 @@ function switchTab(tabId) {
   }
 }
 
+function openProjectTab(projectId, tabId) {
+  const resolvedProjectId = String(projectId || "").trim();
+  if (resolvedProjectId) {
+    void loadProject(resolvedProjectId).catch((error) => {
+      setStatus("Project could not load.", "danger", error.message);
+    });
+  }
+  switchTab(tabId);
+}
+
 function restoreTabAfterSessionBootstrap() {
   if (!state.selectedProjectId) {
     return "projects";
@@ -1450,23 +1460,14 @@ function renderProjectSummary() {
         </div>
       </div>
     `;
-    document.getElementById("summary-open-recruiter").addEventListener("click", async () => {
-      if (state.selectedProjectId) {
-        await loadProject(state.selectedProjectId);
-      }
-      switchTab("recruiter");
+    document.getElementById("summary-open-recruiter").addEventListener("click", () => {
+      openProjectTab(state.selectedProjectId, "recruiter");
     });
-    document.getElementById("summary-open-results").addEventListener("click", async () => {
-      if (state.selectedProjectId) {
-        await loadProject(state.selectedProjectId);
-      }
-      switchTab("results");
+    document.getElementById("summary-open-results").addEventListener("click", () => {
+      openProjectTab(state.selectedProjectId, "results");
     });
-    document.getElementById("summary-open-candidates").addEventListener("click", async () => {
-      if (state.selectedProjectId) {
-        await loadProject(state.selectedProjectId);
-      }
-      switchTab("candidates");
+    document.getElementById("summary-open-candidates").addEventListener("click", () => {
+      openProjectTab(state.selectedProjectId, "candidates");
     });
   }
 
@@ -1544,9 +1545,8 @@ function renderProjectList() {
     button.addEventListener("click", async () => {
       await loadProject(button.dataset.projectId);
     });
-    button.addEventListener("dblclick", async () => {
-      await loadProject(button.dataset.projectId);
-      switchTab("recruiter");
+    button.addEventListener("dblclick", () => {
+      openProjectTab(button.dataset.projectId, "recruiter");
     });
   });
 }
@@ -3024,9 +3024,8 @@ function attachHistoryHandlers() {
     });
   });
   document.querySelectorAll("[data-project-open]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      await loadProject(button.dataset.projectOpen);
-      switchTab("results");
+    button.addEventListener("click", () => {
+      openProjectTab(button.dataset.projectOpen, "results");
     });
   });
 }
