@@ -510,6 +510,7 @@ function switchTab(tabId) {
   persistStoredState();
   setStatus(state.selectedProject ? `${state.selectedProject.name} selected.` : "Ready", "default", TAB_META[resolvedTab].description);
   const liveStatusVisible = syncLiveJobStatus();
+  const freshActiveJob = activeSearchJobForSelectedProject();
   const latestRunId = state.selectedProjectId
     ? String(
       state.selectedProject?.latest_run_id
@@ -522,6 +523,7 @@ function switchTab(tabId) {
     && (resolvedTab === "results" || resolvedTab === "candidates")
     && !state.currentReport
     && latestRunId
+    && !freshActiveJob
   ) {
     void loadProjectRun(state.selectedProjectId, latestRunId, {
       timeoutMs: RUN_LOAD_TIMEOUT_MS,
@@ -983,9 +985,6 @@ function buildUiMeta(options = {}) {
     brief_clarifications: { ...state.briefClarifications },
     search_tuning: { ...preservedSearchTuning },
     search_profile: savedMeta.search_profile || savedBrief.brief_search_profile || "",
-    scope_first_enabled: savedMeta.scope_first_enabled ?? savedBrief.scope_first_enabled ?? null,
-    in_scope_target: savedMeta.in_scope_target ?? savedBrief.in_scope_target ?? null,
-    verification_scope_target: savedMeta.verification_scope_target ?? savedBrief.verification_scope_target ?? null,
   };
 }
 
@@ -1023,9 +1022,6 @@ function buildBriefPayload(options = {}) {
     search_profile: uiMeta.search_profile,
     anchors: uiMeta.anchors,
     brief_clarifications: uiMeta.brief_clarifications,
-    scope_first_enabled: uiMeta.scope_first_enabled,
-    in_scope_target: uiMeta.in_scope_target,
-    verification_scope_target: uiMeta.verification_scope_target,
     providers: state.settings.providers,
     limit: candidateLimit,
     csv_export_limit: candidateLimit,
@@ -1970,6 +1966,30 @@ function resetLoadedProjectState() {
   state.selectedCandidateRef = "";
 }
 
+function clearCurrentRunSnapshot() {
+  state.projectRunRequestId = safeNumber(state.projectRunRequestId, 0) + 1;
+  state.currentReport = null;
+  state.candidateSearchQuery = "";
+  state.candidateStatusFilter = "all";
+  state.candidateLocationFilter = "all";
+  state.selectedCandidateRef = "";
+}
+
+function activeJobSupersedesCurrentReport(job = activeSearchJobForSelectedProject(), report = state.currentReport) {
+  if (!job || !isActiveJobStatus(job.status)) {
+    return false;
+  }
+  if (!report?.generated_at) {
+    return true;
+  }
+  const jobStartedAt = parseTimestamp(job.started_at || job.created_at);
+  const reportGeneratedAt = parseTimestamp(report.generated_at);
+  if (!jobStartedAt || !reportGeneratedAt) {
+    return true;
+  }
+  return jobStartedAt.getTime() >= reportGeneratedAt.getTime();
+}
+
 function finishProjectLoad(requestId) {
   if (safeNumber(requestId, 0) !== safeNumber(state.projectLoadRequestId, 0)) {
     return;
@@ -2325,6 +2345,7 @@ function qualityDiagnosticsMarkup(summary) {
 function renderResultsSummary() {
   const root = document.getElementById("results-summary");
   const activeJob = activeSearchJobForSelectedProject();
+  const freshRunPending = activeJobSupersedesCurrentReport(activeJob);
   const failedJob = failedSearchJobForSelectedProject();
   const project = selectedProjectForView();
   const restoringProject = Boolean(state.projectLoadPending && state.selectedProjectId);
@@ -2346,7 +2367,7 @@ function renderResultsSummary() {
     `;
     return;
   }
-  if (!state.currentReport) {
+  if (!state.currentReport || freshRunPending) {
     if (failedJob) {
       root.innerHTML = searchFailureMarkup(failedJob, "results-retry-search");
       document.getElementById("results-retry-search")?.addEventListener("click", retrySearchForSelectedProject);
@@ -2554,6 +2575,7 @@ function renderCandidatesSummary() {
   const root = document.getElementById("candidates-summary");
   const candidates = currentCandidates();
   const activeJob = activeSearchJobForSelectedProject();
+  const freshRunPending = activeJobSupersedesCurrentReport(activeJob);
   const failedJob = failedSearchJobForSelectedProject();
   const project = selectedProjectForView();
   const restoringProject = Boolean(state.projectLoadPending && state.selectedProjectId);
@@ -2575,7 +2597,7 @@ function renderCandidatesSummary() {
     `;
     return;
   }
-  if (!candidates.length) {
+  if (!candidates.length || freshRunPending) {
     if (failedJob) {
       root.innerHTML = searchFailureMarkup(failedJob, "candidates-retry-search");
       document.getElementById("candidates-retry-search")?.addEventListener("click", retrySearchForSelectedProject);
@@ -2713,6 +2735,8 @@ function renderCandidates() {
   const detailRoot = document.getElementById("candidate-detail");
   const candidates = filteredCandidates();
   const project = selectedProjectForView();
+  const activeJob = activeSearchJobForSelectedProject();
+  const freshRunPending = activeJobSupersedesCurrentReport(activeJob);
   const restoringProject = Boolean(state.projectLoadPending && state.selectedProjectId);
   if (!project) {
     if (restoringProject) {
@@ -2744,7 +2768,7 @@ function renderCandidates() {
     `;
     return;
   }
-  if (!currentCandidates().length) {
+  if (!currentCandidates().length || freshRunPending) {
     if (restoringProject) {
       tableRoot.innerHTML = `
         <div class="empty-state compact-empty">
@@ -2756,6 +2780,21 @@ function renderCandidates() {
         <div class="empty-state compact-empty">
           <h4>Loading Candidate Detail</h4>
           <p>The latest candidate detail will appear here when the run data finishes loading.</p>
+        </div>
+      `;
+      return;
+    }
+    if (activeJob) {
+      tableRoot.innerHTML = runningJobMarkup(activeJob, {
+        compact: true,
+        heading: "Candidate Search In Progress",
+        lead: `The ${titleCaseWords(activeJob.status)} search requested up to ${jobRequestedLimit(activeJob)} candidates.`,
+        note: "Candidate cards will refresh automatically when the new run completes.",
+      });
+      detailRoot.innerHTML = `
+        <div class="empty-state compact-empty">
+          <h4>Fresh Results Are On The Way</h4>
+          <p>The next candidate set is still running. This panel will repopulate automatically when the run finishes.</p>
         </div>
       `;
       return;
@@ -2876,6 +2915,7 @@ function renderResults() {
   const root = document.getElementById("results-snapshot");
   const card = document.getElementById("results-snapshot-card");
   const activeJob = activeSearchJobForSelectedProject();
+  const freshRunPending = activeJobSupersedesCurrentReport(activeJob);
   const failedJob = failedSearchJobForSelectedProject();
   const restoringProject = Boolean(state.projectLoadPending && state.selectedProjectId);
   if (!state.selectedProject) {
@@ -2888,7 +2928,12 @@ function renderResults() {
     `;
     return;
   }
-  if (!state.currentReport || !Array.isArray(state.currentReport.candidates) || !state.currentReport.candidates.length) {
+  if (
+    freshRunPending
+    || !state.currentReport
+    || !Array.isArray(state.currentReport.candidates)
+    || !state.currentReport.candidates.length
+  ) {
     if (card) card.hidden = true;
     if (restoringProject) {
       root.innerHTML = `
@@ -3661,12 +3706,16 @@ async function runSearch() {
       project_id: project.id,
     };
     const job = await fetchJSON("/app/search-jobs", { method: "POST", body: payload });
+    clearCurrentRunSnapshot();
+    state.projectLoadPending = false;
     state.activeJob = job;
+    persistStoredState();
     renderOwnerJobs();
+    renderHistory();
     renderResults();
     renderCandidates();
-      switchTab("results");
-      syncLiveJobStatus();
+    switchTab("results");
+    syncLiveJobStatus();
     startJobPolling(job.job_id);
   } catch (error) {
     setStatus("Search could not start.", "danger", error.message);

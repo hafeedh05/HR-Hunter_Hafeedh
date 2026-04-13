@@ -390,9 +390,6 @@ def test_build_ui_brief_payload_preserves_saved_ui_meta_search_tuning() -> None:
                     "include_history_slices": False,
                 },
                 "search_profile": "focused",
-                "scope_first_enabled": True,
-                "in_scope_target": 45,
-                "verification_scope_target": 30,
                 "brief_clarifications": {
                     "allow_adjacent_titles": False,
                     "strict_market_scope": True,
@@ -407,9 +404,6 @@ def test_build_ui_brief_payload_preserves_saved_ui_meta_search_tuning() -> None:
     assert brief["jd_breakdown"]["search_tuning"]["provider_parallel_requests"] == 18
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 48
     assert brief["provider_settings"]["scrapingbee_google"]["parallel_requests"] == 18
-    assert brief["scope_first_enabled"] is True
-    assert brief["in_scope_target"] == 45
-    assert brief["verification_scope_target"] == 30
     assert brief["brief_search_profile"] == "focused"
     assert brief["brief_clarifications"]["allow_adjacent_titles"] is False
 
@@ -675,7 +669,7 @@ def test_build_ui_brief_payload_applies_exact_company_and_market_scope_clarifica
     assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
 
 
-def test_build_ui_brief_payload_keeps_exec_scope_first_searches_tight_before_top_up():
+def test_build_ui_brief_payload_keeps_peer_company_exec_searches_in_discovery_mode():
     payload = build_ui_brief_payload(
         {
             "role_title": "Chief Executive Officer (CEO)",
@@ -691,12 +685,12 @@ def test_build_ui_brief_payload_keeps_exec_scope_first_searches_tight_before_top
 
     brief = payload["brief_config"]
 
-    assert brief["scope_first_enabled"] is True
-    assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
-    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is False
+    assert brief["brief_search_profile"] == "exploratory"
+    assert brief["provider_settings"]["retrieval"]["include_history_slices"] is True
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
     assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
     assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
-    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["org_chart_profile_pages"] >= 8
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"] == {}
 
 
 def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():

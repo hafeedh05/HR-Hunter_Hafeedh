@@ -24,8 +24,6 @@ def test_provider_candidate_limit_shrinks_after_pool_is_already_populated() -> N
             "titles": ["Data Analyst"],
             "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
             "required_keywords": ["sql", "python"],
-            "scope_first_enabled": True,
-            "in_scope_target": 45,
         }
     )
 
@@ -33,13 +31,11 @@ def test_provider_candidate_limit_shrinks_after_pool_is_already_populated() -> N
         brief=brief,
         requested_limit=100,
         current_pool_size=0,
-        in_scope_count=0,
     ) == 100
     assert provider_candidate_limit(
         brief=brief,
         requested_limit=100,
         current_pool_size=90,
-        in_scope_count=45,
     ) == 40
 
 
@@ -78,8 +74,6 @@ def test_search_engine_caps_external_provider_after_registry_memory(monkeypatch)
             "titles": ["Data Analyst"],
             "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
             "required_keywords": ["sql", "python"],
-            "scope_first_enabled": True,
-            "in_scope_target": 45,
             "provider_settings": {
                 "registry_memory": {"enabled": True, "limit": 100},
                 "recording_provider": {},

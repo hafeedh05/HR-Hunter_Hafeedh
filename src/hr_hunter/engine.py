@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Set
 
 from hr_hunter.identity import candidate_identity_keys, candidate_primary_key
 from hr_hunter.models import CandidateProfile, ProviderRunResult, SearchBrief, SearchRunReport
-from hr_hunter.output import build_reporting_summary, build_scope_progress_counts
+from hr_hunter.output import build_progress_counts, build_reporting_summary
 from hr_hunter.providers.mock import MockProvider
 from hr_hunter.providers.scrapingbee import ScrapingBeeGoogleProvider
 from hr_hunter.query_planner import build_search_slices
@@ -56,7 +56,6 @@ def provider_candidate_limit(
     brief: SearchBrief,
     requested_limit: int,
     current_pool_size: int,
-    in_scope_count: int,
 ) -> int:
     requested = max(1, int(requested_limit or 1))
     current = max(0, int(current_pool_size or 0))
@@ -65,11 +64,6 @@ def provider_candidate_limit(
 
     remaining = max(0, requested - current)
     quality_buffer = max(30, min(160, int(round(requested * 0.2))))
-    scope_gap = 0
-    if bool(getattr(brief, "scope_first_enabled", False)):
-        scope_gap = max(0, int(getattr(brief, "in_scope_target", 0) or 0) - max(0, int(in_scope_count or 0)))
-    if scope_gap > 0:
-        quality_buffer = max(quality_buffer, min(requested, max(45, int(round(scope_gap * 2.0)))))
 
     return min(
         requested,
@@ -98,9 +92,7 @@ class SearchEngine:
         provider_query_completed: Dict[str, int] = {}
         provider_raw_found: Dict[str, int] = {}
         provider_queries_in_flight: Dict[str, int] = {}
-        last_scope_counts: Dict[str, int] = {
-            "in_scope_count": 0,
-            "precise_in_scope_count": 0,
+        last_progress_counts: Dict[str, int] = {
             "title_match_count": 0,
             "market_match_count": 0,
             "verified_count": 0,
@@ -145,7 +137,7 @@ class SearchEngine:
                     "finalized_count": finalized_count,
                     "percent": max(0, min(99, int(percent))),
                     "stage_elapsed_seconds": elapsed_stage,
-                    **last_scope_counts,
+                    **last_progress_counts,
                 }
                 if heartbeat_patch:
                     for key, value in heartbeat_patch(elapsed_stage).items():
@@ -169,7 +161,7 @@ class SearchEngine:
                 "finalized_count": 0,
                 "round": 0,
                 "percent": 5,
-                **last_scope_counts,
+                **last_progress_counts,
             }
         )
         memory_settings = brief.provider_settings.get("registry_memory", {})
@@ -195,7 +187,7 @@ class SearchEngine:
                     [score_candidate(candidate, brief) for candidate in dedupe_candidates(candidate_pool)],
                     brief,
                 )
-                last_scope_counts = build_scope_progress_counts(candidate_pool)
+                last_progress_counts = build_progress_counts(candidate_pool)
                 emit_progress(
                     {
                         "stage": "retrieval",
@@ -208,7 +200,7 @@ class SearchEngine:
                         "reranked_count": 0,
                         "finalized_count": 0,
                         "percent": 10,
-                        **last_scope_counts,
+                        **last_progress_counts,
                     }
                 )
 
@@ -256,7 +248,7 @@ class SearchEngine:
                         "unique_after_dedupe": len(candidate_pool),
                         "reranked_count": 0,
                         "finalized_count": 0,
-                        **last_scope_counts,
+                        **last_progress_counts,
                         "percent": max(
                             10,
                             min(
@@ -279,7 +271,6 @@ class SearchEngine:
                 brief=brief,
                 requested_limit=limit,
                 current_pool_size=len(candidate_pool),
-                in_scope_count=int(last_scope_counts.get("in_scope_count", 0) or 0),
             )
             result = await provider.run(
                 brief,
@@ -302,7 +293,7 @@ class SearchEngine:
                 excluded_seen_count += len(rescored_pool) - len(filtered_pool)
                 rescored_pool = filtered_pool
             candidate_pool = sort_candidates(rescored_pool, brief)
-            last_scope_counts = build_scope_progress_counts(candidate_pool)
+            last_progress_counts = build_progress_counts(candidate_pool)
             emit_progress(
                 {
                     "stage": "dedupe",
@@ -315,7 +306,7 @@ class SearchEngine:
                     "reranked_count": 0,
                     "finalized_count": 0,
                     "percent": 70 if not dry_run else 90,
-                    **last_scope_counts,
+                    **last_progress_counts,
                 }
             )
 
@@ -344,8 +335,6 @@ class SearchEngine:
             semantic_reranked_count = 0
             if reranker_settings.enabled:
                 optimized_top_n = max(limit + 40, int(round(limit * 1.6)))
-                if bool(getattr(brief, "scope_first_enabled", False)):
-                    optimized_top_n = max(limit + 50, int(round(limit * 1.5)))
                 optimized_top_n = min(optimized_top_n, reranker_settings.top_n, 360, len(candidate_pool))
                 brief.provider_settings.setdefault("reranker", {})["top_n"] = max(1, int(optimized_top_n))
                 rerank_target_count = min(len(candidate_pool), max(1, int(optimized_top_n)))
@@ -384,7 +373,7 @@ class SearchEngine:
                     "finalized_count": 0,
                     "rerank_target": rerank_target_count,
                     "percent": 80,
-                    **last_scope_counts,
+                    **last_progress_counts,
                 }
             )
             ranking_stage_message = "Applying semantic reranker to top candidates."
@@ -411,7 +400,7 @@ class SearchEngine:
                 len(candidate_pool),
                 max(semantic_reranked_count, int(brief.provider_settings.get("reranker", {}).get("top_n", 0) or 0)),
             )
-            last_scope_counts = build_scope_progress_counts(candidate_pool)
+            last_progress_counts = build_progress_counts(candidate_pool)
             emit_progress(
                 {
                     "stage": "rerank",
@@ -426,7 +415,7 @@ class SearchEngine:
                     "reranked_count": reranked_count,
                     "finalized_count": 0,
                     "percent": 92,
-                    **last_scope_counts,
+                    **last_progress_counts,
                 }
             )
             learned_ranker_settings = parse_learned_ranker_settings(brief)
@@ -440,10 +429,10 @@ class SearchEngine:
                     reranked_count=reranked_count,
                     finalized_count=0,
                 )
-                last_scope_counts = build_scope_progress_counts(candidate_pool)
+                last_progress_counts = build_progress_counts(candidate_pool)
 
         final_candidates = attach_registry_metadata(candidate_pool[:limit])
-        last_scope_counts = build_scope_progress_counts(final_candidates)
+        last_progress_counts = build_progress_counts(final_candidates)
         emit_progress(
                 {
                     "stage": "rerank",
@@ -457,7 +446,7 @@ class SearchEngine:
                     "reranked_count": reranked_count,
                     "finalized_count": 0,
                     "percent": 93 if not dry_run else 100,
-                    **last_scope_counts,
+                    **last_progress_counts,
                 }
         )
         summary = self._build_summary(

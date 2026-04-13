@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from hr_hunter.briefing import build_search_brief
-from hr_hunter.candidate_order import candidate_is_in_scope, candidate_is_precise_market_match
 from hr_hunter.config import (
     load_env_file,
     load_yaml_file,
@@ -24,11 +23,10 @@ from hr_hunter.db import describe_database_target, resolve_database_target
 from hr_hunter.engine import SearchEngine, dedupe_candidates
 from hr_hunter.feedback import export_training_rows, init_feedback_db, load_ranker_training_rows, log_feedback
 from hr_hunter.output import (
-    build_scope_progress_counts,
+    build_progress_counts,
     build_reporting_summary,
     collect_seen_candidate_keys,
     collect_seen_provider_queries,
-    prepare_verification_candidate_order,
     prioritize_final_candidates,
     prioritize_verification_candidates,
     write_report,
@@ -110,7 +108,7 @@ else:
     FASTAPI_IMPORT_ERROR = None
 
 
-def _strict_scope_shortlist_enabled(brief) -> bool:
+def _strict_shortlist_enabled(brief) -> bool:
     current_only_scope = str(getattr(brief, "company_match_mode", "both") or "both").strip().lower() == "current_only"
     strict_title_scope = not getattr(brief, "allow_adjacent_titles", True)
     has_company_scope = bool(getattr(brief, "company_targets", []))
@@ -123,7 +121,7 @@ def _strict_scope_shortlist_enabled(brief) -> bool:
     )
 
 
-def _strict_scope_bucket(candidate, brief) -> int:
+def _strict_shortlist_bucket(candidate, brief) -> int:
     current_company = bool(getattr(candidate, "current_target_company_match", False))
     market_match = bool(getattr(candidate, "location_aligned", False))
     exact_title = bool(getattr(candidate, "current_title_match", False))
@@ -138,70 +136,38 @@ def _strict_scope_bucket(candidate, brief) -> int:
     return 9
 
 
-def _apply_strict_scope_shortlist(report, *, brief):
-    if not _strict_scope_shortlist_enabled(brief):
+def _apply_strict_shortlist(report, *, brief):
+    if not _strict_shortlist_enabled(brief):
         return report
     original_candidates = list(report.candidates)
     shortlisted = [
         candidate
         for candidate in original_candidates
-        if _strict_scope_bucket(candidate, brief) <= 1
+        if _strict_shortlist_bucket(candidate, brief) <= 1
     ]
     status_rank = {"verified": 0, "review": 1, "reject": 2}
     shortlisted = sorted(
         shortlisted,
         key=lambda candidate: (
-            _strict_scope_bucket(candidate, brief),
+            _strict_shortlist_bucket(candidate, brief),
             status_rank.get(getattr(candidate, "verification_status", "reject"), 9),
             -float(getattr(candidate, "score", 0.0) or 0.0),
             str(getattr(candidate, "full_name", "") or "").lower(),
         ),
     )
     summary = dict(report.summary or {})
-    summary["strict_scope_shortlist"] = {
+    summary["strict_shortlist"] = {
         "enabled": True,
-        "scope_candidate_count": len(shortlisted),
-        "scope_filtered_out_count": max(0, len(original_candidates) - len(shortlisted)),
-        "exact_title_scope_count": len(
-            [candidate for candidate in shortlisted if _strict_scope_bucket(candidate, brief) == 0]
+        "candidate_count": len(shortlisted),
+        "filtered_out_count": max(0, len(original_candidates) - len(shortlisted)),
+        "exact_title_count": len(
+            [candidate for candidate in shortlisted if _strict_shortlist_bucket(candidate, brief) == 0]
         ),
-        "company_market_scope_count": len(shortlisted),
+        "company_market_count": len(shortlisted),
     }
     report.summary = summary
     report.candidates = shortlisted
     return report
-
-
-def _resolve_scope_targets(
-    *,
-    payload: Dict[str, Any],
-    ui_payload: Dict[str, Any],
-    requested_limit: int,
-) -> Dict[str, int | bool]:
-    brief_config = dict(ui_payload.get("brief_config", {}) or {})
-    requested = max(1, int(requested_limit or 1))
-    scope_first_enabled = bool(
-        brief_config.get("scope_first_enabled", payload.get("scope_first_enabled", False))
-    )
-    in_scope_target = max(
-        0,
-        int(brief_config.get("in_scope_target", payload.get("in_scope_target", 0)) or 0),
-    )
-    verification_scope_target = max(
-        0,
-        int(
-            brief_config.get(
-                "verification_scope_target",
-                payload.get("verification_scope_target", 0),
-            )
-            or 0
-        ),
-    )
-    return {
-        "scope_first_enabled": scope_first_enabled,
-        "in_scope_target": min(requested, in_scope_target) if in_scope_target > 0 else 0,
-        "verification_scope_target": verification_scope_target,
-    }
 
 
 def _resolve_effective_verification_target(
@@ -209,7 +175,6 @@ def _resolve_effective_verification_target(
     *,
     requested_limit: int,
     verification_target: int,
-    scope_target: int = 0,
     company_required: bool = False,
 ) -> Dict[str, int]:
     shortlist_limit = max(0, min(int(verification_target or 0), len(candidates)))
@@ -217,55 +182,19 @@ def _resolve_effective_verification_target(
         return {
             "requested_target": 0,
             "effective_target": 0,
-            "shortlist_scope_count": 0,
-            "shortlist_precise_scope_count": 0,
         }
 
-    shortlist = list(candidates[:shortlist_limit])
-    shortlist_scope_count = len([candidate for candidate in shortlist if candidate_is_in_scope(candidate)])
-    shortlist_precise_scope_count = len(
-        [
-            candidate
-            for candidate in shortlist
-            if candidate_is_in_scope(candidate) and candidate_is_precise_market_match(candidate)
-        ]
-    )
     requested = max(1, int(requested_limit or 1))
     verification_floor = min(
         shortlist_limit,
         max(16, min(48, int(round(requested * 0.2)))),
     )
-    scope_buffer = max(8, min(36, int(round(requested * 0.12))))
-    precise_buffer = max(4, min(18, int(round(requested * 0.06))))
-    scope_goal = max(0, int(scope_target or 0))
-    scope_density_target = min(shortlist_limit, shortlist_scope_count + scope_buffer)
-    precise_density_target = min(shortlist_limit, shortlist_precise_scope_count + precise_buffer)
-    scope_goal_target = 0
-    if scope_goal > 0:
-        scope_goal_target = min(
-            shortlist_limit,
-            max(
-                shortlist_scope_count,
-                min(scope_goal, shortlist_scope_count + scope_buffer),
-            ),
-        )
-    effective_target = max(
-        verification_floor,
-        scope_density_target,
-        precise_density_target,
-        scope_goal_target,
-    )
-    if company_required and shortlist_scope_count > 0:
-        effective_target = max(
-            effective_target,
-            min(shortlist_limit, shortlist_scope_count + max(10, min(32, int(round(requested * 0.08))))),
-        )
-    effective_target = min(shortlist_limit, max(verification_floor, effective_target))
+    effective_target = shortlist_limit
+    if company_required:
+        effective_target = max(effective_target, verification_floor)
     return {
         "requested_target": shortlist_limit,
-        "effective_target": effective_target,
-        "shortlist_scope_count": shortlist_scope_count,
-        "shortlist_precise_scope_count": shortlist_precise_scope_count,
+        "effective_target": min(shortlist_limit, max(verification_floor, effective_target)),
     }
 
 
@@ -342,37 +271,16 @@ def _runtime_storage_snapshot() -> Dict[str, Dict[str, Any]]:
     }
 
 
-def _apply_scope_first_candidate_order(report, *, brief, phase: str = "final"):
-    if not bool(getattr(brief, "scope_first_enabled", False)):
-        return report
-    phase_name = str(phase or "final").strip().lower() or "final"
-    if phase_name == "verification":
-        report.candidates = prioritize_verification_candidates(
-            report.candidates,
-            brief=brief,
-            company_required=bool(getattr(brief, "company_targets", [])),
-        )
-    else:
+def _finalize_report_for_limit(report, *, requested_limit: int, internal_fetch_limit: int, brief=None):
+    requested = max(1, int(requested_limit or 1))
+    retrieval = max(requested, int(internal_fetch_limit or requested))
+    if brief is not None:
+        report = _apply_strict_shortlist(report, brief=brief)
         report.candidates = prioritize_final_candidates(
             report.candidates,
             brief=brief,
             company_required=bool(getattr(brief, "company_targets", [])),
         )
-    summary = dict(report.summary or {})
-    scope_counts = build_scope_progress_counts(report.candidates)
-    summary["scope_first_enabled"] = True
-    summary["scope_first_in_scope_target"] = max(0, int(getattr(brief, "in_scope_target", 0) or 0))
-    summary["scope_first_in_scope_achieved"] = int(scope_counts.get("in_scope_count", 0) or 0)
-    report.summary = summary
-    return report
-
-
-def _finalize_report_for_limit(report, *, requested_limit: int, internal_fetch_limit: int, brief=None):
-    requested = max(1, int(requested_limit or 1))
-    retrieval = max(requested, int(internal_fetch_limit or requested))
-    if brief is not None:
-        report = _apply_strict_scope_shortlist(report, brief=brief)
-        report = _apply_scope_first_candidate_order(report, brief=brief)
     report.candidates = list(report.candidates[:requested])
     summary = dict(report.summary or {})
     summary["requested_candidate_limit"] = requested
@@ -413,9 +321,6 @@ def _should_stop_after_stagnant_top_up(
     *,
     requested_limit: int,
     updated_unique_count: int,
-    updated_in_scope_count: int,
-    in_scope_target: int,
-    scope_first_enabled: bool,
     top_up_rounds: int,
     stagnant_rounds: int,
 ) -> bool:
@@ -426,11 +331,6 @@ def _should_stop_after_stagnant_top_up(
     requested = max(1, int(requested_limit or 1))
     remaining_needed = max(0, requested - max(0, int(updated_unique_count or 0)))
     near_target_remaining = max(10, int(round(requested * 0.05)))
-    if scope_first_enabled and in_scope_target > 0:
-        remaining_in_scope = max(0, int(in_scope_target) - max(0, int(updated_in_scope_count or 0)))
-        near_scope_remaining = max(5, int(round(max(1, in_scope_target) * 0.08)))
-        if remaining_in_scope <= near_scope_remaining:
-            return True
     return remaining_needed <= near_target_remaining
 
 
@@ -738,15 +638,6 @@ def create_app() -> "FastAPI":
         requested = max(1, int(requested_limit or 1))
         current_fetch_limit = max(requested, int(internal_fetch_limit or requested))
         current_unique_count = len(report.candidates)
-        scope_targets = _resolve_scope_targets(
-            payload=payload,
-            ui_payload=ui_payload,
-            requested_limit=requested,
-        )
-        scope_first_enabled = bool(scope_targets["scope_first_enabled"])
-        in_scope_target = int(scope_targets["in_scope_target"] or 0)
-        scope_counts = build_scope_progress_counts(report.candidates)
-        current_in_scope_count = int(scope_counts.get("in_scope_count", 0) or 0)
         top_up_rounds = 0
         top_up_notes: List[str] = []
         max_rounds = max(1, int(payload.get("top_up_max_rounds", 8) or 8))
@@ -755,8 +646,7 @@ def create_app() -> "FastAPI":
 
         while top_up_rounds < max_rounds:
             need_more_candidates = current_unique_count < requested
-            need_more_in_scope = bool(scope_first_enabled and in_scope_target > 0 and current_in_scope_count < in_scope_target)
-            if not need_more_candidates and not need_more_in_scope:
+            if not need_more_candidates:
                 break
             next_fetch_limit = compute_top_up_fetch_limit(requested, current_fetch_limit)
             if next_fetch_limit <= current_fetch_limit and stagnant_rounds > 0:
@@ -764,7 +654,6 @@ def create_app() -> "FastAPI":
 
             top_up_rounds += 1
             round_growth = 0
-            round_in_scope_growth = 0
             payload_override = dict(payload)
             payload_override["internal_fetch_limit_override"] = next_fetch_limit
             payload_override["top_up_round"] = top_up_rounds
@@ -782,8 +671,6 @@ def create_app() -> "FastAPI":
                         "target": requested,
                         "unique_after_dedupe": current_unique_count,
                         "finalized_count": 0,
-                        "in_scope_count": current_in_scope_count,
-                        "precise_in_scope_count": int(scope_counts.get("precise_in_scope_count", 0) or 0),
                     }
                 )
 
@@ -812,30 +699,17 @@ def create_app() -> "FastAPI":
 
             current_fetch_limit = next_fetch_limit
             updated_unique_count = len(report.candidates)
-            scope_counts = build_scope_progress_counts(report.candidates)
-            updated_in_scope_count = int(scope_counts.get("in_scope_count", 0) or 0)
-            round_in_scope_growth = max(0, updated_in_scope_count - current_in_scope_count)
-            if (
-                round_growth <= 0
-                or updated_unique_count <= current_unique_count
-                or (need_more_in_scope and round_in_scope_growth <= 0)
-            ):
+            if round_growth <= 0 or updated_unique_count <= current_unique_count:
                 stagnant_rounds += 1
                 if _should_stop_after_stagnant_top_up(
                     requested_limit=requested,
                     updated_unique_count=updated_unique_count,
-                    updated_in_scope_count=updated_in_scope_count,
-                    in_scope_target=in_scope_target,
-                    scope_first_enabled=scope_first_enabled,
                     top_up_rounds=top_up_rounds,
                     stagnant_rounds=stagnant_rounds,
                 ):
                     source_exhausted = True
                     remaining_needed = max(0, requested - updated_unique_count)
-                    remaining_in_scope = max(0, in_scope_target - updated_in_scope_count) if scope_first_enabled else 0
-                    if remaining_needed <= max(10, int(round(requested * 0.05))) or (
-                        scope_first_enabled and remaining_in_scope <= max(5, int(round(max(1, in_scope_target) * 0.08)))
-                    ):
+                    if remaining_needed <= max(10, int(round(requested * 0.05))):
                         top_up_notes.append(
                             "Stopped after a stagnant top-up round because the remaining gap was small and no new unique candidates appeared."
                         )
@@ -843,7 +717,6 @@ def create_app() -> "FastAPI":
             else:
                 stagnant_rounds = 0
             current_unique_count = updated_unique_count
-            current_in_scope_count = updated_in_scope_count
 
         if top_up_rounds:
             summary = dict(report.summary or {})
@@ -851,9 +724,6 @@ def create_app() -> "FastAPI":
             summary["top_up_fetch_limit"] = current_fetch_limit
             summary["top_up_source_exhausted"] = bool(source_exhausted)
             summary["top_up_max_rounds"] = max_rounds
-            summary["scope_first_enabled"] = scope_first_enabled
-            summary["scope_first_in_scope_target"] = in_scope_target
-            summary["scope_first_in_scope_achieved"] = current_in_scope_count
             if top_up_notes:
                 summary["top_up_notes"] = top_up_notes[-3:]
             report.summary = summary
@@ -887,8 +757,6 @@ def create_app() -> "FastAPI":
                 "queries_in_flight": 0,
                 "raw_found": 0,
                 "unique_after_dedupe": 0,
-                "in_scope_count": 0,
-                "precise_in_scope_count": 0,
                 "reranked_count": 0,
                 "rerank_target": 0,
                 "finalized_count": 0,
@@ -1053,8 +921,6 @@ def create_app() -> "FastAPI":
                         "queries_in_flight": int(latest_telemetry.get("queries_in_flight", 0) or 0),
                         "raw_found": int(latest_telemetry.get("raw_found", 0) or 0),
                         "unique_after_dedupe": int(latest_telemetry.get("unique_after_dedupe", 0) or 0),
-                        "in_scope_count": int(latest_telemetry.get("in_scope_count", 0) or 0),
-                        "precise_in_scope_count": int(latest_telemetry.get("precise_in_scope_count", 0) or 0),
                         "reranked_count": int(latest_telemetry.get("reranked_count", 0) or 0),
                         "rerank_target": int(latest_telemetry.get("rerank_target", 0) or 0),
                         "finalized_count": int(latest_telemetry.get("finalized_count", 0) or 0),
@@ -1095,8 +961,6 @@ def create_app() -> "FastAPI":
                 previous_queries_completed = 0 if round_reset else int(latest_telemetry.get("queries_completed", 0) or 0)
                 previous_raw_found = 0 if round_reset else int(latest_telemetry.get("raw_found", 0) or 0)
                 previous_unique = int(latest_telemetry.get("unique_after_dedupe", 0) or 0)
-                previous_in_scope = int(latest_telemetry.get("in_scope_count", 0) or 0)
-                previous_precise_in_scope = int(latest_telemetry.get("precise_in_scope_count", 0) or 0)
                 previous_reranked = int(latest_telemetry.get("reranked_count", 0) or 0)
                 previous_rerank_target = int(latest_telemetry.get("rerank_target", 0) or 0)
                 previous_finalized = int(latest_telemetry.get("finalized_count", 0) or 0)
@@ -1119,14 +983,6 @@ def create_app() -> "FastAPI":
                 unique_after_dedupe = max(
                     previous_unique,
                     int(event.get("unique_after_dedupe", previous_unique) or 0),
-                )
-                in_scope_count = max(
-                    0,
-                    int(event.get("in_scope_count", previous_in_scope) or 0),
-                )
-                precise_in_scope_count = max(
-                    0,
-                    int(event.get("precise_in_scope_count", previous_precise_in_scope) or 0),
                 )
                 raw_found = max(
                     previous_raw_found,
@@ -1186,8 +1042,6 @@ def create_app() -> "FastAPI":
                         "queries_in_flight": queries_in_flight,
                         "raw_found": raw_found,
                         "unique_after_dedupe": unique_after_dedupe,
-                        "in_scope_count": in_scope_count,
-                        "precise_in_scope_count": precise_in_scope_count,
                         "reranked_count": reranked_count,
                         "rerank_target": rerank_target,
                         "finalized_count": finalized_count,
@@ -1275,50 +1129,25 @@ def create_app() -> "FastAPI":
                 exclude_history_dirs=exclude_history_dirs,
                 progress_callback=_on_pipeline_progress,
             )
-            report = _apply_scope_first_candidate_order(report, brief=brief, phase="verification")
-            scope_targets = _resolve_scope_targets(
-                payload=payload,
-                ui_payload=ui_payload,
-                requested_limit=requested_limit,
-            )
-            scope_progress_counts = build_scope_progress_counts(report.candidates)
             verification_stats = None
             if verification_enabled and verification_target > 0:
-                verification_scope_target = max(
-                    0,
-                    int(
-                        scope_targets["verification_scope_target"]
-                        or getattr(brief, "verification_scope_target", 0)
-                        or 0
-                    ),
-                )
-                report.candidates = prepare_verification_candidate_order(
+                report.candidates = prioritize_verification_candidates(
                     report.candidates,
                     brief=brief,
                     company_required=bool(brief.company_targets),
-                    verification_limit=verification_target,
-                    scope_target=verification_scope_target,
                 )
                 verification_target_plan = _resolve_effective_verification_target(
                     report.candidates,
                     requested_limit=requested_limit,
                     verification_target=verification_target,
-                    scope_target=verification_scope_target,
                     company_required=bool(brief.company_targets),
                 )
                 effective_verification_target = int(verification_target_plan["effective_target"] or 0)
                 report.summary = dict(report.summary or {})
-                report.summary["verification_scope_target"] = verification_scope_target
                 report.summary["verification_requested_target"] = int(
                     verification_target_plan["requested_target"] or 0
                 )
                 report.summary["verification_effective_target"] = effective_verification_target
-                report.summary["verification_shortlist_scope_count"] = int(
-                    verification_target_plan["shortlist_scope_count"] or 0
-                )
-                report.summary["verification_shortlist_precise_scope_count"] = int(
-                    verification_target_plan["shortlist_precise_scope_count"] or 0
-                )
                 verifier = PublicEvidenceVerifier(
                     {
                         **dict(brief.provider_settings.get("scrapingbee_google", {}) or {}),
@@ -1356,8 +1185,6 @@ def create_app() -> "FastAPI":
                                 "verified_count": int(event.get("verified_count", 0) or 0),
                                 "review_count": int(event.get("review_count", 0) or 0),
                                 "reject_count": int(event.get("reject_count", 0) or 0),
-                                "in_scope_count": int(scope_progress_counts.get("in_scope_count", 0) or 0),
-                                "precise_in_scope_count": int(scope_progress_counts.get("precise_in_scope_count", 0) or 0),
                                 "percent": max(92, min(98, 92 + int(round(coverage * 6)))),
                                 "message": (
                                     "Checking public evidence for top candidates. "
@@ -1380,8 +1207,6 @@ def create_app() -> "FastAPI":
                             "verified_count": 0,
                             "review_count": 0,
                             "reject_count": 0,
-                            "in_scope_count": int(scope_progress_counts.get("in_scope_count", 0) or 0),
-                            "precise_in_scope_count": int(scope_progress_counts.get("precise_in_scope_count", 0) or 0),
                             "percent": 92,
                             "message": "Checking public evidence for top candidates.",
                         },
@@ -1395,7 +1220,6 @@ def create_app() -> "FastAPI":
                         progress_callback=_on_verification_progress,
                     )
                     refresh_report_summary(report, verification_stats, brief=brief)
-                    scope_progress_counts = build_scope_progress_counts(report.candidates)
             report = _finalize_report_for_limit(
                 report,
                 requested_limit=requested_limit,
@@ -1425,8 +1249,6 @@ def create_app() -> "FastAPI":
                     "verified_count": int(report.summary.get("verified_count", latest_telemetry.get("verified_count", 0)) or 0),
                     "review_count": int(report.summary.get("review_count", latest_telemetry.get("review_count", 0)) or 0),
                     "reject_count": int(report.summary.get("reject_count", latest_telemetry.get("reject_count", 0)) or 0),
-                    "in_scope_count": int(report.summary.get("in_scope_count", latest_telemetry.get("in_scope_count", 0)) or 0),
-                    "precise_in_scope_count": int(report.summary.get("precise_in_scope_count", latest_telemetry.get("precise_in_scope_count", 0)) or 0),
                     "message": "Persisting final results and artifacts.",
                 },
                 checkpoint_patch={"event": "finalizing"},
@@ -2034,7 +1856,6 @@ def create_app() -> "FastAPI":
             exclude_report_paths=exclude_report_paths,
             exclude_history_dirs=exclude_history_dirs,
         )
-        report = _apply_scope_first_candidate_order(report, brief=brief)
         report = _finalize_report_for_limit(
             report,
             requested_limit=requested_limit,

@@ -55,9 +55,6 @@ class SearchBrief:
     allow_adjacent_titles: bool = True
     exact_company_scope: bool = False
     strict_market_scope: bool = False
-    scope_first_enabled: bool = False
-    in_scope_target: int = 0
-    verification_scope_target: int = 0
 
 
 @dataclass
@@ -113,9 +110,6 @@ class CandidateProfile:
     current_target_company_match: bool = False
     target_company_history_match: bool = False
     current_title_match: bool = False
-    in_scope: bool = False
-    precise_market_in_scope: bool = False
-    scope_bucket: str = "out_of_scope"
     industry_aligned: bool = False
     location_aligned: bool = False
     current_company_confirmed: bool = False

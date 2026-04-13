@@ -156,8 +156,6 @@ def _default_job_progress(*, target: int = 0, stage: str = "queued", status: str
         "queries_in_flight": 0,
         "raw_found": 0,
         "unique_after_dedupe": 0,
-        "in_scope_count": 0,
-        "precise_in_scope_count": 0,
         "reranked_count": 0,
         "rerank_target": 0,
         "finalized_count": 0,
@@ -1292,10 +1290,6 @@ def complete_job(job_id: str, result: Dict[str, Any], *, db_path: Path | None = 
             "unique_after_dedupe": int(
                 pipeline_metrics.get("unique_after_dedupe", progress.get("unique_after_dedupe", finalized_count))
                 or progress.get("unique_after_dedupe", finalized_count)
-            ),
-            "in_scope_count": int(summary.get("in_scope_count", progress.get("in_scope_count", 0)) or 0),
-            "precise_in_scope_count": int(
-                summary.get("precise_in_scope_count", progress.get("precise_in_scope_count", 0)) or 0
             ),
             "reranked_count": reranked_count,
             "rerank_target": max(rerank_target, reranked_count),

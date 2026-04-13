@@ -422,7 +422,4 @@ def build_search_brief(config: Dict[str, Any]) -> SearchBrief:
         allow_adjacent_titles=expand_title_keywords,
         exact_company_scope=bool(brief_clarifications.get("exact_company_scope", False)),
         strict_market_scope=bool(brief_clarifications.get("strict_market_scope", False)),
-        scope_first_enabled=bool(config.get("scope_first_enabled", False)),
-        in_scope_target=max(0, int(config.get("in_scope_target", 0) or 0)),
-        verification_scope_target=max(0, int(config.get("verification_scope_target", 0) or 0)),
     )

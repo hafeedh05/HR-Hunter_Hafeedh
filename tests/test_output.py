@@ -1,10 +1,10 @@
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.models import CandidateProfile
 from hr_hunter.output import (
+    build_progress_counts,
     build_reporting_summary,
-    build_scope_progress_counts,
     hydrate_candidate_reporting,
-    prepare_verification_candidate_order,
+    prepare_verification_shortlist,
 )
 
 
@@ -219,7 +219,7 @@ def test_build_reporting_summary_keeps_non_executive_diagnostics_copy_generic() 
     assert all("executive" not in issue["action"].lower() for issue in diagnostics["issues"])
 
 
-def test_build_scope_progress_counts_only_reports_scope_metrics() -> None:
+def test_build_progress_counts_only_reports_match_metrics() -> None:
     candidates = [
         _candidate(
             name="Verified Scope Match",
@@ -253,11 +253,10 @@ def test_build_scope_progress_counts_only_reports_scope_metrics() -> None:
         ),
     ]
 
-    counts = build_scope_progress_counts(candidates)
+    counts = build_progress_counts(candidates)
 
-    assert counts["in_scope_count"] == 1
-    assert counts["precise_in_scope_count"] == 1
     assert counts["title_match_count"] == 1
+    assert counts["market_match_count"] == 1
     assert "verified_count" not in counts
 
 
@@ -278,7 +277,7 @@ def test_hydrate_candidate_reporting_preserves_explicit_blocked_function_fit() -
     assert hydrated.current_function_fit == 0.0
 
 
-def test_prepare_verification_candidate_order_fills_scope_target_first() -> None:
+def test_prepare_verification_shortlist_prioritizes_core_fit_candidates_first() -> None:
     candidates = [
         _candidate(
             name="Out Of Scope High Score",
@@ -327,11 +326,10 @@ def test_prepare_verification_candidate_order_fills_scope_target_first() -> None
         ),
     ]
 
-    ordered = prepare_verification_candidate_order(
+    ordered = prepare_verification_shortlist(
         candidates,
         company_required=False,
         verification_limit=2,
-        scope_target=2,
     )
 
     assert [candidate.full_name for candidate in ordered[:2]] == [
@@ -340,7 +338,7 @@ def test_prepare_verification_candidate_order_fills_scope_target_first() -> None
     ]
 
 
-def test_prepare_verification_candidate_order_prefers_precise_scope_before_country_only() -> None:
+def test_prepare_verification_shortlist_prefers_precise_market_before_country_only() -> None:
     candidates = [
         _candidate(
             name="Country Only Scope",
@@ -389,11 +387,10 @@ def test_prepare_verification_candidate_order_prefers_precise_scope_before_count
         ),
     ]
 
-    ordered = prepare_verification_candidate_order(
+    ordered = prepare_verification_shortlist(
         candidates,
         company_required=False,
         verification_limit=2,
-        scope_target=2,
     )
 
     assert [candidate.full_name for candidate in ordered[:2]] == [
@@ -402,7 +399,7 @@ def test_prepare_verification_candidate_order_prefers_precise_scope_before_count
     ]
 
 
-def test_prepare_verification_candidate_order_honors_title_market_priority_brief() -> None:
+def test_prepare_verification_shortlist_honors_title_market_priority_brief() -> None:
     brief = build_search_brief(
         {
             "id": "verification-priority-test",
@@ -454,12 +451,11 @@ def test_prepare_verification_candidate_order_honors_title_market_priority_brief
         ),
     ]
 
-    ordered = prepare_verification_candidate_order(
+    ordered = prepare_verification_shortlist(
         candidates,
         brief=brief,
         company_required=False,
         verification_limit=2,
-        scope_target=0,
     )
 
     assert [candidate.full_name for candidate in ordered[:2]] == [
@@ -468,7 +464,7 @@ def test_prepare_verification_candidate_order_honors_title_market_priority_brief
     ]
 
 
-def test_prepare_verification_candidate_order_prefers_anchor_rich_precise_profiles() -> None:
+def test_prepare_verification_shortlist_prefers_anchor_rich_precise_profiles() -> None:
     candidates = [
         CandidateProfile(
             full_name="Generic Precise Match",
@@ -510,11 +506,10 @@ def test_prepare_verification_candidate_order_prefers_anchor_rich_precise_profil
         ),
     ]
 
-    ordered = prepare_verification_candidate_order(
+    ordered = prepare_verification_shortlist(
         candidates,
         company_required=False,
         verification_limit=2,
-        scope_target=0,
     )
 
     assert [candidate.full_name for candidate in ordered[:2]] == [

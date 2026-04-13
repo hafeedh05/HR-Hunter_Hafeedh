@@ -100,17 +100,13 @@ def candidate_is_market_match(candidate: CandidateProfile) -> bool:
 
 
 def candidate_is_precise_market_match(candidate: CandidateProfile) -> bool:
-    if bool(getattr(candidate, "precise_market_in_scope", False)):
-        return True
     bucket = str(getattr(candidate, "location_precision_bucket", "") or "")
     return bucket in PRECISE_MARKET_BUCKETS
 
 
-def candidate_is_in_scope(candidate: CandidateProfile) -> bool:
-    if bool(getattr(candidate, "in_scope", False)):
-        return True
+def candidate_has_priority_fit(candidate: CandidateProfile) -> bool:
     parser_confidence = float(getattr(candidate, "parser_confidence", 0.0) or 0.0)
-    anchor_supported = candidate_has_scope_anchor(candidate)
+    anchor_supported = candidate_has_fit_anchor(candidate)
     return bool(
         getattr(candidate, "current_title_match", False)
         and candidate_is_market_match(candidate)
@@ -119,7 +115,7 @@ def candidate_is_in_scope(candidate: CandidateProfile) -> bool:
     )
 
 
-def candidate_has_scope_anchor(candidate: CandidateProfile) -> bool:
+def candidate_has_fit_anchor(candidate: CandidateProfile) -> bool:
     company_match_score = _candidate_feature_score(
         candidate,
         feature_key="company_match",
@@ -193,7 +189,7 @@ def _candidate_priority_bucket(
     history_company_match = bool(getattr(candidate, "target_company_history_match", False))
     precise_market_match = candidate_is_precise_market_match(candidate)
     market_match = candidate_is_market_match(candidate)
-    anchor_supported = candidate_has_scope_anchor(candidate)
+    anchor_supported = candidate_has_fit_anchor(candidate)
     strong_function_fit = float(getattr(candidate, "current_function_fit", 0.0) or 0.0) >= 0.6
     strong_skill_fit = _candidate_feature_score(
         candidate,

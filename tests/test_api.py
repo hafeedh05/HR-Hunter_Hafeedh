@@ -1,6 +1,6 @@
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.api import (
-    _apply_strict_scope_shortlist,
+    _apply_strict_shortlist,
     _finalize_report_for_limit,
     _job_actor_from_payload,
     _resolve_effective_verification_target,
@@ -80,7 +80,7 @@ def test_finalize_report_for_limit_keeps_raw_found_above_unique_pool():
     assert pipeline_metrics["finalized_count"] == 50
 
 
-def test_finalize_report_for_limit_tracks_in_scope_counts():
+def test_finalize_report_for_limit_tracks_title_and_market_counts():
     report = SearchRunReport(
         run_id="run-scope-test",
         brief_id="brief-scope-test",
@@ -120,19 +120,14 @@ def test_finalize_report_for_limit_tracks_in_scope_counts():
 
     finalized = _finalize_report_for_limit(report, requested_limit=3, internal_fetch_limit=10)
 
-    assert finalized.summary["in_scope_count"] == 2
-    assert finalized.summary["precise_in_scope_count"] == 1
     assert finalized.summary["title_match_count"] == 3
     assert finalized.summary["market_match_count"] == 2
-    assert finalized.summary["scope_counts"] == {
-        "in_scope": 2,
-        "precise_in_scope": 1,
-        "title_match": 3,
-        "market_match": 2,
-    }
+    assert "in_scope_count" not in finalized.summary
+    assert "precise_in_scope_count" not in finalized.summary
+    assert "scope_counts" not in finalized.summary
 
 
-def test_finalize_report_for_limit_excludes_title_geo_noise_from_in_scope_counts():
+def test_finalize_report_for_limit_does_not_emit_scope_counts_for_title_geo_noise():
     report = SearchRunReport(
         run_id="run-scope-noise-test",
         brief_id="brief-scope-noise-test",
@@ -154,8 +149,8 @@ def test_finalize_report_for_limit_excludes_title_geo_noise_from_in_scope_counts
 
     finalized = _finalize_report_for_limit(report, requested_limit=1, internal_fetch_limit=5)
 
-    assert finalized.summary["in_scope_count"] == 0
-    assert finalized.summary["precise_in_scope_count"] == 0
+    assert "in_scope_count" not in finalized.summary
+    assert "precise_in_scope_count" not in finalized.summary
 
 
 def test_finalize_report_for_limit_honors_title_market_priority_brief() -> None:
@@ -169,8 +164,6 @@ def test_finalize_report_for_limit_honors_title_market_priority_brief() -> None:
                 "country": "United Arab Emirates",
                 "location_hints": ["Abu Dhabi"],
             },
-            "scope_first_enabled": True,
-            "in_scope_target": 10,
         }
     )
     report = SearchRunReport(
@@ -248,7 +241,7 @@ def test_verification_progress_base_keeps_monotonic_retrieval_counts():
     }
 
 
-def test_finalize_report_for_limit_uses_final_scope_order_after_verification() -> None:
+def test_finalize_report_for_limit_uses_final_priority_order_after_verification() -> None:
     brief = build_search_brief(
         {
             "id": "scope-final-order-test",
@@ -258,8 +251,6 @@ def test_finalize_report_for_limit_uses_final_scope_order_after_verification() -
                 "location_name": "Dubai",
                 "country": "United Arab Emirates",
             },
-            "scope_first_enabled": True,
-            "in_scope_target": 10,
         }
     )
     report = SearchRunReport(
@@ -353,15 +344,11 @@ def test_resolve_effective_verification_target_trims_weak_tail() -> None:
         candidates,
         requested_limit=100,
         verification_target=80,
-        scope_target=24,
         company_required=False,
     )
 
     assert plan["requested_target"] == 80
-    assert plan["shortlist_scope_count"] == 30
-    assert plan["shortlist_precise_scope_count"] == 30
-    assert plan["effective_target"] < plan["requested_target"]
-    assert plan["effective_target"] >= 42
+    assert plan["effective_target"] == 80
 
 
 def test_resolve_effective_verification_target_does_not_blindly_follow_oversized_scope_goal() -> None:
@@ -396,25 +383,17 @@ def test_resolve_effective_verification_target_does_not_blindly_follow_oversized
         candidates,
         requested_limit=300,
         verification_target=140,
-        scope_target=140,
         company_required=False,
     )
 
     assert plan["requested_target"] == 140
-    assert plan["shortlist_scope_count"] == 41
-    assert plan["shortlist_precise_scope_count"] == 41
-    assert plan["effective_target"] < plan["requested_target"]
-    assert plan["effective_target"] <= 80
-    assert plan["effective_target"] >= 70
+    assert plan["effective_target"] == 140
 
 
 def test_should_stop_after_stagnant_top_up_when_near_target():
     assert _should_stop_after_stagnant_top_up(
         requested_limit=50,
         updated_unique_count=40,
-        updated_in_scope_count=40,
-        in_scope_target=40,
-        scope_first_enabled=True,
         top_up_rounds=1,
         stagnant_rounds=1,
     ) is True
@@ -424,9 +403,6 @@ def test_should_not_stop_after_single_stagnant_top_up_when_gap_is_still_large():
     assert _should_stop_after_stagnant_top_up(
         requested_limit=50,
         updated_unique_count=28,
-        updated_in_scope_count=10,
-        in_scope_target=35,
-        scope_first_enabled=True,
         top_up_rounds=1,
         stagnant_rounds=1,
     ) is False
@@ -443,7 +419,7 @@ def test_runtime_storage_snapshot_prefers_shared_database_url(monkeypatch):
     assert snapshot["workspace"]["display_locator"] == "postgresql://<redacted>/hr_hunter"
 
 
-def test_apply_strict_scope_shortlist_keeps_company_market_matches_only():
+def test_apply_strict_shortlist_keeps_company_market_matches_only():
     brief = SearchBrief(
         id="brief-test",
         role_title="Chief Executive Officer (CEO)",
@@ -517,22 +493,22 @@ def test_apply_strict_scope_shortlist_keeps_company_market_matches_only():
         summary={},
     )
 
-    shortlisted = _apply_strict_scope_shortlist(report, brief=brief)
+    shortlisted = _apply_strict_shortlist(report, brief=brief)
 
     assert [candidate.full_name for candidate in shortlisted.candidates] == [
         "Exact Match",
         "Adjacent Title Same Company Market",
     ]
-    assert shortlisted.summary["strict_scope_shortlist"] == {
+    assert shortlisted.summary["strict_shortlist"] == {
         "enabled": True,
-        "scope_candidate_count": 2,
-        "scope_filtered_out_count": 2,
-        "exact_title_scope_count": 1,
-        "company_market_scope_count": 2,
+        "candidate_count": 2,
+        "filtered_out_count": 2,
+        "exact_title_count": 1,
+        "company_market_count": 2,
     }
 
 
-def test_finalize_report_for_limit_applies_strict_scope_shortlist_when_brief_present():
+def test_finalize_report_for_limit_applies_strict_shortlist_when_brief_present():
     brief = SearchBrief(
         id="brief-test",
         role_title="Chief Executive Officer (CEO)",
@@ -609,5 +585,5 @@ def test_finalize_report_for_limit_applies_strict_scope_shortlist_when_brief_pre
         "Exact Match",
         "Adjacent Title Same Company Market",
     ]
-    assert finalized.summary["strict_scope_shortlist"]["scope_candidate_count"] == 2
+    assert finalized.summary["strict_shortlist"]["candidate_count"] == 2
     assert finalized.summary["pipeline_metrics"]["finalized_count"] == 2
