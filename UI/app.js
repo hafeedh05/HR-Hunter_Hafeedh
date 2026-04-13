@@ -1559,7 +1559,7 @@ function statusFromCandidate(candidate) {
 }
 
 function jobProjectId(job) {
-  return String(job?.payload?.project_id || job?.result?.project?.id || "").trim();
+  return String(job?.project_id || job?.payload?.project_id || job?.result?.project?.id || "").trim();
 }
 
 function isActiveJobStatus(status) {

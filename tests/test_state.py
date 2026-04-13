@@ -398,6 +398,7 @@ def test_stop_job_marks_running_job_failed_and_latest_project_job_returns_it(tmp
     db_path = tmp_path / "state.db"
     queued = enqueue_job("search", {"project_id": "project_123", "role_title": "Supply Chain Manager"}, db_path=db_path)
 
+    assert queued["job_type"] == "search"
     assert queued["project_id"] == "project_123"
 
     start_job(queued["job_id"], db_path=db_path)

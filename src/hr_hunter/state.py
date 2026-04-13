@@ -1201,6 +1201,7 @@ def enqueue_job(job_type: str, payload: Dict[str, Any], *, db_path: Path | None 
         "db_path": _storage_metadata(resolved)["display_locator"],
         "storage": _storage_metadata(resolved),
         "job_id": job_id,
+        "job_type": job_type,
         "status": "queued",
         "project_id": project_id,
         "progress": initial_progress,
