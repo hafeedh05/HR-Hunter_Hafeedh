@@ -7,6 +7,7 @@ from hr_hunter.api import (
     _resolve_pipeline_progress_percent,
     _runtime_storage_snapshot,
     _should_stop_after_stagnant_top_up,
+    _verification_progress_base,
 )
 from hr_hunter.models import CandidateProfile, GeoSpec, SearchBrief, SearchRunReport
 
@@ -92,6 +93,7 @@ def test_finalize_report_for_limit_tracks_in_scope_counts():
                 current_title_match=True,
                 location_aligned=True,
                 location_precision_bucket="named_target_location",
+                industry_fit_score=0.42,
                 parser_confidence=0.72,
                 verification_status="review",
             ),
@@ -100,6 +102,7 @@ def test_finalize_report_for_limit_tracks_in_scope_counts():
                 current_title_match=True,
                 location_aligned=True,
                 location_precision_bucket="country_only",
+                skill_overlap_score=0.26,
                 parser_confidence=0.68,
                 verification_status="reject",
             ),
@@ -127,6 +130,32 @@ def test_finalize_report_for_limit_tracks_in_scope_counts():
         "title_match": 3,
         "market_match": 2,
     }
+
+
+def test_finalize_report_for_limit_excludes_title_geo_noise_from_in_scope_counts():
+    report = SearchRunReport(
+        run_id="run-scope-noise-test",
+        brief_id="brief-scope-noise-test",
+        dry_run=False,
+        generated_at="2026-04-13T00:00:00+00:00",
+        provider_results=[],
+        candidates=[
+            CandidateProfile(
+                full_name="Title And Geo Only",
+                current_title_match=True,
+                location_aligned=True,
+                location_precision_bucket="named_target_location",
+                parser_confidence=0.78,
+                verification_status="reject",
+            )
+        ],
+        summary={"pipeline_metrics": {"queries_completed": 1, "queries_total": 1, "raw_found": 1, "unique_after_dedupe": 1}},
+    )
+
+    finalized = _finalize_report_for_limit(report, requested_limit=1, internal_fetch_limit=5)
+
+    assert finalized.summary["in_scope_count"] == 0
+    assert finalized.summary["precise_in_scope_count"] == 0
 
 
 def test_finalize_report_for_limit_honors_title_market_priority_brief() -> None:
@@ -187,6 +216,36 @@ def test_finalize_report_for_limit_honors_title_market_priority_brief() -> None:
         "Title Match Weak Market",
         "Strong Function Precise Market",
     ]
+
+
+def test_verification_progress_base_keeps_monotonic_retrieval_counts():
+    progress_base = _verification_progress_base(
+        {
+            "queries_completed": 42,
+            "queries_total": 42,
+            "raw_found": 81,
+            "unique_after_dedupe": 81,
+            "rerank_target": 180,
+            "reranked_count": 180,
+        },
+        {
+            "queries_completed": 42,
+            "queries_total": 42,
+            "raw_found": 378,
+            "unique_after_dedupe": 378,
+            "rerank_target": 180,
+            "reranked_count": 180,
+        },
+    )
+
+    assert progress_base == {
+        "queries_completed": 42,
+        "queries_total": 42,
+        "raw_found": 378,
+        "unique_after_dedupe": 378,
+        "rerank_target": 180,
+        "reranked_count": 180,
+    }
 
 
 def test_finalize_report_for_limit_uses_final_scope_order_after_verification() -> None:
@@ -264,16 +323,17 @@ def test_finalize_report_for_limit_uses_final_scope_order_after_verification() -
 
 def test_resolve_effective_verification_target_trims_weak_tail() -> None:
     candidates = [
-        CandidateProfile(
-            full_name=f"In Scope {index}",
-            current_title="Supply Chain Manager",
-            current_title_match=True,
-            location_aligned=True,
-            location_precision_bucket="named_target_location",
-            parser_confidence=0.72,
-            verification_status="review",
-            score=68.0,
-        )
+            CandidateProfile(
+                full_name=f"In Scope {index}",
+                current_title="Supply Chain Manager",
+                current_title_match=True,
+                location_aligned=True,
+                location_precision_bucket="named_target_location",
+                industry_fit_score=0.41,
+                parser_confidence=0.72,
+                verification_status="review",
+                score=68.0,
+            )
         for index in range(30)
     ] + [
         CandidateProfile(
@@ -306,16 +366,17 @@ def test_resolve_effective_verification_target_trims_weak_tail() -> None:
 
 def test_resolve_effective_verification_target_does_not_blindly_follow_oversized_scope_goal() -> None:
     candidates = [
-        CandidateProfile(
-            full_name=f"Precise In Scope {index}",
-            current_title="Chief Executive Officer",
-            current_title_match=True,
-            location_aligned=True,
-            location_precision_bucket="named_target_location",
-            parser_confidence=0.76,
-            verification_status="review",
-            score=72.0,
-        )
+            CandidateProfile(
+                full_name=f"Precise In Scope {index}",
+                current_title="Chief Executive Officer",
+                current_title_match=True,
+                location_aligned=True,
+                location_precision_bucket="named_target_location",
+                industry_fit_score=0.4,
+                parser_confidence=0.76,
+                verification_status="review",
+                score=72.0,
+            )
         for index in range(41)
     ] + [
         CandidateProfile(

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.recruiter_app import (
     DEFAULT_UI_RERANKER_MODEL,
@@ -9,6 +11,7 @@ from hr_hunter.recruiter_app import (
     ensure_structured_jd_breakdown,
     extract_job_description_breakdown,
     resolve_job_description_source,
+    safe_artifact_path,
 )
 
 
@@ -67,6 +70,19 @@ def test_build_ui_brief_payload_maps_company_mode_and_location_targets():
     assert brief.anchor_weights["company_match"] > 0
     assert brief.provider_settings["registry_memory"]["enabled"] is True
     assert brief.provider_settings["retrieval"]["include_history_slices"] is True
+
+
+def test_safe_artifact_path_allows_configured_shared_output(monkeypatch, tmp_path: Path):
+    workspace_root = tmp_path / "release"
+    (workspace_root / "output").mkdir(parents=True)
+    shared_output = tmp_path / "shared-output"
+    shared_output.mkdir(parents=True)
+    artifact_path = shared_output / "run.csv"
+    artifact_path.write_text("name\nCandidate\n", encoding="utf-8")
+
+    monkeypatch.setattr("hr_hunter.recruiter_app.resolve_output_dir", lambda *_args, **_kwargs: shared_output)
+
+    assert safe_artifact_path(str(artifact_path), workspace_root=workspace_root) == artifact_path.resolve()
 
 
 def test_assess_ui_brief_quality_recommends_follow_up_questions_for_ambiguous_brief():

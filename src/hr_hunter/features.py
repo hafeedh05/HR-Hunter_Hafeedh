@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional
 
-from hr_hunter.briefing import normalize_text, unique_preserving_order
+from hr_hunter.briefing import merge_company_aliases, normalize_text, unique_preserving_order
 from hr_hunter.geo import distance_from_center
 from hr_hunter.models import CandidateProfile, SearchBrief
 
@@ -1200,6 +1200,21 @@ def build_candidate_features(candidate: CandidateProfile, brief: SearchBrief) ->
         brief.company_aliases,
         match_mode=brief.company_match_mode,
     )
+    if not company_match["current_match"] and not company_match["history_match"] and brief.sourcing_company_targets:
+        sourcing_company_match = best_company_match(
+            candidate.current_company,
+            extract_experience_companies(candidate),
+            merge_company_aliases(brief.sourcing_company_targets, {}),
+            match_mode=brief.company_match_mode,
+        )
+        if sourcing_company_match["current_match"]:
+            company_match["score"] = max(float(company_match["score"]), 0.55)
+            company_match["matches"] = list(sourcing_company_match["matches"])
+            notes.append("company_match: sourcing_company_signal")
+        elif sourcing_company_match["history_match"]:
+            company_match["score"] = max(float(company_match["score"]), 0.3)
+            company_match["matches"] = list(sourcing_company_match["matches"])
+            notes.append("company_match: sourcing_company_history_signal")
     text_parts = experience_text_parts(candidate)
     employment_text_parts = candidate_text_parts(candidate)
     location_match_score, location_bucket, location_aligned, location_notes = evaluate_location_match(candidate, brief)

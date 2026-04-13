@@ -265,6 +265,8 @@ def test_score_candidate_does_not_treat_peer_source_company_as_hard_company_matc
     scored = score_candidate(candidate, brief)
 
     assert scored.current_target_company_match is False
+    assert scored.company_match_score >= 0.55
+    assert "The One" in scored.matched_companies
     assert "Marina Home Interiors" not in scored.matched_companies
 
 

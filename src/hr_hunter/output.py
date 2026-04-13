@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Set, Tuple
 
 from hr_hunter.candidate_order import (
+    candidate_has_scope_anchor,
     candidate_is_in_scope,
     candidate_is_precise_market_match,
     candidate_priority_sort_tuple,
@@ -354,7 +355,12 @@ def _infer_in_scope(candidate: CandidateProfile) -> bool:
     parser_confidence = _infer_parser_confidence(candidate)
     if "parser_confidence_too_low" in set(candidate.cap_reasons or []):
         return False
-    return bool(candidate.current_title_match and _candidate_market_match(candidate) and parser_confidence >= 0.35)
+    return bool(
+        candidate.current_title_match
+        and _candidate_market_match(candidate)
+        and parser_confidence >= 0.35
+        and candidate_has_scope_anchor(candidate)
+    )
 
 
 def _infer_scope_bucket(candidate: CandidateProfile) -> str:
@@ -368,15 +374,20 @@ def _infer_scope_bucket(candidate: CandidateProfile) -> str:
 
 
 def _infer_skill_overlap_score(candidate: CandidateProfile, function_fit: float, industry_fit: float) -> float:
+    feature_scores = candidate.feature_scores if isinstance(candidate.feature_scores, dict) else {}
+    raw_skill_overlap = float(feature_scores.get("skill_overlap", 0.0) or 0.0)
+    if raw_skill_overlap > 0.0:
+        return raw_skill_overlap
     if candidate.skill_overlap_score > 0.0:
         return candidate.skill_overlap_score
+    semantic_similarity = float(
+        feature_scores.get("semantic_similarity", candidate.semantic_similarity_score or 0.0) or 0.0
+    )
     if candidate.current_title_match and candidate.industry_aligned:
-        return 0.85
-    if candidate.current_title_match:
-        return 0.7
-    if function_fit >= 0.7:
-        return 0.65
-    return round(max(function_fit, industry_fit * 0.5), 3)
+        return round(max(0.12, min(0.22, semantic_similarity + 0.08)), 3)
+    if function_fit >= 0.7 and semantic_similarity >= 0.12:
+        return round(min(0.18, semantic_similarity), 3)
+    return round(max(0.0, semantic_similarity * 0.6, industry_fit * 0.15), 3)
 
 
 def _infer_years_fit_score(candidate: CandidateProfile) -> float:

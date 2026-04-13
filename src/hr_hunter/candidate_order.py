@@ -38,6 +38,25 @@ PROFILE_SOURCE_PATH_HINTS = (
 )
 
 
+def _candidate_feature_score(
+    candidate: CandidateProfile,
+    *,
+    feature_key: str,
+    attribute_name: str,
+) -> float:
+    feature_scores = getattr(candidate, "feature_scores", None)
+    if isinstance(feature_scores, dict) and feature_key in feature_scores:
+        raw_value = feature_scores.get(feature_key)
+        try:
+            return float(raw_value or 0.0)
+        except (TypeError, ValueError):
+            pass
+    try:
+        return float(getattr(candidate, attribute_name, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def is_title_market_priority_brief(brief: SearchBrief | None) -> bool:
     if brief is None:
         return False
@@ -91,10 +110,46 @@ def candidate_is_in_scope(candidate: CandidateProfile) -> bool:
     if bool(getattr(candidate, "in_scope", False)):
         return True
     parser_confidence = float(getattr(candidate, "parser_confidence", 0.0) or 0.0)
+    anchor_supported = candidate_has_scope_anchor(candidate)
     return bool(
         getattr(candidate, "current_title_match", False)
         and candidate_is_market_match(candidate)
         and parser_confidence >= 0.35
+        and anchor_supported
+    )
+
+
+def candidate_has_scope_anchor(candidate: CandidateProfile) -> bool:
+    company_match_score = _candidate_feature_score(
+        candidate,
+        feature_key="company_match",
+        attribute_name="company_match_score",
+    )
+    industry_fit_score = _candidate_feature_score(
+        candidate,
+        feature_key="industry_fit",
+        attribute_name="industry_fit_score",
+    )
+    skill_overlap_score = _candidate_feature_score(
+        candidate,
+        feature_key="skill_overlap",
+        attribute_name="skill_overlap_score",
+    )
+    semantic_similarity_score = _candidate_feature_score(
+        candidate,
+        feature_key="semantic_similarity",
+        attribute_name="semantic_similarity_score",
+    )
+    evidence_quality_score = _candidate_feature_score(
+        candidate,
+        feature_key="evidence_quality",
+        attribute_name="evidence_quality_score",
+    )
+    return bool(
+        company_match_score >= 0.28
+        or industry_fit_score >= 0.35
+        or skill_overlap_score >= 0.15
+        or (semantic_similarity_score >= 0.12 and evidence_quality_score >= 0.45)
     )
 
 
@@ -127,8 +182,13 @@ def _candidate_priority_bucket(
     history_company_match = bool(getattr(candidate, "target_company_history_match", False))
     precise_market_match = candidate_is_precise_market_match(candidate)
     market_match = candidate_is_market_match(candidate)
+    anchor_supported = candidate_has_scope_anchor(candidate)
     strong_function_fit = float(getattr(candidate, "current_function_fit", 0.0) or 0.0) >= 0.6
-    strong_skill_fit = float(getattr(candidate, "skill_overlap_score", 0.0) or 0.0) >= 0.35
+    strong_skill_fit = _candidate_feature_score(
+        candidate,
+        feature_key="skill_overlap",
+        attribute_name="skill_overlap_score",
+    ) >= 0.18
     strong_evidence = (
         float(getattr(candidate, "parser_confidence", 0.0) or 0.0) >= 0.45
         or float(getattr(candidate, "evidence_quality_score", 0.0) or 0.0) >= 0.35
@@ -140,65 +200,77 @@ def _candidate_priority_bucket(
             return 0
         if current_company_match and title_match and market_match:
             return 1
-        if title_match and precise_market_match:
+        if title_match and precise_market_match and anchor_supported:
             return 2
-        if current_company_match and precise_market_match:
+        if title_match and market_match and anchor_supported:
             return 3
-        if title_match and market_match:
+        if current_company_match and precise_market_match:
             return 4
-        if current_company_match and title_match:
+        if title_match and precise_market_match:
             return 5
-        if history_company_match and title_match and market_match:
+        if title_match and market_match:
             return 6
-        if title_match and strong_function_fit and strong_skill_fit:
+        if current_company_match and title_match:
             return 7
-        if precise_market_match and strong_function_fit and strong_evidence:
+        if history_company_match and title_match and market_match:
             return 8
-        if market_match and strong_function_fit and strong_evidence:
+        if title_match and strong_function_fit and anchor_supported:
             return 9
-        if title_match:
+        if precise_market_match and strong_function_fit and strong_evidence:
             return 10
-        if market_match and strong_function_fit:
+        if market_match and strong_function_fit and strong_evidence:
             return 11
+        if title_match:
+            return 12
+        if market_match and strong_function_fit:
+            return 13
         return 14
 
     if title_market_priority:
-        if title_match and precise_market_match:
+        if title_match and precise_market_match and anchor_supported:
             return 0
-        if title_match and market_match:
+        if title_match and market_match and anchor_supported:
             return 1
-        if title_match:
+        if title_match and precise_market_match:
             return 2
-        if precise_market_match and strong_function_fit and strong_skill_fit:
+        if title_match and market_match:
             return 3
-        if market_match and strong_function_fit:
+        if title_match:
             return 4
+        if precise_market_match and strong_function_fit and strong_skill_fit:
+            return 5
+        if market_match and strong_function_fit:
+            return 6
         return 14
 
-    if title_match and precise_market_match:
+    if title_match and precise_market_match and anchor_supported:
         return 0
-    if title_match and market_match:
+    if title_match and market_match and anchor_supported:
         return 1
-    if title_match and strong_function_fit and strong_evidence:
+    if title_match and strong_function_fit and anchor_supported:
         return 2
     if precise_market_match and strong_function_fit and strong_skill_fit:
         return 3
     if market_match and strong_function_fit and strong_skill_fit:
         return 4
-    if title_match and strong_function_fit:
-        return 5
-    if precise_market_match and strong_evidence:
-        return 6
     if current_company_match and title_match:
-        return 7
+        return 5
     if history_company_match and title_match and market_match:
+        return 6
+    if title_match and precise_market_match:
+        return 7
+    if title_match and market_match:
         return 8
-    if title_match:
+    if title_match and strong_function_fit:
         return 9
-    if market_match and strong_function_fit:
+    if precise_market_match and strong_evidence:
         return 10
-    if market_match:
+    if market_match and strong_function_fit:
         return 11
+    if title_match:
+        return 12
+    if market_match:
+        return 13
     return 14
 
 
@@ -229,11 +301,31 @@ def candidate_priority_sort_tuple(
     current_title_confirmed = 0 if getattr(candidate, "current_title_confirmed", False) else 1
     current_role_proof_count = int(getattr(candidate, "current_role_proof_count", 0) or 0)
     current_function_fit = float(getattr(candidate, "current_function_fit", 0.0) or 0.0)
-    skill_overlap_score = float(getattr(candidate, "skill_overlap_score", 0.0) or 0.0)
-    industry_fit_score = float(getattr(candidate, "industry_fit_score", 0.0) or 0.0)
-    company_match_score = float(getattr(candidate, "company_match_score", 0.0) or 0.0)
-    location_match_score = float(getattr(candidate, "location_match_score", 0.0) or 0.0)
-    evidence_quality_score = float(getattr(candidate, "evidence_quality_score", 0.0) or 0.0)
+    skill_overlap_score = _candidate_feature_score(
+        candidate,
+        feature_key="skill_overlap",
+        attribute_name="skill_overlap_score",
+    )
+    industry_fit_score = _candidate_feature_score(
+        candidate,
+        feature_key="industry_fit",
+        attribute_name="industry_fit_score",
+    )
+    company_match_score = _candidate_feature_score(
+        candidate,
+        feature_key="company_match",
+        attribute_name="company_match_score",
+    )
+    location_match_score = _candidate_feature_score(
+        candidate,
+        feature_key="location_match",
+        attribute_name="location_match_score",
+    )
+    evidence_quality_score = _candidate_feature_score(
+        candidate,
+        feature_key="evidence_quality",
+        attribute_name="evidence_quality_score",
+    )
     source_quality_score = float(getattr(candidate, "source_quality_score", 0.0) or 0.0)
     parser_confidence = float(getattr(candidate, "parser_confidence", 0.0) or 0.0)
     score = float(getattr(candidate, "score", 0.0) or 0.0)

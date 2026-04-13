@@ -3052,10 +3052,14 @@ def build_app_bootstrap() -> Dict[str, Any]:
 def safe_artifact_path(raw_path: str, *, workspace_root: Path) -> Path:
     resolved = Path(raw_path).expanduser().resolve()
     workspace_root = workspace_root.resolve()
-    output_root = (workspace_root / "output").resolve()
-    try:
-        resolved.relative_to(output_root)
-    except ValueError:
-        raise ValueError("Only files inside the workspace output directory can be downloaded.")
-    else:
+    allowed_roots = {
+        (workspace_root / "output").resolve(),
+        resolve_output_dir().resolve(),
+    }
+    for output_root in allowed_roots:
+        try:
+            resolved.relative_to(output_root)
+        except ValueError:
+            continue
         return resolved
+    raise ValueError("Only files inside the configured output directories can be downloaded.")

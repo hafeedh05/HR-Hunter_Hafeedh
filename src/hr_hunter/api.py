@@ -269,6 +269,40 @@ def _resolve_effective_verification_target(
     }
 
 
+def _verification_progress_base(
+    pipeline_metrics: Dict[str, Any] | None,
+    latest_telemetry: Dict[str, Any] | None,
+) -> Dict[str, int]:
+    pipeline_metrics = dict(pipeline_metrics or {})
+    latest_telemetry = dict(latest_telemetry or {})
+    return {
+        "queries_completed": max(
+            int(pipeline_metrics.get("queries_completed", 0) or 0),
+            int(latest_telemetry.get("queries_completed", 0) or 0),
+        ),
+        "queries_total": max(
+            int(pipeline_metrics.get("queries_total", 0) or 0),
+            int(latest_telemetry.get("queries_total", 0) or 0),
+        ),
+        "raw_found": max(
+            int(pipeline_metrics.get("raw_found", 0) or 0),
+            int(latest_telemetry.get("raw_found", 0) or 0),
+        ),
+        "unique_after_dedupe": max(
+            int(pipeline_metrics.get("unique_after_dedupe", 0) or 0),
+            int(latest_telemetry.get("unique_after_dedupe", 0) or 0),
+        ),
+        "rerank_target": max(
+            int(pipeline_metrics.get("rerank_target", 0) or 0),
+            int(latest_telemetry.get("rerank_target", 0) or 0),
+        ),
+        "reranked_count": max(
+            int(pipeline_metrics.get("reranked_count", 0) or 0),
+            int(latest_telemetry.get("reranked_count", 0) or 0),
+        ),
+    }
+
+
 def _write_app_request(kind: str, payload: Dict[str, Any]) -> Dict[str, str]:
     output_root = resolve_output_dir() / "inbox"
     output_root.mkdir(parents=True, exist_ok=True)
@@ -1280,50 +1314,10 @@ def create_app() -> "FastAPI":
                 )
                 if verifier.is_configured():
                     verification_pipeline_metrics = dict(report.summary.get("pipeline_metrics", {}) or {})
-                    verification_progress_base = {
-                        "queries_completed": int(
-                            verification_pipeline_metrics.get(
-                                "queries_completed",
-                                latest_telemetry.get("queries_completed", 0),
-                            )
-                            or 0
-                        ),
-                        "queries_total": int(
-                            verification_pipeline_metrics.get(
-                                "queries_total",
-                                latest_telemetry.get("queries_total", 0),
-                            )
-                            or 0
-                        ),
-                        "raw_found": int(
-                            verification_pipeline_metrics.get(
-                                "raw_found",
-                                latest_telemetry.get("raw_found", 0),
-                            )
-                            or 0
-                        ),
-                        "unique_after_dedupe": int(
-                            verification_pipeline_metrics.get(
-                                "unique_after_dedupe",
-                                latest_telemetry.get("unique_after_dedupe", 0),
-                            )
-                            or 0
-                        ),
-                        "rerank_target": int(
-                            verification_pipeline_metrics.get(
-                                "rerank_target",
-                                latest_telemetry.get("rerank_target", 0),
-                            )
-                            or 0
-                        ),
-                        "reranked_count": int(
-                            verification_pipeline_metrics.get(
-                                "reranked_count",
-                                latest_telemetry.get("reranked_count", 0),
-                            )
-                            or 0
-                        ),
-                    }
+                    verification_progress_base = _verification_progress_base(
+                        verification_pipeline_metrics,
+                        latest_telemetry,
+                    )
 
                     def _on_verification_progress(event: Dict[str, Any]) -> None:
                         checked = max(0, int(event.get("candidates_checked", 0) or 0))
