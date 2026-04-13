@@ -2053,6 +2053,12 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         verification_enabled = tuned_verification_enabled
     if verification_enabled is None:
         verification_enabled = True
+    peer_company_only_executive_search = bool(
+        executive_brief
+        and not companies
+        and bool(sourcing_companies)
+        and limit >= 180
+    )
     verification_top_n = _coerce_int(payload.get("verification_top_n"))
     if verification_top_n is None:
         verification_top_n = tuned_verification_top_n
@@ -2071,6 +2077,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     scope_first_enabled = _coerce_bool(payload.get("scope_first_enabled"))
     if scope_first_enabled is None:
         scope_first_enabled = _coerce_bool(ui_meta.get("scope_first_enabled"))
+    scope_first_explicit = scope_first_enabled is not None
     if scope_first_enabled is None:
         scope_first_enabled = _recommended_scope_first_enabled(
             search_profile=search_profile,
@@ -2079,6 +2086,10 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             strict_market_scope=strict_market_scope,
             company_count=len(companies),
         )
+    if peer_company_only_executive_search and not scope_first_explicit:
+        # Executive searches that only have peer-company hints stall when they spend round 0 in
+        # narrow scope-first mode. Let them use the focused profile, but start discovery immediately.
+        scope_first_enabled = False
     in_scope_target = _coerce_int(payload.get("in_scope_target"))
     if in_scope_target is None:
         in_scope_target = _coerce_int(ui_meta.get("in_scope_target"))
@@ -2134,6 +2145,9 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if verification_company_location_probe_queries_value is None
         else verification_company_location_probe_queries_value,
     )
+    if peer_company_only_executive_search:
+        verification_location_probe_queries = max(1, verification_location_probe_queries)
+        verification_company_location_probe_queries = max(1, verification_company_location_probe_queries)
     explicit_include_history_slices = _coerce_bool(payload.get("include_history_slices"))
     explicit_include_discovery_slices = _coerce_bool(payload.get("include_discovery_slices"))
     explicit_geo_fanout = _coerce_bool(payload.get("geo_fanout_enabled"))
@@ -2573,7 +2587,7 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "prioritize_first_location": True,
                     "allow_adjacent_titles": False,
                     "strict_market_scope": True,
-                    "expand_search_when_thin": False,
+                    "expand_search_when_thin": True,
                 },
                 "jd_breakdown": {
                     **extract_job_description_breakdown(
@@ -2666,7 +2680,8 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         "include_discovery_slices": True,
                         "verification_top_n": 140,
                         "verification_parallel_candidates": 28,
-                        "verification_location_probe_queries": 0,
+                        "verification_location_probe_queries": 1,
+                        "verification_company_location_probe_queries": 1,
                         "query_family_budgets": {
                             "team_leadership_pages": 8,
                             "appointment_news_pages": 6,

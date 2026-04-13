@@ -133,6 +133,15 @@ EXECUTIVE_TITLE_HINTS = (
     "vice president",
     "vp",
 )
+EXECUTIVE_SOURCE_TERMS = (
+    "leadership",
+    "management",
+    "team",
+    "biography",
+    "profile",
+    "appointed",
+    "appointment",
+)
 
 
 def parse_year(value: str) -> int | None:
@@ -180,6 +189,15 @@ def _is_title_market_priority_brief(brief: SearchBrief) -> bool:
         and len(normalized_locations) <= 4
         and not any(hint in normalized_role_scope for hint in EXECUTIVE_TITLE_HINTS)
     )
+
+
+def _is_executive_brief(brief: SearchBrief) -> bool:
+    normalized_role_scope = " ".join(
+        normalize_text(str(value))
+        for value in [brief.role_title, *brief.titles]
+        if normalize_text(str(value))
+    )
+    return any(hint in normalized_role_scope for hint in EXECUTIVE_TITLE_HINTS)
 
 
 class PublicEvidenceVerifier:
@@ -399,6 +417,8 @@ class PublicEvidenceVerifier:
             )
             if hint
         )
+        executive_source_terms = self._format_query_terms(EXECUTIVE_SOURCE_TERMS)
+        executive_brief = _is_executive_brief(brief)
 
         queries = [
             " ".join(
@@ -416,16 +436,6 @@ class PublicEvidenceVerifier:
                 part
                 for part in [
                     name_term,
-                    f"({company_terms})" if company_terms else "",
-                    f'("{brief.geography.country}")' if brief.geography.country else "",
-                    self._site_filters(["-site:linkedin.com", "-site:ie.linkedin.com"]),
-                ]
-                if part
-            ),
-            " ".join(
-                part
-                for part in [
-                    name_term,
                     f"({title_terms})" if title_terms else "",
                     f"({company_terms})" if company_terms else "",
                     self._site_filters(["-site:linkedin.com", "-site:ie.linkedin.com"]),
@@ -433,6 +443,35 @@ class PublicEvidenceVerifier:
                 if part
             ),
         ]
+        if executive_brief:
+            queries.insert(
+                1,
+                " ".join(
+                    part
+                    for part in [
+                        name_term,
+                        f"({company_terms})" if company_terms else "",
+                        f"({title_terms})" if title_terms else "",
+                        f"({executive_source_terms})" if executive_source_terms else "",
+                        self._site_filters(["-site:linkedin.com", "-site:ie.linkedin.com"]),
+                    ]
+                    if part
+                ),
+            )
+        else:
+            queries.insert(
+                1,
+                " ".join(
+                    part
+                    for part in [
+                        name_term,
+                        f"({company_terms})" if company_terms else "",
+                        f'("{brief.geography.country}")' if brief.geography.country else "",
+                        self._site_filters(["-site:linkedin.com", "-site:ie.linkedin.com"]),
+                    ]
+                    if part
+                ),
+            )
 
         queries = unique_preserving_order([query for query in queries if query])[: self.queries_per_candidate]
 

@@ -1450,9 +1450,24 @@ function renderProjectSummary() {
         </div>
       </div>
     `;
-    document.getElementById("summary-open-recruiter").addEventListener("click", () => switchTab("recruiter"));
-    document.getElementById("summary-open-results").addEventListener("click", () => switchTab("results"));
-    document.getElementById("summary-open-candidates").addEventListener("click", () => switchTab("candidates"));
+    document.getElementById("summary-open-recruiter").addEventListener("click", async () => {
+      if (state.selectedProjectId) {
+        await loadProject(state.selectedProjectId);
+      }
+      switchTab("recruiter");
+    });
+    document.getElementById("summary-open-results").addEventListener("click", async () => {
+      if (state.selectedProjectId) {
+        await loadProject(state.selectedProjectId);
+      }
+      switchTab("results");
+    });
+    document.getElementById("summary-open-candidates").addEventListener("click", async () => {
+      if (state.selectedProjectId) {
+        await loadProject(state.selectedProjectId);
+      }
+      switchTab("candidates");
+    });
   }
 
 function projectStatusLabel(status) {
@@ -1527,6 +1542,9 @@ function renderProjectList() {
   root.innerHTML = state.projects.map((project) => projectCardMarkup(project, project.id === state.selectedProjectId)).join("");
   root.querySelectorAll("[data-project-id]").forEach((button) => {
     button.addEventListener("click", async () => {
+      await loadProject(button.dataset.projectId);
+    });
+    button.addEventListener("dblclick", async () => {
       await loadProject(button.dataset.projectId);
       switchTab("recruiter");
     });
