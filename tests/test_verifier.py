@@ -628,6 +628,51 @@ def test_verify_candidates_progress_counts_only_checked_candidates(monkeypatch) 
     assert stats["reject_count"] == 1
 
 
+def test_collect_evidence_short_circuits_on_strong_seed_profile(monkeypatch) -> None:
+    verifier = PublicEvidenceVerifier({"queries_per_candidate": 2, "location_probe_queries": 1})
+    brief = build_search_brief(
+        {
+            "id": "verify-seed-short-circuit-test",
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
+            "company_targets": ["Unilever"],
+            "geography": {
+                "location_name": "Dublin",
+                "country": "Ireland",
+                "location_hints": ["Dublin", "Ireland"],
+            },
+        }
+    )
+    candidate = CandidateProfile(
+        full_name="Jane Search",
+        current_title="Brand Manager",
+        current_company="Unilever",
+        location_name="Dublin, Ireland",
+        current_title_match=True,
+        location_aligned=True,
+        location_precision_bucket="named_target_location",
+        raw={
+            "url": "https://example.com/people/jane-search",
+            "title": "Jane Search | Brand Manager | Unilever",
+            "description": "Jane Search is Brand Manager at Unilever based in Dublin, Ireland.",
+        },
+    )
+
+    monkeypatch.setattr(verifier, "is_configured", lambda: True)
+
+    async def failing_search(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("network search should not run for strong seed evidence")
+
+    monkeypatch.setattr(verifier.client, "search", failing_search)
+
+    evidence, requests_used = asyncio.run(verifier.collect_evidence(candidate, brief))
+
+    assert requests_used == 0
+    assert len(evidence) == 1
+    assert evidence[0].source_url == "https://example.com/people/jane-search"
+    assert evidence[0].current_employment_signal is True
+
+
 def test_apply_evidence_caps_historical_only_public_match() -> None:
     verifier = PublicEvidenceVerifier()
     brief = build_search_brief(

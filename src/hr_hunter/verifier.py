@@ -362,6 +362,32 @@ class PublicEvidenceVerifier:
     def is_configured(self) -> bool:
         return self.client.is_configured()
 
+    def _seed_record_can_short_circuit(
+        self,
+        candidate: CandidateProfile,
+        brief: SearchBrief,
+        record: EvidenceRecord,
+    ) -> bool:
+        if not (
+            record.name_match
+            and record.company_match
+            and record.title_matches
+            and not self._looks_like_past_role(self._record_text(record))
+        ):
+            return False
+        if (brief.titles or brief.title_keywords) and not candidate.current_title_match:
+            return False
+        if not (record.current_employment_signal or record.profile_signal):
+            return False
+        if record.confidence < 0.75:
+            return False
+        has_location_scope = bool(brief.geography.location_name or brief.geography.country or brief.location_targets)
+        if not has_location_scope:
+            return True
+        if self._location_is_imprecise(candidate, brief):
+            return bool(record.precise_location_match or record.location_match)
+        return bool(candidate.location_aligned or record.location_match)
+
     def build_queries(self, candidate: CandidateProfile, brief: SearchBrief) -> List[str]:
         name_term = f'"{candidate.full_name}"' if candidate.full_name else ""
         company_terms = " OR ".join(f'"{alias}"' for alias in company_aliases(candidate, brief)[:3])
@@ -662,6 +688,8 @@ class PublicEvidenceVerifier:
             if seed_record.name_match or seed_record.company_match or seed_record.title_matches:
                 seed_key = seed_record.source_url or f"{seed_record.source_domain}:{seed_record.title}"
                 evidence[seed_key] = seed_record
+                if self._seed_record_can_short_circuit(candidate, brief, seed_record):
+                    return [seed_record], 0
 
         queries = self.build_queries(candidate, brief)
         location_queries = self.build_company_location_queries(candidate, brief) if self._location_is_imprecise(candidate, brief) else []

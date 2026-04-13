@@ -397,16 +397,18 @@ class SearchEngine:
                     **last_scope_counts,
                 }
             )
-            candidate_pool = await run_blocking_stage(
-                stage="rerank",
-                stage_label="Rerank",
-                message="Applying trained model from feedback.",
-                percent=90,
-                worker=lambda: sort_candidates(apply_learned_ranker(brief, candidate_pool), brief),
-                reranked_count=reranked_count,
-                finalized_count=0,
-            )
-            last_scope_counts = build_scope_progress_counts(candidate_pool)
+            learned_ranker_settings = parse_learned_ranker_settings(brief)
+            if learned_ranker_settings.enabled:
+                candidate_pool = await run_blocking_stage(
+                    stage="rerank",
+                    stage_label="Rerank",
+                    message="Applying trained model from feedback.",
+                    percent=90,
+                    worker=lambda: sort_candidates(apply_learned_ranker(brief, candidate_pool), brief),
+                    reranked_count=reranked_count,
+                    finalized_count=0,
+                )
+                last_scope_counts = build_scope_progress_counts(candidate_pool)
 
         final_candidates = attach_registry_metadata(candidate_pool[:limit])
         last_scope_counts = build_scope_progress_counts(final_candidates)

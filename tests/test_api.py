@@ -3,6 +3,7 @@ from hr_hunter.api import (
     _apply_strict_scope_shortlist,
     _finalize_report_for_limit,
     _job_actor_from_payload,
+    _resolve_effective_verification_target,
     _resolve_pipeline_progress_percent,
     _runtime_storage_snapshot,
     _should_stop_after_stagnant_top_up,
@@ -259,6 +260,48 @@ def test_finalize_report_for_limit_uses_final_scope_order_after_verification() -
         "Verified Exact Match",
         "Rejected But Proof Heavy",
     ]
+
+
+def test_resolve_effective_verification_target_trims_weak_tail() -> None:
+    candidates = [
+        CandidateProfile(
+            full_name=f"In Scope {index}",
+            current_title="Supply Chain Manager",
+            current_title_match=True,
+            location_aligned=True,
+            location_precision_bucket="named_target_location",
+            parser_confidence=0.72,
+            verification_status="review",
+            score=68.0,
+        )
+        for index in range(30)
+    ] + [
+        CandidateProfile(
+            full_name=f"Adjacent {index}",
+            current_title="Operations Director",
+            current_title_match=False,
+            location_aligned=True,
+            location_precision_bucket="country_only",
+            parser_confidence=0.28,
+            verification_status="reject",
+            score=44.0,
+        )
+        for index in range(110)
+    ]
+
+    plan = _resolve_effective_verification_target(
+        candidates,
+        requested_limit=100,
+        verification_target=80,
+        scope_target=24,
+        company_required=False,
+    )
+
+    assert plan["requested_target"] == 80
+    assert plan["shortlist_scope_count"] == 30
+    assert plan["shortlist_precise_scope_count"] == 30
+    assert plan["effective_target"] < plan["requested_target"]
+    assert plan["effective_target"] >= 42
 
 
 def test_should_stop_after_stagnant_top_up_when_near_target():

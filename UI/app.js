@@ -427,7 +427,7 @@ function defaultSettingsFromConfig() {
     include_history_slices: defaults.include_history_slices !== false,
     include_discovery_slices: defaults.include_discovery_slices !== false,
     registry_memory_enabled: defaults.registry_memory_enabled !== false,
-    reranker_model_name: defaults.reranker_model_name || "BAAI/bge-reranker-v2-m3",
+    reranker_model_name: defaults.reranker_model_name || "cross-encoder/ms-marco-MiniLM-L6-v2",
   };
 }
 
@@ -1840,6 +1840,13 @@ function latestCompletedRunIdForProject(projectId, options = {}) {
   if (firstRunId) {
     return firstRunId;
   }
+  const project = options.project || selectedProjectFromList() || state.selectedProject;
+  if (project && String(project.id || "").trim() === normalizedProjectId) {
+    const projectLatestRunId = String(project.latest_run_id || "").trim();
+    if (projectLatestRunId) {
+      return projectLatestRunId;
+    }
+  }
   return "";
 }
 
@@ -3023,15 +3030,20 @@ async function refreshProjects(query = state.projectSearchQuery) {
   state.projectSearchQuery = query;
   const payload = await fetchJSON(`/app/projects?query=${encodeURIComponent(query)}&limit=60`);
   state.projects = Array.isArray(payload.projects) ? payload.projects : [];
-  renderProjectList();
-  renderHistory();
   const selected = selectedProjectFromList();
-  if (selected && !state.selectedProject) {
-    state.selectedProject = selected;
+  if (selected) {
+    state.selectedProject = state.selectedProject && state.selectedProject.id === selected.id
+      ? { ...state.selectedProject, ...selected }
+      : selected;
   } else if (!selected && state.selectedProjectId) {
     state.selectedProjectId = "";
     state.selectedProject = null;
   }
+  renderProjectList();
+  renderProjectSummary();
+  renderHistory();
+  renderResults();
+  renderCandidates();
   updateTopbarActions();
 }
 
@@ -3318,7 +3330,11 @@ async function loadProjectRun(projectId, runId = "", options = {}) {
     if (!isCurrentProjectRequest(projectId, requestId, "projectRunRequestId")) {
       return null;
     }
-    state.currentReport = payload && payload.run_id ? payload : null;
+    if (payload && payload.run_id) {
+      state.currentReport = payload;
+    } else if (!options.suppressErrors) {
+      state.currentReport = null;
+    }
     state.candidateSearchQuery = "";
     state.candidateStatusFilter = "all";
     state.candidateLocationFilter = "all";

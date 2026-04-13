@@ -204,6 +204,59 @@ def _resolve_scope_targets(
     }
 
 
+def _resolve_effective_verification_target(
+    candidates: List[Any],
+    *,
+    requested_limit: int,
+    verification_target: int,
+    scope_target: int = 0,
+    company_required: bool = False,
+) -> Dict[str, int]:
+    shortlist_limit = max(0, min(int(verification_target or 0), len(candidates)))
+    if shortlist_limit <= 0:
+        return {
+            "requested_target": 0,
+            "effective_target": 0,
+            "shortlist_scope_count": 0,
+            "shortlist_precise_scope_count": 0,
+        }
+
+    shortlist = list(candidates[:shortlist_limit])
+    shortlist_scope_count = len([candidate for candidate in shortlist if candidate_is_in_scope(candidate)])
+    shortlist_precise_scope_count = len(
+        [
+            candidate
+            for candidate in shortlist
+            if candidate_is_in_scope(candidate) and candidate_is_precise_market_match(candidate)
+        ]
+    )
+    requested = max(1, int(requested_limit or 1))
+    verification_floor = min(
+        shortlist_limit,
+        max(16, min(48, int(round(requested * 0.2)))),
+    )
+    scope_buffer = max(8, min(36, int(round(requested * 0.12))))
+    precise_buffer = max(4, min(18, int(round(requested * 0.06))))
+    effective_target = max(
+        verification_floor,
+        min(shortlist_limit, max(0, int(scope_target or 0))),
+        min(shortlist_limit, shortlist_scope_count + scope_buffer),
+        min(shortlist_limit, shortlist_precise_scope_count + precise_buffer),
+    )
+    if company_required and shortlist_scope_count > 0:
+        effective_target = max(
+            effective_target,
+            min(shortlist_limit, shortlist_scope_count + max(10, min(32, int(round(requested * 0.08))))),
+        )
+    effective_target = min(shortlist_limit, max(verification_floor, effective_target))
+    return {
+        "requested_target": shortlist_limit,
+        "effective_target": effective_target,
+        "shortlist_scope_count": shortlist_scope_count,
+        "shortlist_precise_scope_count": shortlist_precise_scope_count,
+    }
+
+
 def _write_app_request(kind: str, payload: Dict[str, Any]) -> Dict[str, str]:
     output_root = resolve_output_dir() / "inbox"
     output_root.mkdir(parents=True, exist_ok=True)
@@ -1187,21 +1240,25 @@ def create_app() -> "FastAPI":
                     verification_limit=verification_target,
                     scope_target=verification_scope_target,
                 )
+                verification_target_plan = _resolve_effective_verification_target(
+                    report.candidates,
+                    requested_limit=requested_limit,
+                    verification_target=verification_target,
+                    scope_target=verification_scope_target,
+                    company_required=bool(brief.company_targets),
+                )
+                effective_verification_target = int(verification_target_plan["effective_target"] or 0)
                 report.summary = dict(report.summary or {})
                 report.summary["verification_scope_target"] = verification_scope_target
-                report.summary["verification_shortlist_scope_count"] = len(
-                    [
-                        candidate
-                        for candidate in report.candidates[:verification_target]
-                        if candidate_is_in_scope(candidate)
-                    ]
+                report.summary["verification_requested_target"] = int(
+                    verification_target_plan["requested_target"] or 0
                 )
-                report.summary["verification_shortlist_precise_scope_count"] = len(
-                    [
-                        candidate
-                        for candidate in report.candidates[:verification_target]
-                        if candidate_is_in_scope(candidate) and candidate_is_precise_market_match(candidate)
-                    ]
+                report.summary["verification_effective_target"] = effective_verification_target
+                report.summary["verification_shortlist_scope_count"] = int(
+                    verification_target_plan["shortlist_scope_count"] or 0
+                )
+                report.summary["verification_shortlist_precise_scope_count"] = int(
+                    verification_target_plan["shortlist_precise_scope_count"] or 0
                 )
                 verifier = PublicEvidenceVerifier(
                     {
@@ -1210,14 +1267,31 @@ def create_app() -> "FastAPI":
                     }
                 )
                 if verifier.is_configured():
+                    verification_progress_base = {
+                        "queries_completed": int(latest_telemetry.get("queries_completed", 0) or 0),
+                        "queries_total": int(latest_telemetry.get("queries_total", 0) or 0),
+                        "raw_found": int(latest_telemetry.get("raw_found", 0) or 0),
+                        "unique_after_dedupe": int(latest_telemetry.get("unique_after_dedupe", 0) or 0),
+                        "rerank_target": int(latest_telemetry.get("rerank_target", 0) or 0),
+                        "reranked_count": int(latest_telemetry.get("reranked_count", 0) or 0),
+                    }
+
                     def _on_verification_progress(event: Dict[str, Any]) -> None:
                         checked = max(0, int(event.get("candidates_checked", 0) or 0))
-                        total = max(1, int(event.get("candidates_total", verification_target) or verification_target or 1))
+                        total = max(
+                            1,
+                            int(
+                                event.get("candidates_total", effective_verification_target)
+                                or effective_verification_target
+                                or 1
+                            ),
+                        )
                         coverage = min(1.0, max(0.0, checked / max(1, total)))
                         _push_progress(
                             {
                                 "stage": "verifying",
                                 "stage_label": "Verifying",
+                                **verification_progress_base,
                                 "queries_in_flight": 0,
                                 "verification_target": total,
                                 "verified_candidates_checked": checked,
@@ -1241,11 +1315,12 @@ def create_app() -> "FastAPI":
                         {
                             "stage": "verifying",
                             "stage_label": "Verifying",
+                            **verification_progress_base,
                             "queries_in_flight": 0,
-                            "verification_target": verification_target,
+                            "verification_target": effective_verification_target,
                             "verified_candidates_checked": 0,
                             "verification_requests_used": 0,
-                            "verifying_count": verification_target,
+                            "verifying_count": effective_verification_target,
                             "verified_count": 0,
                             "review_count": 0,
                             "reject_count": 0,
@@ -1260,7 +1335,7 @@ def create_app() -> "FastAPI":
                     verification_stats = await verifier.verify_candidates(
                         report.candidates,
                         brief,
-                        limit=verification_target,
+                        limit=effective_verification_target,
                         progress_callback=_on_verification_progress,
                     )
                     refresh_report_summary(report, verification_stats, brief=brief)
