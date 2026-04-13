@@ -55,6 +55,10 @@ LEGACY_SCOPE_SUMMARY_KEYS = {
     "in_scope_count",
     "precise_in_scope_count",
     "scope_counts",
+    "scope_first_enabled",
+    "scope_first_in_scope_target",
+    "scope_first_in_scope_achieved",
+    "scope_target",
     "verification_scope_target",
     "verification_shortlist_scope_count",
     "verification_shortlist_precise_scope_count",
@@ -62,6 +66,7 @@ LEGACY_SCOPE_SUMMARY_KEYS = {
 LEGACY_SCOPE_BRIEF_KEYS = {
     "scope_first_enabled",
     "in_scope_target",
+    "scope_target",
     "verification_scope_target",
 }
 
@@ -84,22 +89,32 @@ def _serialize_multi_value(values: Iterable[str]) -> str:
     return "; ".join(_clean_reason_values(values))
 
 
+def _sanitize_legacy_scope_fields(value: object, *, removed_keys: Set[str]) -> object:
+    if isinstance(value, dict):
+        sanitized: Dict[str, object] = {}
+        for key, item in value.items():
+            normalized_key = str(key or "").strip()
+            if normalized_key in removed_keys:
+                continue
+            sanitized[normalized_key] = _sanitize_legacy_scope_fields(item, removed_keys=removed_keys)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_legacy_scope_fields(item, removed_keys=removed_keys) for item in value]
+    return value
+
+
 def sanitize_brief_payload(payload: Dict[str, object] | None) -> Dict[str, object]:
     if not isinstance(payload, dict):
         return {}
-    sanitized = dict(payload)
-    for key in LEGACY_SCOPE_BRIEF_KEYS:
-        sanitized.pop(key, None)
-    return sanitized
+    sanitized = _sanitize_legacy_scope_fields(payload, removed_keys=LEGACY_SCOPE_BRIEF_KEYS)
+    return dict(sanitized) if isinstance(sanitized, dict) else {}
 
 
 def sanitize_report_summary(summary: Dict[str, object] | None) -> Dict[str, object]:
     if not isinstance(summary, dict):
         return {}
-    sanitized = dict(summary)
-    for key in LEGACY_SCOPE_SUMMARY_KEYS:
-        sanitized.pop(key, None)
-    return sanitized
+    sanitized = _sanitize_legacy_scope_fields(summary, removed_keys=LEGACY_SCOPE_SUMMARY_KEYS)
+    return dict(sanitized) if isinstance(sanitized, dict) else {}
 
 
 def _repair_display_text(value: object) -> str:

@@ -525,6 +525,12 @@ def test_project_summaries_strip_legacy_scope_fields(tmp_path: Path, monkeypatch
             "in_scope_target": 150,
             "verification_scope_target": 120,
             "scope_first_enabled": True,
+            "ui_meta": {
+                "in_scope_target": 150,
+                "verification_scope_target": 120,
+                "scope_first_enabled": True,
+            },
+            "provider_settings": {"verification": {"scope_target": 120}},
         },
         db_path=db_path,
     )
@@ -592,10 +598,16 @@ def test_project_summaries_strip_legacy_scope_fields(tmp_path: Path, monkeypatch
         assert "in_scope_target" not in payload["latest_brief_json"]
         assert "verification_scope_target" not in payload["latest_brief_json"]
         assert "scope_first_enabled" not in payload["latest_brief_json"]
+        assert "in_scope_target" not in payload["latest_brief_json"].get("ui_meta", {})
+        assert "verification_scope_target" not in payload["latest_brief_json"].get("ui_meta", {})
+        assert "scope_first_enabled" not in payload["latest_brief_json"].get("ui_meta", {})
+        assert "scope_target" not in payload["latest_brief_json"].get("provider_settings", {}).get("verification", {})
         assert "in_scope_count" not in payload["latest_run_summary"]
         assert "precise_in_scope_count" not in payload["latest_run_summary"]
         assert "scope_counts" not in payload["latest_run_summary"]
         assert "verification_scope_target" not in payload["latest_run_summary"]
+        assert "scope_first_enabled" not in payload["latest_run_summary"]
+        assert "scope_first_in_scope_target" not in payload["latest_run_summary"]
 
 
 def test_get_project_run_report_trims_provider_and_candidate_payload(tmp_path: Path):

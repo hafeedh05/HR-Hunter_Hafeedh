@@ -228,6 +228,12 @@ def test_sanitize_scope_legacy_fields_from_brief_and_summary() -> None:
             "in_scope_target": 150,
             "verification_scope_target": 120,
             "scope_first_enabled": True,
+            "ui_meta": {
+                "in_scope_target": 150,
+                "verification_scope_target": 120,
+                "scope_first_enabled": True,
+            },
+            "provider_settings": {"verification": {"scope_target": 120}},
         }
     )
     summary = sanitize_report_summary(
@@ -239,11 +245,19 @@ def test_sanitize_scope_legacy_fields_from_brief_and_summary() -> None:
             "verification_scope_target": 120,
             "verification_shortlist_scope_count": 25,
             "verification_shortlist_precise_scope_count": 21,
+            "scope_first_enabled": True,
+            "scope_first_in_scope_target": 150,
+            "scope_first_in_scope_achieved": 42,
+            "verification": {"scope_target": 120},
         }
     )
 
-    assert brief == {"role_title": "Supply Chain Manager"}
-    assert summary == {"verified_count": 8}
+    assert brief == {
+        "role_title": "Supply Chain Manager",
+        "ui_meta": {},
+        "provider_settings": {"verification": {}},
+    }
+    assert summary == {"verified_count": 8, "verification": {}}
 
 
 def test_build_reporting_summary_drops_legacy_scope_counts() -> None:
