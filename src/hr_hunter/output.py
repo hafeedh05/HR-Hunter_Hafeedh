@@ -933,7 +933,7 @@ def build_quality_diagnostics(
                 ),
                 action=(
                     "Tighten the accepted title family around the roles you will actually interview, and remove "
-                    "looser adjacent titles if they are not genuinely in scope."
+                    "looser adjacent titles if they are not actually relevant to the mandate."
                 ),
             )
         )
@@ -1091,7 +1091,7 @@ def build_quality_diagnostics(
                 total=max(1, target),
                 severity="high" if verified_rate < 0.2 else "medium",
                 message=(
-                    "The market did not produce enough unique in-scope candidates to honestly support a much higher "
+                    "The market did not produce enough unique relevant candidates to honestly support a much higher "
                     "verified count."
                 ),
                 action=(

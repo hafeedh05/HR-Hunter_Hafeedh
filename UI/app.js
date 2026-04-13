@@ -1558,14 +1558,6 @@ function statusFromCandidate(candidate) {
   return { key: "reject", label: "Rejected" };
 }
 
-function candidateIsInScope(candidate) {
-  if (typeof candidate?.in_scope === "boolean") {
-    return candidate.in_scope;
-  }
-  const parserConfidence = safeNumber(candidate?.parser_confidence);
-  return Boolean(candidate?.current_title_match && candidate?.location_aligned && parserConfidence >= 0.35);
-}
-
 function jobProjectId(job) {
   return String(job?.payload?.project_id || job?.result?.project?.id || "").trim();
 }
@@ -2509,7 +2501,6 @@ function candidateCardMarkup(candidate) {
 function candidateTableRowMarkup(candidate, selectedRef) {
   const status = statusFromCandidate(candidate);
   const candidateRef = candidateIdentityRef(candidate);
-  const qualification = titleCaseWords(candidate.qualification_tier || "unclassified");
   const links = [];
   if (candidate.linkedin_url) {
     links.push(`<a class="inline-link" href="${escapeHtml(candidate.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>`);
@@ -2529,7 +2520,6 @@ function candidateTableRowMarkup(candidate, selectedRef) {
       <td>${escapeHtml(candidate.current_company || "No company")}</td>
       <td class="candidate-score-cell">${escapeHtml(formatScore(candidate.score))}</td>
       <td><span class="status-pill status-${escapeHtml(status.key)}">${escapeHtml(status.label)}</span></td>
-      <td>${escapeHtml(qualification)}</td>
       <td>
         <div class="candidate-links-cell">
           ${links.length ? links.join("") : `<span class="muted">No links</span>`}
@@ -2800,7 +2790,6 @@ function renderCandidates() {
             <th>Company</th>
             <th>Score</th>
             <th>Review Bucket</th>
-            <th>Qualification</th>
             <th>Links</th>
           </tr>
         </thead>
