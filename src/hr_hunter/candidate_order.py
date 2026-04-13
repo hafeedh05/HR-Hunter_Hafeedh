@@ -145,6 +145,17 @@ def candidate_has_scope_anchor(candidate: CandidateProfile) -> bool:
         feature_key="evidence_quality",
         attribute_name="evidence_quality_score",
     )
+    normalized_title = normalize_text(str(getattr(candidate, "current_title", "") or ""))
+    executive_like = bool(
+        getattr(candidate, "matched_title_family", "") == "executive"
+        or any(hint in normalized_title for hint in EXECUTIVE_TITLE_HINTS)
+    )
+    if executive_like:
+        return bool(
+            company_match_score >= 0.28
+            or industry_fit_score >= 0.35
+            or (skill_overlap_score >= 0.18 and semantic_similarity_score >= 0.12)
+        )
     return bool(
         company_match_score >= 0.28
         or industry_fit_score >= 0.35
