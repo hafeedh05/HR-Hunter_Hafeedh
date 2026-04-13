@@ -397,6 +397,9 @@ def test_remote_sourcing_client_uses_internal_fetch_limit_when_present(monkeypat
 def test_stop_job_marks_running_job_failed_and_latest_project_job_returns_it(tmp_path: Path) -> None:
     db_path = tmp_path / "state.db"
     queued = enqueue_job("search", {"project_id": "project_123", "role_title": "Supply Chain Manager"}, db_path=db_path)
+
+    assert queued["project_id"] == "project_123"
+
     start_job(queued["job_id"], db_path=db_path)
 
     stopped = stop_job(queued["job_id"], reason="Stopped by admin. Retry when ready.", db_path=db_path)
