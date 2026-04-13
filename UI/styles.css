@@ -343,7 +343,11 @@ select:focus {
   display: block;
 }
 
-.projects-grid,
+.projects-grid {
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  align-items: start;
+}
+
 .feedback-grid,
 .history-grid,
 .settings-grid {
@@ -487,6 +491,13 @@ select:focus {
   gap: 0.75rem;
 }
 
+.project-list {
+  max-height: calc(100vh - 16rem);
+  overflow-y: auto;
+  padding-right: 0.35rem;
+  align-content: start;
+}
+
 .filter-pill-row {
   display: flex;
   gap: 0.65rem;
@@ -582,6 +593,7 @@ select:focus {
   color: var(--text);
   text-align: left;
   padding: 1rem;
+  cursor: pointer;
 }
 
 .project-card.selected {
@@ -601,6 +613,12 @@ select:focus {
 .project-summary-block {
   display: grid;
   gap: 1rem;
+}
+
+.project-summary-card {
+  position: sticky;
+  top: 6.75rem;
+  align-self: start;
 }
 
 .empty-state {
@@ -1555,6 +1573,16 @@ select:focus {
 
   .topbar-right {
     justify-content: flex-start;
+  }
+
+  .project-summary-card {
+    position: static;
+  }
+
+  .project-list {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 }
 

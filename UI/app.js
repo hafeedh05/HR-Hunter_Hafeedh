@@ -1456,7 +1456,7 @@ function renderProjectSummary() {
   }
 
 function projectStatusLabel(status) {
-  if (status === "active") return "Open Project";
+  if (status === "active") return "Active";
   if (status === "on_hold") return "On Hold";
   if (status === "closed") return "Closed";
   return titleCaseWords(status || "active");
@@ -1472,7 +1472,6 @@ function projectMetricChips(project) {
   const runCount = safeNumber(project.run_count);
   const latestCandidates = safeNumber(project.latest_run_candidate_count);
   const summary = latestRunSummary(project);
-  const inScopeCount = safeNumber(summary.in_scope_count);
   const verifiedCount = safeNumber(summary.verified_count);
   const reviewCount = safeNumber(summary.review_count);
   const yieldStatus = String(summary.quality_diagnostics?.yield_status || "").toLowerCase();
@@ -1483,9 +1482,6 @@ function projectMetricChips(project) {
   chips.push(`<span class="info-chip">${escapeHtml(String(runCount))} Runs</span>`);
   if (runCount > 0 || latestCandidates > 0) {
     chips.push(`<span class="info-chip">${escapeHtml(String(latestCandidates))} Latest Candidates</span>`);
-  }
-  if (inScopeCount > 0) {
-    chips.push(`<span class="info-chip chip-scope">${escapeHtml(String(inScopeCount))} In Scope</span>`);
   }
   if (verifiedCount > 0) {
     chips.push(`<span class="info-chip chip-good">${escapeHtml(String(verifiedCount))} Verified</span>`);
@@ -1532,7 +1528,7 @@ function renderProjectList() {
   root.querySelectorAll("[data-project-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       await loadProject(button.dataset.projectId);
-      switchTab("projects");
+      switchTab("recruiter");
     });
   });
 }
@@ -1662,15 +1658,23 @@ function runtimeTargetSeconds(requested) {
   return Math.max(60, Math.round(normalizedRequested * 3));
 }
 
+function rerankEtaReady(rerankedCount, rerankTarget, stageElapsedSeconds) {
+  if (rerankTarget <= 0) return false;
+  const minimumSample = Math.min(rerankTarget, Math.max(24, Math.ceil(rerankTarget * 0.18)));
+  return rerankedCount >= minimumSample && stageElapsedSeconds >= 20;
+}
+
+function finalizingEtaReady(finalizedCount, requested, stageElapsedSeconds) {
+  if (requested <= 0) return finalizedCount > 0 && stageElapsedSeconds >= 10;
+  const minimumSample = Math.min(requested, Math.max(8, Math.ceil(requested * 0.08)));
+  return finalizedCount >= minimumSample && stageElapsedSeconds >= 10;
+}
+
 function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds = 0) {
   const requested = jobRequestedLimit(job);
   const stage = String(backendProgress.stage || job?.status || "").toLowerCase();
   if (job?.job_type === "train_ranker") {
     return Math.max(90, 45 + requested);
-  }
-  const backendEstimatedTotal = safeNumber(backendProgress.estimated_total_seconds, 0);
-  if (backendEstimatedTotal > 0) {
-    return Math.max(elapsedSeconds + (stage === "completed" ? 0 : 1), Math.round(backendEstimatedTotal));
   }
   const queriesTotal = safeNumber(backendProgress.queries_total, 0);
   const queriesCompleted = safeNumber(backendProgress.queries_completed, 0);
@@ -1680,11 +1684,18 @@ function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds =
   const rerankTarget = safeNumber(backendProgress.rerank_target, 0);
   const finalizedCount = safeNumber(backendProgress.finalized_count, 0);
   const explicitPercent = safeNumber(backendProgress.percent, NaN);
+  const stageElapsedSeconds = Math.max(0, safeNumber(backendProgress.stage_elapsed_seconds, 0));
+  const backendEstimatedTotal = safeNumber(backendProgress.estimated_total_seconds, 0);
+  const stableRerankEta = stage !== "rerank" || rerankEtaReady(rerankedCount, rerankTarget, stageElapsedSeconds);
+  const stableFinalizingEta = stage !== "finalizing" || finalizingEtaReady(finalizedCount, requested, stageElapsedSeconds);
+  if (backendEstimatedTotal > 0 && stableRerankEta && stableFinalizingEta) {
+    return Math.max(elapsedSeconds + (stage === "completed" ? 0 : 1), Math.round(backendEstimatedTotal));
+  }
   if (stage === "completed") {
     return Math.max(1, Math.round(elapsedSeconds));
   }
   if (stage === "rerank") {
-    if (elapsedSeconds > 5 && rerankTarget > 0 && rerankedCount > 0) {
+    if (rerankEtaReady(rerankedCount, rerankTarget, stageElapsedSeconds)) {
       const rerankCoverage = Math.max(0.01, Math.min(0.995, rerankedCount / Math.max(1, rerankTarget)));
       const projectedTotal = elapsedSeconds / rerankCoverage;
       return Math.max(elapsedSeconds + 12, Math.min(4 * 3600, Math.round(projectedTotal)));
@@ -1824,22 +1835,23 @@ function runningJobProgress(job) {
     .replace(/\(\s*\d+\s*s\s*elapsed\s*\)\.?/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
+  const stableRerankEta = stage !== "rerank" || rerankEtaReady(rerankedCount, rerankTarget, stageElapsedSeconds);
+  const stableFinalizingEta = stage !== "finalizing" || finalizingEtaReady(finalizedCount, jobRequestedLimit(job), stageElapsedSeconds);
   const displayedEstimatedSeconds = estimatedSeconds;
-  const etaKnown =
+  const baseEtaKnown =
     status === "completed"
     || Number.isFinite(backendEta)
     || backendEstimatedTotal > 0
     || displayedEstimatedSeconds > elapsedSeconds;
+  const etaKnown = stableRerankEta && stableFinalizingEta && baseEtaKnown;
   const stableEstimatedSeconds = etaKnown ? displayedEstimatedSeconds : 0;
   const remainingSeconds = etaKnown
     ? (
-      Number.isFinite(backendEta)
+      Number.isFinite(backendEta) && stableRerankEta && stableFinalizingEta
         ? Math.max(0, Math.round(backendEta))
         : Math.max(0, stableEstimatedSeconds - elapsedSeconds)
     )
     : 0;
-  const inScopeCount = safeNumber(backendProgress.in_scope_count, 0);
-  const preciseInScopeCount = safeNumber(backendProgress.precise_in_scope_count, 0);
   const verifiedCount = safeNumber(backendProgress.verified_count, 0);
   const reviewCount = safeNumber(backendProgress.review_count, 0);
   const rejectCount = safeNumber(backendProgress.reject_count, 0);
@@ -1867,8 +1879,6 @@ function runningJobProgress(job) {
     rerankedCount,
     rerankTarget,
     finalizedCount,
-    inScopeCount,
-    preciseInScopeCount,
     verifiedCount,
     reviewCount,
     rejectCount,
@@ -2029,10 +2039,6 @@ function runningJobMarkup(job, options = {}) {
           <small>Estimated Total</small>
           <strong>${escapeHtml(estimatedTotalValue)}</strong>
         </span>
-        <span>
-          <small>Target Runtime</small>
-          <strong>${escapeHtml(formatDuration(progress.targetRuntimeSeconds))}</strong>
-        </span>
       </div>
       <div class="job-progress-meta">
         <span><strong>Stage</strong> ${escapeHtml(progress.stageLabel)}</span>
@@ -2044,8 +2050,6 @@ function runningJobMarkup(job, options = {}) {
         <span><strong>In Flight</strong> ${escapeHtml(formatCounterValue(progress.queriesInFlight))}</span>
         <span><strong>Raw Found</strong> ${escapeHtml(formatCounterValue(progress.rawFound))}</span>
         <span><strong>Unique</strong> ${escapeHtml(formatCounterValue(progress.uniqueAfterDedupe))}</span>
-        <span><strong>In Scope</strong> ${escapeHtml(formatCounterValue(progress.inScopeCount))}</span>
-        <span><strong>Precise Scope</strong> ${escapeHtml(formatCounterValue(progress.preciseInScopeCount))}</span>
         <span><strong>Reranked</strong> ${escapeHtml(rerankedCounter)}</span>
         <span><strong>Finalized</strong> ${escapeHtml(finalizedCounter)}</span>
         <span><strong>Verifying</strong> ${escapeHtml(verifyingCounter)}</span>
@@ -2161,11 +2165,7 @@ function filteredCandidates() {
   const locationFilter = String(state.candidateLocationFilter || "all");
   return currentCandidates().filter((candidate) => {
     const status = statusFromCandidate(candidate).key;
-    if (state.candidateStatusFilter === "in_scope") {
-      if (!candidateIsInScope(candidate)) {
-        return false;
-      }
-    } else if (state.candidateStatusFilter !== "all" && status !== state.candidateStatusFilter) {
+    if (state.candidateStatusFilter !== "all" && status !== state.candidateStatusFilter) {
       return false;
     }
     const candidateLocation = candidateLocationLabel(candidate);
@@ -2190,9 +2190,6 @@ function filteredCandidates() {
 }
 
 function bucketCountFor(statusKey) {
-  if (statusKey === "in_scope") {
-    return currentCandidates().filter((candidate) => candidateIsInScope(candidate)).length;
-  }
   return currentCandidates().filter((candidate) => statusFromCandidate(candidate).key === statusKey).length;
 }
 
@@ -2281,7 +2278,6 @@ function qualityDiagnosticsMarkup(summary) {
           <h4>${escapeHtml(diagnostics.headline || "Candidate quality diagnostics")}</h4>
         </div>
         <div class="quality-diagnostics-metrics">
-          <span class="info-chip chip-scope"><strong>In Scope</strong> ${escapeHtml(String(summary?.in_scope_count || 0))}</span>
           <span class="info-chip"><strong>Verified Yield</strong> ${escapeHtml(formatPercent(diagnostics.verified_rate || 0))}</span>
           <span class="info-chip"><strong>Verified</strong> ${escapeHtml(String(diagnostics.verified_count || 0))}</span>
           <span class="info-chip"><strong>Unique</strong> ${escapeHtml(String(diagnostics.unique_after_dedupe || 0))}</span>
@@ -2361,13 +2357,11 @@ function renderResultsSummary() {
   const summary = state.currentReport.summary || {};
   const cards = [
     { label: "Candidates", value: safeNumber(summary.candidate_count, state.currentReport.candidates?.length || 0) },
-    { label: "In Scope", value: safeNumber(summary.in_scope_count) },
     { label: "Verified", value: safeNumber(summary.verified_count) },
     { label: "Needs Review", value: safeNumber(summary.review_count) },
     { label: "Rejected", value: safeNumber(summary.reject_count) },
   ];
   const timing = resultsRunTiming();
-  const targetRuntime = formatDuration(runtimeTargetSeconds(currentRequestedCandidateLimit()));
   const finalRuntime = timing.runtimeSeconds > 0 ? formatDuration(timing.runtimeSeconds) : "Not available";
   const estimatedRuntime = timing.estimatedSeconds > 0 ? formatDuration(timing.estimatedSeconds) : "Not available";
   const topLocationBuckets = candidateLocationBuckets().slice(0, 8);
@@ -2411,10 +2405,6 @@ function renderResultsSummary() {
           <div class="summary-timing-card">
             <span>Estimated Time</span>
             <strong>${escapeHtml(estimatedRuntime)}</strong>
-          </div>
-          <div class="summary-timing-card">
-            <span>Target Runtime</span>
-            <strong>${escapeHtml(targetRuntime)}</strong>
           </div>
         </div>
         ${topLocationsMarkup}
@@ -2478,7 +2468,6 @@ function candidateCardMarkup(candidate) {
         <div>
           <div class="candidate-name-row">
             <h4>${escapeHtml(candidate.full_name || "Unnamed Candidate")}</h4>
-            ${candidateIsInScope(candidate) ? `<span class="info-chip chip-scope">In Scope</span>` : ""}
             <span class="status-pill status-${escapeHtml(status.key)}">${escapeHtml(status.label)}</span>
           </div>
           <p class="candidate-subtitle">${escapeHtml(candidate.current_title || "No title")} | ${escapeHtml(candidate.current_company || "No company")} | ${escapeHtml(candidate.location_name || "No location")}</p>
@@ -2589,7 +2578,6 @@ function renderCandidatesSummary() {
     const requested = currentRequestedCandidateLimit();
   const cards = [
     { label: "Returned", value: candidates.length },
-    { label: "In Scope", value: bucketCountFor("in_scope") },
     { label: "Verified", value: bucketCountFor("verified") },
     { label: "Needs Review", value: bucketCountFor("review") },
     { label: "Rejected", value: bucketCountFor("reject") },
@@ -2626,7 +2614,6 @@ function renderCandidateControls() {
   const locationNote = document.getElementById("candidate-location-note");
   const buckets = [
     { id: "all", label: "All", count: currentCandidates().length },
-    { id: "in_scope", label: "In Scope", count: bucketCountFor("in_scope") },
     { id: "verified", label: "Verified", count: bucketCountFor("verified") },
     { id: "review", label: "Needs Review", count: bucketCountFor("review") },
     { id: "reject", label: "Rejected", count: bucketCountFor("reject") },
@@ -2780,10 +2767,7 @@ function renderCandidates() {
   const selectedCandidate = candidates.find((candidate) => candidateIdentityRef(candidate) === selectedRef) || candidates[0];
   const locationFilterLabel =
     state.candidateLocationFilter === "all" ? "All locations" : state.candidateLocationFilter;
-  const bucketLabel =
-    state.candidateStatusFilter === "in_scope"
-      ? "In Scope"
-      : titleCaseWords(state.candidateStatusFilter === "all" ? "all" : state.candidateStatusFilter);
+  const bucketLabel = titleCaseWords(state.candidateStatusFilter === "all" ? "all" : state.candidateStatusFilter);
   tableRoot.innerHTML = `
     <div class="candidate-table-meta">
       <p class="muted">Showing ${escapeHtml(String(candidates.length))} of ${escapeHtml(String(currentCandidates().length))} candidates.</p>

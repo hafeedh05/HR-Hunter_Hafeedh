@@ -957,11 +957,24 @@ def create_app() -> "FastAPI":
                         + finalizing_budget
                     )
                 if stage == "rerank":
-                    if rerank_target > 0 and reranked_count > 0 and stage_elapsed_seconds > 0:
-                        coverage = min(0.995, max(0.02, reranked_count / max(1, rerank_target)))
+                    stable_rerank_samples = (
+                        min(rerank_target, max(24, int(round(rerank_target * 0.18))))
+                        if rerank_target > 0
+                        else 0
+                    )
+                    rerank_projection_ready = (
+                        rerank_target > 0
+                        and reranked_count >= stable_rerank_samples
+                        and stage_elapsed_seconds >= 20
+                    )
+                    if rerank_projection_ready:
+                        coverage = min(0.995, max(0.12, reranked_count / max(1, rerank_target)))
                         stage_total = int(round(stage_elapsed_seconds / coverage))
                     else:
-                        stage_total = stage_elapsed_seconds + max(45, min(900, int(max(1, rerank_target or predicted_rerank_pool) * 0.35) + 30))
+                        stage_total = stage_elapsed_seconds + max(
+                            45,
+                            min(240, int(max(1, rerank_target or predicted_rerank_pool) * 0.9) + 30),
+                        )
                     return completed_before_stage + max(stage_elapsed_seconds, stage_total) + verification_budget + finalizing_budget
                 if stage == "verifying":
                     if verification_target_count > 0 and verified_candidates_checked > 0 and stage_elapsed_seconds > 0:
