@@ -48,6 +48,99 @@ CSV_FIELDNAMES = [
     "Source",
 ]
 
+SANITIZED_BRIEF_KEYS = {
+    "role_title",
+    "titles",
+    "countries",
+    "continents",
+    "cities",
+    "company_targets",
+    "peer_company_targets",
+    "company_match_mode",
+    "employment_status_mode",
+    "years_mode",
+    "years_value",
+    "years_tolerance",
+    "minimum_years_experience",
+    "maximum_years_experience",
+    "radius_miles",
+    "must_have_keywords",
+    "nice_to_have_keywords",
+    "industry_keywords",
+    "exclude_title_keywords",
+    "exclude_company_keywords",
+    "job_description",
+    "uploaded_job_description_name",
+    "uploaded_job_description_text",
+    "jd_breakdown",
+    "search_tuning",
+    "search_profile",
+    "anchors",
+    "brief_clarifications",
+    "ui_meta",
+    "limit",
+}
+
+SANITIZED_SUMMARY_KEYS = {
+    "requested_candidate_limit",
+    "returned_candidate_count",
+    "candidate_count",
+    "verified_count",
+    "review_count",
+    "reject_count",
+    "role_family",
+    "role_subfamily",
+    "execution_backend",
+    "query_count",
+    "raw_found",
+    "unique_after_dedupe",
+    "quality_diagnostics",
+    "top_locations",
+    "pipeline_metrics",
+    "role_understanding",
+    "telemetry_events",
+    "verification_status_counts",
+    "qualification_tier_counts",
+    "ranking_model_versions",
+    "generated_at",
+}
+
+
+def sanitize_brief_payload(payload: Dict[str, object] | None) -> Dict[str, object]:
+    if not isinstance(payload, dict):
+        return {}
+    cleaned: Dict[str, object] = {}
+    for key, value in payload.items():
+        if key not in SANITIZED_BRIEF_KEYS:
+            continue
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                cleaned[key] = text
+        elif isinstance(value, list):
+            cleaned[key] = [item for item in value if str(item).strip()]
+        elif isinstance(value, dict):
+            cleaned[key] = value
+        elif value is not None:
+            cleaned[key] = value
+    return cleaned
+
+
+def sanitize_report_summary(summary: Dict[str, object] | None) -> Dict[str, object]:
+    if not isinstance(summary, dict):
+        return {}
+    cleaned: Dict[str, object] = {}
+    for key, value in summary.items():
+        if key not in SANITIZED_SUMMARY_KEYS:
+            continue
+        cleaned[key] = value
+    candidate_count = cleaned.get("candidate_count")
+    if candidate_count is None and cleaned.get("returned_candidate_count") is not None:
+        cleaned["candidate_count"] = cleaned.get("returned_candidate_count")
+    if cleaned.get("returned_candidate_count") is None and cleaned.get("candidate_count") is not None:
+        cleaned["returned_candidate_count"] = cleaned.get("candidate_count")
+    return cleaned
+
 
 def _clean_reason_values(values: Iterable[str]) -> List[str]:
     seen: Set[str] = set()
