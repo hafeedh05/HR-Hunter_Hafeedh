@@ -1,207 +1,175 @@
-# HR Hunter Production Handoff
+# HR Hunter Client-Safe Release Handoff
 
-This is the clean pickup doc for the next Codex or operator working on the live HR Hunter stack.
+This document is the deploy handoff for the current release cut from:
 
-## Start Here
+- Repo: `https://github.com/hafeedh05/HR-Hunter_Hafeedh.git`
+- Local source workspace: `C:\Users\abdul\Desktop\HR Hunter\HR Hunter Clone`
 
-1. Use GitHub `main` as the source of truth.
-2. Read this file before touching prod.
-3. Inspect prod read-only first.
-4. Create a rollback path before changing anything.
-5. Benchmark honestly before claiming improvement.
+## Release Decision For Today
 
-Do not use Abdul's local machine as the source of truth.
+- Canonical engine: `transformer_v2`
+- Fallback engine: classic HR Hunter path, internal fallback only
+- UI shell remains the same:
+  - TOTP login
+  - Projects
+  - Hunt
+  - Results
+  - Candidates
+  - History
+  - Settings
+  - Admin
+- Hunt Brief remains familiar. This release does not redesign it.
 
-## Current Live State
+## What This Release Includes
 
-- Repo: `https://github.com/hafeedh05/HR-Hunter_Hafeedh`
-- Live domain: `https://hr-hunter.hyvelabs.tech`
-- Health endpoint: `https://hr-hunter.hyvelabs.tech/healthz`
-- Deployed commit: `f1afe6881c94ca104ded58e9a49938f08becb8cb`
-- Active release path: `/srv/hr-hunter/releases/20260412T170922Z-f1afe68`
-- Previous release path: `/srv/hr-hunter/releases/20260412T162229Z-2dad9ff`
-- Backup path for current deploy: `/srv/hr-hunter/backups/20260412T170922Z-pre-f1afe68`
+- Transformer-first search path is the default
+- Existing taxonomy in `src/hr_hunter_transformer/taxonomy_data.yaml`
+- Existing family query profiles in `src/hr_hunter_transformer/query_profiles.py`
+- Existing transformer verifier in `src/hr_hunter_transformer/verifier.py`
+- Candidate/name/company sanitation in UI and CSV export
+- Truthful progress/status improvements
+- CSV export that downloads as a real CSV file
+- Feedback page language cleaned up for client comprehension
 
-GitHub `main` and `codex/prod-handoff-fix-20260410` both point to `f1afe68`.
+## What This Release Does Not Claim
 
-## Production Topology
+- Full family-complete performance
+- Equal strength across every role family
+- Universal verified-yield quality for executive / AI / clinical / government roles
+- Full benchmark coverage across all families
 
-- Reverse proxy: Caddy
-- Caddy config: `/etc/caddy/Caddyfile`
-- App service: `hr-hunter.service`
-- Service file: `/etc/systemd/system/hr-hunter.service`
-- App bind: `127.0.0.1:8765`
-- Health path on app: `/healthz`
-- VM shape observed during takeover:
-  - `2 vCPU`
-  - `~2 GB RAM`
+## Safe Client Positioning
 
-## Important Runtime Note
+### Safe Families To Position Now
 
-The app config surfaced a SQLite state path during inspection, but the live process environment was using Postgres. Treat storage configuration carefully and verify the active runtime path before making assumptions about checkpointing or state migration.
+- Supply Chain / Logistics
+- Digital Marketing
+- Interior Design
+- Architecture / Project Architect
 
-## What The Latest Patch Changed
+### Pilot-Only Families
 
-Commit `f1afe68` tightened product truthfulness and parser quality across roles:
+- Finance / Accounting
+- HR / Talent Acquisition
+- Legal / Compliance
+- Sustainability / ESG
+- General Operations
 
-- telemetry no longer shows fake verified/review/reject movement during retrieval
-- verification counters now reflect only candidates actually checked so far
-- exec title matching now handles:
-  - `CEO`
-  - `Chief Executive Officer`
-  - `Managing Director`
-  - `President`
-  - `Group CEO`
-  - `Country CEO`
-  - `General Manager`
-- obvious company-page / non-person parser junk is penalized harder
-- frontend JS asset was cache-busted so the live UI actually picks up the patch
+### Weak Families Not To Oversell
 
-Files changed in `f1afe68`:
+- AI / Data / Software for strict verified promises
+- Executive / CEO
+- Healthcare / Doctors
+- Pharma / Clinical
+- Government / Public Sector
+- Aviation / Maritime
 
-- `UI/index.html`
-- `src/hr_hunter/api.py`
-- `src/hr_hunter/features.py`
-- `src/hr_hunter/output.py`
-- `src/hr_hunter/verifier.py`
-- `tests/test_output.py`
-- `tests/test_scoring.py`
-- `tests/test_verifier.py`
+## Critical Runtime Assumptions
 
-Local validation on the deployment worktree:
+- `transformer_v2` is the normal user path
+- classic fallback should not appear as a normal user-facing mode
+- `SCRAPINGBEE_API_KEY` must be present
+- runtime environment must have:
+  - `transformers`
+  - `torch`
+- state storage must be verified before deploy:
+  - Postgres if production uses it
+  - or the configured SQLite path if intentionally running local-style
 
-- `143 passed, 1 skipped`
+## Branch And Merge Flow
 
-## Last Honest Benchmark Set
+1. Create a release branch from the current local state:
+   - `codex/release-cut-transformer-gcp`
+2. Commit only deploy-safe work:
+   - transformer default behavior
+   - UI clarity/sanitization
+   - progress truthfulness
+   - export fixes
+   - handoff docs
+3. Push branch to `origin`
+4. Open PR into `main`
+5. Merge after smoke checks pass
+6. Deploy merged `main` to GCP
 
-These were the last full live benchmarks taken before the telemetry/parser patch. They are still the correct baseline for current product quality.
+## Pre-Deploy Verification
 
-### Marina Home CEO / 300
+Run these locally before pushing:
 
-- runtime: `735s`
-- queries: `36/36`
-- raw found: `364`
-- unique after dedupe: `364`
-- reranked: `180`
-- finalized: `57`
-- verified: `2`
-- review: `0`
-- rejected: `55`
-- in scope: `2`
-- precise in scope: `2`
-- diagnostics:
-  - `market_scarcity`
-  - `title_mismatch`
-  - `filters_too_loose`
+```powershell
+cd "C:\Users\abdul\Desktop\HR Hunter\HR Hunter Clone"
+.\.venv\Scripts\python.exe -m pytest -q tests\test_api.py tests\test_state.py tests\test_verifier.py tests\test_transformer_query_planner.py tests\test_transformer_verifier.py tests\test_transformer_extraction.py
+node --check "UI\app.js"
+```
 
-Blunt read: the market did not honestly support `100+ verified` on this strict brief with public-web evidence. The top 20 still showed parser/company-page junk before the latest patch, and the true in-scope executive pool was tiny.
+Then run the app locally and smoke test:
 
-### Digital Marketing Manager / Dubai / 100
+```powershell
+cd "C:\Users\abdul\Desktop\HR Hunter\HR Hunter Clone"
+$env:PYTHONPATH = "C:\Users\abdul\Desktop\HR Hunter\HR Hunter Clone\src"
+.\.venv\Scripts\python.exe -m hr_hunter.api
+```
 
-- runtime: `481s`
-- queries: `38/38`
-- raw found: `243`
-- unique after dedupe: `243`
-- reranked: `200`
-- finalized: `100`
-- verified: `3`
-- review: `18`
-- rejected: `79`
-- in scope: `47`
-- precise in scope: `44`
-- diagnostics:
-  - `title_mismatch`
-  - `weak_company_or_industry_signals`
-  - `filters_too_loose`
+Check:
 
-Blunt read: top-of-list quality was materially better than overall verified yield. The system was finding same-title / same-market candidates, but company parsing and evidence quality were still dragging verification down.
+- login works
+- Hunt loads without JS errors
+- search starts
+- progress updates
+- results attach to the correct project
+- CSV download works
+- Candidates tab renders clean names/companies
 
-### Data Analyst / UAE / 80
+## GCP Deploy Flow
 
-- runtime: `544s`
-- queries: `34/34`
-- raw found: `242`
-- unique after dedupe: `242`
-- reranked: `160`
-- finalized: `80`
-- verified: `13`
-- review: `10`
-- rejected: `57`
-- in scope: `28`
-- precise in scope: `22`
-- diagnostics:
-  - `title_mismatch`
-  - `filters_too_loose`
+On the VM:
 
-Blunt read: this role shape behaved much better than the CEO case and is a healthier benchmark for common-role product quality.
+1. Pull latest merged `main` from GitHub
+2. Create a new release directory
+3. Sync the repo into the release directory
+4. Activate/install dependencies in the app venv
+5. Point the service to the new release
+6. Restart the service
 
-## What Is Actually Working
-
-- prod is healthy
-- GitHub and prod are aligned
-- background jobs run and persist
-- progress polling is live via `/app/jobs/{job_id}`
-- in-scope reporting exists in the UI and API
-- common-role shortlist quality is better than earlier builds
-- the final telemetry patch was smoke-tested live after deploy
-
-## What Is Still Not Good Enough
-
-- CEO strict verified yield is still low
-- public-web evidence is the bottleneck for strict executive verification
-- company/page parsing still needs continued cleanup
-- storage/checkpoint runtime needs a cleaner single-source explanation
-- the product still needs stronger scope-first orchestration and top-N in-scope verification as the default operating model
-
-## Recommended Next Moves
-
-1. Make `In Scope` the operating target, not just a reporting counter.
-   - fill same-title + same-market candidates first
-   - stop broadening once the in-scope pool is full
-   - widen only when in-scope growth stalls
-
-2. Verify the strongest in-scope tranche first.
-   - do not burn verification budget on obvious off-scope rejects
-   - keep `In Scope`, `Verifying`, `Verified`, `Needs Review`, and `Rejected` separate and truthful
-
-3. Split company intent in the brief.
-   - `Must currently work at these companies`
-   - `Peer companies to source from`
-
-4. Keep improving parser and evidence quality.
-   - harder person-page filtering
-   - stronger current-company extraction
-   - contradiction detection across sources
-   - heavier weighting for official leadership pages, LinkedIn, conference bios, and credible appointment pages
-
-## Safe Pickup Flow For The Next Codex
-
-1. Pull GitHub `main`.
-2. Read this file.
-3. Inspect prod read-only:
-   - `systemctl show hr-hunter`
-   - `/etc/systemd/system/hr-hunter.service`
-   - `/etc/caddy/Caddyfile`
-   - active release symlink/path
-   - health endpoint
-   - recent job logs
-4. Confirm rollback path exists before any mutation.
-5. Run one honest benchmark before changing logic.
-6. Ship only after:
-   - live health is green
-   - prod smoke is verified
-   - GitHub `main` matches deployed commit
-
-## Rollback
-
-To roll back from `f1afe68`:
-
-1. point `hr-hunter.service` back to `/srv/hr-hunter/releases/20260412T162229Z-2dad9ff`
-2. run:
+Example service commands:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl restart hr-hunter
+sudo systemctl status hr-hunter --no-pager
 ```
 
-If needed, restore from `/srv/hr-hunter/backups/20260412T170922Z-pre-f1afe68`.
+## Post-Deploy Smoke Tests
+
+```bash
+curl -f http://127.0.0.1:8765/healthz
+curl -f https://hr-hunter.hyvelabs.tech/healthz
+journalctl -u hr-hunter -n 100 --no-pager
+```
+
+In browser:
+
+- sign in
+- open existing project
+- run Supply Chain search
+- verify progress moves
+- verify latest run lands on the right project
+- verify CSV download opens a real CSV
+
+## Rollback
+
+If deploy is bad:
+
+1. repoint the service to the previous release path
+2. restart `hr-hunter`
+3. verify `/healthz`
+4. keep the failed release on disk for inspection
+
+Do not delete the previous release until rollback confidence is high.
+
+## Do Not Change In This Release
+
+- Do not redesign the UI
+- Do not redesign the Hunt Brief
+- Do not expose classic fallback as a normal setting
+- Do not claim full role-family coverage
+- Do not begin major verifier redesign in the release branch

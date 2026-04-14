@@ -1,22 +1,14 @@
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.api import (
-    _apply_strict_shortlist,
-    _collect_candidate_keys_from_report,
-    _collect_provider_query_exclusions_from_report,
     _finalize_report_for_limit,
     _job_actor_from_payload,
-    _quality_recovery_gap,
-    _rerank_merged_report_candidates,
-    _quality_recovery_settings,
-    _quality_recovery_verification_candidates,
-    _resolve_top_up_max_rounds,
     _resolve_effective_verification_target,
     _resolve_pipeline_progress_percent,
     _runtime_storage_snapshot,
     _should_stop_after_stagnant_top_up,
     _verification_progress_base,
 )
-from hr_hunter.models import CandidateProfile, GeoSpec, ProviderRunResult, SearchBrief, SearchRunReport
+from hr_hunter.models import CandidateProfile, GeoSpec, SearchBrief, SearchRunReport
 
 
 def test_job_actor_from_payload_preserves_admin_flag():
@@ -87,7 +79,7 @@ def test_finalize_report_for_limit_keeps_raw_found_above_unique_pool():
     assert pipeline_metrics["finalized_count"] == 50
 
 
-def test_finalize_report_for_limit_tracks_title_and_market_counts():
+def test_finalize_report_for_limit_tracks_in_scope_counts():
     report = SearchRunReport(
         run_id="run-scope-test",
         brief_id="brief-scope-test",
@@ -127,14 +119,19 @@ def test_finalize_report_for_limit_tracks_title_and_market_counts():
 
     finalized = _finalize_report_for_limit(report, requested_limit=3, internal_fetch_limit=10)
 
+    assert finalized.summary["in_scope_count"] == 2
+    assert finalized.summary["precise_in_scope_count"] == 1
     assert finalized.summary["title_match_count"] == 3
     assert finalized.summary["market_match_count"] == 2
-    assert "in_scope_count" not in finalized.summary
-    assert "precise_in_scope_count" not in finalized.summary
-    assert "scope_counts" not in finalized.summary
+    assert finalized.summary["scope_counts"] == {
+        "in_scope": 2,
+        "precise_in_scope": 1,
+        "title_match": 3,
+        "market_match": 2,
+    }
 
 
-def test_finalize_report_for_limit_does_not_emit_scope_counts_for_title_geo_noise():
+def test_finalize_report_for_limit_excludes_title_geo_noise_from_in_scope_counts():
     report = SearchRunReport(
         run_id="run-scope-noise-test",
         brief_id="brief-scope-noise-test",
@@ -156,8 +153,8 @@ def test_finalize_report_for_limit_does_not_emit_scope_counts_for_title_geo_nois
 
     finalized = _finalize_report_for_limit(report, requested_limit=1, internal_fetch_limit=5)
 
-    assert "in_scope_count" not in finalized.summary
-    assert "precise_in_scope_count" not in finalized.summary
+    assert finalized.summary["in_scope_count"] == 0
+    assert finalized.summary["precise_in_scope_count"] == 0
 
 
 def test_finalize_report_for_limit_honors_title_market_priority_brief() -> None:
@@ -171,6 +168,8 @@ def test_finalize_report_for_limit_honors_title_market_priority_brief() -> None:
                 "country": "United Arab Emirates",
                 "location_hints": ["Abu Dhabi"],
             },
+            "scope_first_enabled": True,
+            "in_scope_target": 10,
         }
     )
     report = SearchRunReport(
@@ -213,247 +212,9 @@ def test_finalize_report_for_limit_honors_title_market_priority_brief() -> None:
     finalized = _finalize_report_for_limit(report, requested_limit=2, internal_fetch_limit=10, brief=brief)
 
     assert [candidate.full_name for candidate in finalized.candidates] == [
-        "Title Match Weak Market",
         "Strong Function Precise Market",
+        "Title Match Weak Market",
     ]
-
-
-def test_quality_recovery_helpers_capture_thresholds_and_fresh_candidates() -> None:
-    brief = build_search_brief(
-        {
-            "id": "quality-recovery-test",
-            "role_title": "Supply Chain Manager",
-            "titles": ["Supply Chain Manager"],
-            "provider_settings": {
-                "quality_recovery": {
-                    "enabled": True,
-                    "min_verified_count": 50,
-                    "max_reject_count": 50,
-                    "max_rounds": 3,
-                    "fetch_limit_increment": 120,
-                    "parallel_requests": 32,
-                    "max_queries": 96,
-                    "reranker_top_n": 300,
-                    "verification_top_n": 220,
-                    "verification_parallel_candidates": 48,
-                    "disable_history_slices": True,
-                    "disable_registry_memory": True,
-                }
-            },
-        }
-    )
-    settings = _quality_recovery_settings(brief, requested_limit=300, current_fetch_limit=420)
-
-    assert settings["enabled"] is True
-    assert settings["min_verified_count"] == 50
-    assert settings["max_reject_count"] == 50
-    assert settings["fetch_limit_increment"] == 120
-
-    gap = _quality_recovery_gap({"verified_count": 8, "reject_count": 287}, settings)
-
-    assert gap["should_retry"] is True
-    assert gap["verified_gap"] == 42
-    assert gap["reject_gap"] == 237
-
-    verified_candidate = CandidateProfile(full_name="Already Checked", verification_status="verified", last_verified_at="2026-04-13T00:00:00+00:00")
-    fresh_candidate = CandidateProfile(full_name="Fresh Candidate", verification_status="reject")
-    retry_candidate = CandidateProfile(full_name="Retry Candidate", verification_status="review")
-    selected = _quality_recovery_verification_candidates(
-        [verified_candidate, fresh_candidate, retry_candidate],
-        limit=2,
-    )
-
-    assert [candidate.full_name for candidate in selected] == ["Fresh Candidate", "Retry Candidate"]
-
-
-def test_quality_recovery_verification_candidates_prefers_verification_ready_profiles() -> None:
-    brief = build_search_brief(
-        {
-            "id": "quality-recovery-ready-test",
-            "role_title": "Supply Chain Manager",
-            "titles": ["Supply Chain Manager"],
-            "geography": {"location_name": "Dubai", "country": "United Arab Emirates"},
-        }
-    )
-    weak_candidate = CandidateProfile(
-        full_name="Weak Candidate",
-        current_title="Operations Lead",
-        current_title_match=False,
-        location_aligned=False,
-        location_precision_bucket="outside_target_area",
-        parser_confidence=0.18,
-        evidence_quality_score=0.12,
-        current_function_fit=0.24,
-        skill_overlap_score=0.1,
-        verification_status="reject",
-    )
-    ready_candidate_one = CandidateProfile(
-        full_name="Ready Candidate One",
-        current_title="Supply Chain Manager",
-        current_title_match=True,
-        location_aligned=True,
-        location_precision_bucket="named_target_location",
-        parser_confidence=0.66,
-        evidence_quality_score=0.52,
-        current_function_fit=0.72,
-        skill_overlap_score=0.44,
-        verification_status="reject",
-        current_employment_confirmed=True,
-    )
-    ready_candidate_two = CandidateProfile(
-        full_name="Ready Candidate Two",
-        current_title="Supply Chain Manager",
-        current_title_match=True,
-        location_aligned=True,
-        location_precision_bucket="country_only",
-        parser_confidence=0.61,
-        evidence_quality_score=0.48,
-        current_function_fit=0.68,
-        skill_overlap_score=0.41,
-        verification_status="review",
-        current_role_proof_count=1,
-    )
-
-    selected = _quality_recovery_verification_candidates(
-        [weak_candidate, ready_candidate_one, ready_candidate_two],
-        limit=2,
-        brief=brief,
-    )
-
-    assert [candidate.full_name for candidate in selected] == [
-        "Ready Candidate One",
-        "Ready Candidate Two",
-    ]
-
-
-def test_rerank_merged_report_candidates_reorders_combined_recovery_pool(monkeypatch) -> None:
-    brief = build_search_brief(
-        {
-            "id": "quality-recovery-rerank-test",
-            "role_title": "Supply Chain Manager",
-            "titles": ["Supply Chain Manager"],
-            "geography": {
-                "location_name": "Dubai",
-                "country": "United Arab Emirates",
-            },
-            "provider_settings": {
-                "reranker": {
-                    "enabled": True,
-                    "model_name": "fake-reranker",
-                    "top_n": 4,
-                    "weight": 0.4,
-                }
-            },
-        }
-    )
-    report = SearchRunReport(
-        run_id="quality-recovery-rerank-run",
-        brief_id="quality-recovery-rerank-brief",
-        dry_run=False,
-        generated_at="2026-04-13T00:00:00+00:00",
-        provider_results=[],
-        candidates=[
-            CandidateProfile(
-                full_name="Noisy Legacy Candidate",
-                current_title="Operations Lead",
-                current_title_match=False,
-                location_aligned=False,
-                location_precision_bucket="outside_target_area",
-                parser_confidence=0.72,
-                evidence_quality_score=0.66,
-                current_function_fit=0.34,
-                skill_overlap_score=0.18,
-                score=84.0,
-                verification_status="review",
-            ),
-            CandidateProfile(
-                full_name="Fresh Precise Candidate",
-                current_title="Supply Chain Manager",
-                current_title_match=True,
-                location_aligned=True,
-                location_precision_bucket="named_target_location",
-                parser_confidence=0.58,
-                evidence_quality_score=0.44,
-                current_function_fit=0.81,
-                skill_overlap_score=0.52,
-                score=57.0,
-                verification_status="reject",
-            ),
-        ],
-        summary={},
-    )
-
-    def _fake_rerank(_brief, candidates, progress_callback=None):
-        if progress_callback:
-            progress_callback(0, len(candidates))
-        for candidate in candidates:
-            if candidate.full_name == "Fresh Precise Candidate":
-                candidate.reranker_score = 0.96
-                candidate.score = 96.0
-                candidate.verification_status = "verified"
-                candidate.ranking_model_version = "fake-reranker"
-            else:
-                candidate.reranker_score = 0.1
-                candidate.score = 58.0
-                candidate.ranking_model_version = "fake-reranker"
-        if progress_callback:
-            progress_callback(len(candidates), len(candidates))
-        return list(candidates)
-
-    monkeypatch.setattr("hr_hunter.api.rerank_candidates", _fake_rerank)
-
-    reranked_report, rerank_metrics = _rerank_merged_report_candidates(
-        report,
-        brief=brief,
-        rerank_top_n=10,
-    )
-
-    assert rerank_metrics == {
-        "enabled": True,
-        "rerank_target": 2,
-        "reranked_count": 2,
-    }
-    assert [candidate.full_name for candidate in reranked_report.candidates] == [
-        "Fresh Precise Candidate",
-        "Noisy Legacy Candidate",
-    ]
-
-
-def test_resolve_top_up_max_rounds_reads_payload_and_search_tuning() -> None:
-    assert _resolve_top_up_max_rounds(None) == 8
-    assert _resolve_top_up_max_rounds({}) == 8
-    assert _resolve_top_up_max_rounds({"search_tuning": {"top_up_max_rounds": 1}}) == 1
-    assert _resolve_top_up_max_rounds({"top_up_max_rounds": 0}) == 0
-
-
-def test_collect_provider_query_exclusions_from_report_skips_skipped_queries() -> None:
-    report = SearchRunReport(
-        run_id="query-exclusion-test",
-        brief_id="brief-query-exclusion-test",
-        dry_run=False,
-        generated_at="2026-04-13T00:00:00+00:00",
-        provider_results=[
-            ProviderRunResult(
-                provider_name="scrapingbee_google",
-                executed=True,
-                dry_run=False,
-                diagnostics={
-                    "queries": [
-                        {"search": "supply chain manager dubai", "fingerprint": "fp-1", "skipped": False},
-                        {"search": "supply chain manager uae", "fingerprint": "fp-2", "skipped": True},
-                    ]
-                },
-            )
-        ],
-        candidates=[
-            CandidateProfile(full_name="Candidate One", linkedin_url="https://linkedin.com/in/candidate-one"),
-        ],
-    )
-
-    assert "url:linkedin.com/in/candidate-one" in _collect_candidate_keys_from_report(report)
-    assert _collect_provider_query_exclusions_from_report(report) == {
-        "scrapingbee_google": {"fp-1", "supply chain manager dubai"}
-    }
 
 
 def test_verification_progress_base_keeps_monotonic_retrieval_counts():
@@ -486,7 +247,7 @@ def test_verification_progress_base_keeps_monotonic_retrieval_counts():
     }
 
 
-def test_finalize_report_for_limit_uses_final_priority_order_after_verification() -> None:
+def test_finalize_report_for_limit_uses_final_scope_order_after_verification() -> None:
     brief = build_search_brief(
         {
             "id": "scope-final-order-test",
@@ -496,6 +257,8 @@ def test_finalize_report_for_limit_uses_final_priority_order_after_verification(
                 "location_name": "Dubai",
                 "country": "United Arab Emirates",
             },
+            "scope_first_enabled": True,
+            "in_scope_target": 10,
         }
     )
     report = SearchRunReport(
@@ -589,10 +352,14 @@ def test_resolve_effective_verification_target_trims_weak_tail() -> None:
         candidates,
         requested_limit=100,
         verification_target=80,
+        scope_target=24,
         company_required=False,
     )
 
     assert plan["requested_target"] == 80
+    assert plan["shortlist_scope_count"] == 0
+    assert plan["shortlist_precise_scope_count"] == 0
+    assert plan["effective_target"] == plan["requested_target"]
     assert plan["effective_target"] == 80
 
 
@@ -628,11 +395,16 @@ def test_resolve_effective_verification_target_does_not_blindly_follow_oversized
         candidates,
         requested_limit=300,
         verification_target=140,
+        scope_target=140,
         company_required=False,
     )
 
     assert plan["requested_target"] == 140
-    assert plan["effective_target"] == 140
+    assert plan["shortlist_scope_count"] == 41
+    assert plan["shortlist_precise_scope_count"] == 41
+    assert plan["effective_target"] < plan["requested_target"]
+    assert plan["effective_target"] <= 80
+    assert plan["effective_target"] >= 70
 
 
 def test_should_stop_after_stagnant_top_up_when_near_target():
@@ -664,96 +436,7 @@ def test_runtime_storage_snapshot_prefers_shared_database_url(monkeypatch):
     assert snapshot["workspace"]["display_locator"] == "postgresql://<redacted>/hr_hunter"
 
 
-def test_apply_strict_shortlist_keeps_company_market_matches_only():
-    brief = SearchBrief(
-        id="brief-test",
-        role_title="Chief Executive Officer (CEO)",
-        brief_document_path=None,
-        brief_summary="",
-        titles=["Chief Executive Officer", "Managing Director", "President"],
-        title_keywords=["Chief Executive Officer", "Managing Director", "President"],
-        company_targets=["The One", "Marina Home Interiors"],
-        peer_company_targets=[],
-        sourcing_company_targets=["The One", "Marina Home Interiors"],
-        company_aliases={},
-        geography=GeoSpec(location_name="Dubai", country="United Arab Emirates", location_hints=["Dubai"]),
-        required_keywords=[],
-        preferred_keywords=[],
-        portfolio_keywords=[],
-        commercial_keywords=[],
-        leadership_keywords=[],
-        scope_keywords=[],
-        seniority_levels=[],
-        minimum_years_experience=None,
-        maximum_years_experience=None,
-        result_target_min=5,
-        result_target_max=50,
-        max_profiles=50,
-        location_targets=["Dubai", "United Arab Emirates"],
-        company_match_mode="current_only",
-        allow_adjacent_titles=False,
-        exact_company_scope=True,
-        strict_market_scope=True,
-    )
-    report = SearchRunReport(
-        run_id="run-test",
-        brief_id="brief-test",
-        dry_run=False,
-        generated_at="2026-04-12T00:00:00+00:00",
-        provider_results=[],
-        candidates=[
-            CandidateProfile(
-                full_name="Exact Match",
-                current_target_company_match=True,
-                current_title_match=True,
-                location_aligned=True,
-                verification_status="verified",
-                score=72.0,
-            ),
-            CandidateProfile(
-                full_name="Adjacent Title Same Company Market",
-                current_target_company_match=True,
-                current_title_match=False,
-                location_aligned=True,
-                verification_status="review",
-                score=61.0,
-            ),
-            CandidateProfile(
-                full_name="Same Company Wrong Market",
-                current_target_company_match=True,
-                current_title_match=True,
-                location_aligned=False,
-                verification_status="review",
-                score=59.0,
-            ),
-            CandidateProfile(
-                full_name="Wrong Company Same Market",
-                current_target_company_match=False,
-                current_title_match=True,
-                location_aligned=True,
-                verification_status="review",
-                score=58.0,
-            ),
-        ],
-        summary={},
-    )
-
-    shortlisted = _apply_strict_shortlist(report, brief=brief)
-
-    assert [candidate.full_name for candidate in shortlisted.candidates] == [
-        "Exact Match",
-        "Adjacent Title Same Company Market",
-    ]
-    assert shortlisted.summary["strict_shortlist"] == {
-        "enabled": True,
-        "candidate_count": 2,
-        "filtered_out_count": 2,
-        "exact_title_count": 1,
-        "company_market_count": 2,
-    }
-
-
-def test_finalize_report_for_limit_applies_strict_shortlist_when_brief_present():
+def test_finalize_report_for_limit_keeps_sorted_candidates_when_brief_present():
     brief = SearchBrief(
         id="brief-test",
         role_title="Chief Executive Officer (CEO)",
@@ -829,6 +512,6 @@ def test_finalize_report_for_limit_applies_strict_shortlist_when_brief_present()
     assert [candidate.full_name for candidate in finalized.candidates] == [
         "Exact Match",
         "Adjacent Title Same Company Market",
+        "Wrong Company Same Market",
     ]
-    assert finalized.summary["strict_shortlist"]["candidate_count"] == 2
-    assert finalized.summary["pipeline_metrics"]["finalized_count"] == 2
+    assert finalized.summary["pipeline_metrics"]["finalized_count"] == 3

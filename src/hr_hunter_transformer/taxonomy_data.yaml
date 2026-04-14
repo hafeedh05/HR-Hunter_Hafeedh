@@ -1,0 +1,228 @@
+executive:
+  corporate_leadership:
+    - chief executive officer
+    - ceo
+    - president
+    - managing director
+    - general manager
+    - vice president
+    - country manager
+    - business unit director
+operations_process:
+  operations:
+    - operations manager
+    - business operations manager
+    - process analyst
+    - service operations manager
+    - operations lead
+finance:
+  accounting:
+    - accountant
+    - senior accountant
+    - accounts manager
+    - financial controller
+    - finance manager
+    - fp&a analyst
+    - treasury manager
+sales_business_development:
+  sales:
+    - sales manager
+    - sales executive
+    - business development manager
+    - account manager
+    - partnerships manager
+marketing:
+  growth:
+    - digital marketing manager
+    - marketing manager
+    - growth manager
+    - performance marketing manager
+    - seo specialist
+    - brand manager
+customer_service_success:
+  customer_success:
+    - customer success manager
+    - customer support manager
+    - client success manager
+    - support lead
+    - call center manager
+hr_talent:
+  talent:
+    - recruiter
+    - talent acquisition specialist
+    - talent partner
+    - hr manager
+    - hr business partner
+    - people partner
+technical_ai:
+  ai_ml:
+    - ai engineer
+    - machine learning engineer
+    - ml engineer
+    - llm engineer
+    - applied ai engineer
+    - generative ai engineer
+    - nlp engineer
+    - mlops engineer
+data:
+  analytics:
+    - data analyst
+    - data scientist
+    - analytics manager
+    - business intelligence analyst
+    - bi analyst
+    - data engineer
+product_management:
+  product:
+    - product manager
+    - senior product manager
+    - product owner
+    - platform product manager
+    - group product manager
+project_program_management:
+  delivery:
+    - project manager
+    - program manager
+    - scrum master
+    - pmo analyst
+    - delivery manager
+supply_chain:
+  planning_logistics:
+    - supply chain manager
+    - demand planning manager
+    - supply planning manager
+    - logistics manager
+    - warehouse manager
+procurement_sourcing:
+  procurement:
+    - procurement manager
+    - strategic sourcing manager
+    - buyer
+    - category manager
+    - sourcing specialist
+manufacturing_production:
+  plant_production:
+    - production manager
+    - plant manager
+    - production supervisor
+    - manufacturing engineer
+    - quality production manager
+engineering_non_it:
+  engineering:
+    - mechanical engineer
+    - electrical engineer
+    - civil engineer
+    - industrial engineer
+    - mechatronics engineer
+construction_facilities:
+  construction_facilities:
+    - site engineer
+    - facilities manager
+    - maintenance manager
+    - construction manager
+    - building services manager
+healthcare_medical:
+  healthcare:
+    - doctor
+    - physician
+    - nurse
+    - pharmacist
+    - lab technician
+    - clinic manager
+education_training:
+  education:
+    - teacher
+    - lecturer
+    - trainer
+    - instructional designer
+    - academic coordinator
+legal_compliance:
+  legal:
+    - legal counsel
+    - lawyer
+    - compliance officer
+    - contracts manager
+    - regulatory compliance manager
+risk_audit_security:
+  risk_security:
+    - internal auditor
+    - risk manager
+    - cybersecurity analyst
+    - information security manager
+    - fraud analyst
+research_development:
+  r_and_d:
+    - research scientist
+    - r&d engineer
+    - innovation manager
+    - applied researcher
+    - lab researcher
+design_creative:
+  creative:
+    - graphic designer
+    - ux designer
+    - ui designer
+    - motion designer
+    - video editor
+design_architecture:
+  design_architecture:
+    - interior designer
+    - senior interior designer
+    - interior design manager
+    - architect
+    - project architect
+    - design manager
+    - design director
+media_communications:
+  communications:
+    - communications manager
+    - pr manager
+    - content communications manager
+    - journalist
+    - corporate communications lead
+admin_office_support:
+  office_support:
+    - admin assistant
+    - executive assistant
+    - office manager
+    - receptionist
+    - office coordinator
+hospitality_tourism:
+  hospitality:
+    - hotel manager
+    - guest relations manager
+    - front office manager
+    - travel consultant
+    - restaurant manager
+retail_merchandising:
+  retail:
+    - store manager
+    - merchandiser
+    - category executive
+    - retail operations manager
+    - cashier
+real_estate_property:
+  property:
+    - property manager
+    - leasing manager
+    - real estate consultant
+    - property consultant
+public_sector_government:
+  public_sector:
+    - policy analyst
+    - civil servant
+    - public administration officer
+    - municipal operations manager
+agriculture_environment:
+  sustainability:
+    - sustainability manager
+    - esg manager
+    - environmental manager
+    - agronomist
+    - hse manager
+transportation_mobility:
+  mobility:
+    - fleet manager
+    - dispatcher
+    - aviation operations manager
+    - transport manager

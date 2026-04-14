@@ -68,7 +68,7 @@ def test_build_ui_brief_payload_maps_company_mode_and_location_targets():
     assert "United Arab Emirates" in brief.location_targets
     assert brief.geography.country == "United Arab Emirates"
     assert brief.anchor_weights["company_match"] > 0
-    assert brief.provider_settings["registry_memory"]["enabled"] is True
+    assert brief.provider_settings["registry_memory"]["enabled"] is False
     assert brief.provider_settings["retrieval"]["include_history_slices"] is True
 
 
@@ -214,20 +214,10 @@ def test_build_app_bootstrap_supply_chain_preset_is_distinct_from_ceo_demo() -> 
     assert "Marina Home Interiors" not in preset["job_description"]
     assert "The One" not in preset["peer_company_targets"]
     assert "Amazon" in preset["peer_company_targets"]
-    assert "Saudi Arabia" in preset["countries"]
-    assert "Qatar" in preset["countries"]
-    assert "Egypt" in preset["countries"]
-    assert "Jordan" in preset["countries"]
-    assert "Logistics & Supply Chain Manager" in preset["titles"]
     assert "S&OP" in preset["must_have_keywords"]
-    assert preset["brief_clarifications"]["strict_market_scope"] is False
-    assert preset["registry_memory_enabled"] is False
+    assert preset["brief_clarifications"]["strict_market_scope"] is True
     assert preset["jd_breakdown"]["titles"][0] == "Supply Chain Manager"
-    assert preset["jd_breakdown"]["search_tuning"]["search_profile"] == "balanced"
-    assert preset["jd_breakdown"]["search_tuning"]["top_up_max_rounds"] == 1
-    assert preset["jd_breakdown"]["search_tuning"]["include_history_slices"] is False
-    assert preset["jd_breakdown"]["search_tuning"]["quality_recovery"]["enabled"] is True
-    assert preset["jd_breakdown"]["search_tuning"]["quality_recovery"]["min_verified_count"] == 50
+    assert preset["jd_breakdown"]["search_tuning"]["search_profile"] == "focused"
     assert preset["jd_breakdown"]["search_tuning"]["reranker_model_name"] == DEFAULT_UI_RERANKER_MODEL
 
 
@@ -259,6 +249,20 @@ def test_internal_fetch_limit_overfetches_large_candidate_targets():
 def test_top_up_fetch_limit_expands_large_candidate_targets():
     assert compute_top_up_fetch_limit(100, 400) == 700
     assert compute_top_up_fetch_limit(200, 800) == 1400
+
+
+def test_build_ui_brief_payload_defaults_blank_limit_to_300():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "AI Engineer",
+            "titles": ["AI Engineer"],
+            "countries": ["United Arab Emirates"],
+            "limit": "",
+        }
+    )
+
+    assert payload["limit"] == 300
+    assert payload["brief_config"]["max_profiles"] == 300
 
 
 def test_build_ui_brief_payload_uses_internal_fetch_budget_for_retrieval():
@@ -400,6 +404,9 @@ def test_build_ui_brief_payload_preserves_saved_ui_meta_search_tuning() -> None:
                     "include_history_slices": False,
                 },
                 "search_profile": "focused",
+                "scope_first_enabled": True,
+                "in_scope_target": 45,
+                "verification_scope_target": 30,
                 "brief_clarifications": {
                     "allow_adjacent_titles": False,
                     "strict_market_scope": True,
@@ -414,6 +421,9 @@ def test_build_ui_brief_payload_preserves_saved_ui_meta_search_tuning() -> None:
     assert brief["jd_breakdown"]["search_tuning"]["provider_parallel_requests"] == 18
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 48
     assert brief["provider_settings"]["scrapingbee_google"]["parallel_requests"] == 18
+    assert brief.get("scope_first_enabled", False) is False
+    assert brief.get("in_scope_target", 0) == 0
+    assert brief.get("verification_scope_target", 0) == 0
     assert brief["brief_search_profile"] == "focused"
     assert brief["brief_clarifications"]["allow_adjacent_titles"] is False
 
@@ -485,74 +495,6 @@ def test_build_ui_brief_payload_accepts_explicit_search_profile_and_reranker_mod
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 54
     assert brief["provider_settings"]["reranker"]["model_name"] == DEFAULT_UI_RERANKER_MODEL
     assert brief["ui_meta"]["reranker_model_name"] == DEFAULT_UI_RERANKER_MODEL
-
-
-def test_build_ui_brief_payload_exposes_quality_recovery_settings_from_search_tuning():
-    payload = build_ui_brief_payload(
-        {
-            "role_title": "Supply Chain Manager",
-            "titles": ["Supply Chain Manager", "Demand Planning Manager"],
-            "countries": ["United Arab Emirates", "Saudi Arabia", "Qatar"],
-            "cities": ["Dubai", "Riyadh", "Doha"],
-            "must_have_keywords": ["S&OP", "Demand Planning"],
-            "job_description": "Need a GCC supply chain manager with planning, logistics, and ERP ownership.",
-            "limit": 300,
-            "registry_memory_enabled": False,
-            "jd_breakdown": {
-                "summary": "Target role: Supply Chain Manager.",
-                "titles": ["Supply Chain Manager"],
-                "required_keywords": ["s&op", "demand planning"],
-                "preferred_keywords": ["retail"],
-                "industry_keywords": ["retail", "ecommerce"],
-                "key_experience_points": ["GCC retail logistics leadership."],
-                "search_tuning": {
-                    "search_profile": "focused",
-                    "provider_parallel_requests": 28,
-                    "scrapingbee_max_queries": 72,
-                    "include_history_slices": False,
-                    "verification_top_n": 220,
-                    "verification_parallel_candidates": 40,
-                    "quality_recovery": {
-                        "enabled": True,
-                        "min_verified_count": 50,
-                        "max_reject_count": 50,
-                        "max_rounds": 3,
-                        "parallel_requests": 32,
-                        "max_queries": 96,
-                        "reranker_top_n": 300,
-                        "verification_top_n": 260,
-                        "verification_parallel_candidates": 48,
-                        "disable_history_slices": True,
-                        "disable_registry_memory": True,
-                    },
-                },
-            },
-        }
-    )
-
-    brief = payload["brief_config"]
-
-    assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
-    assert brief["provider_settings"]["registry_memory"]["enabled"] is False
-    assert brief["provider_settings"]["quality_recovery"] == {
-        "enabled": True,
-        "min_verified_count": 50,
-        "max_reject_count": 50,
-        "max_rounds": 3,
-        "fetch_limit_increment": 105,
-        "parallel_requests": 32,
-        "max_queries": 96,
-        "max_geo_groups": 6,
-        "reranker_top_n": 300,
-        "verification_top_n": 260,
-        "verification_parallel_candidates": 48,
-        "disable_history_slices": True,
-        "disable_registry_memory": True,
-        "force_discovery_slices": True,
-        "force_geo_fanout": True,
-        "force_country_only_queries": True,
-        "force_adjacent_titles": True,
-    }
 
 
 def test_build_ui_brief_payload_applies_brief_clarifications_and_focused_tuning():
@@ -747,7 +689,7 @@ def test_build_ui_brief_payload_applies_exact_company_and_market_scope_clarifica
     assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
 
 
-def test_build_ui_brief_payload_keeps_peer_company_exec_searches_in_discovery_mode():
+def test_build_ui_brief_payload_keeps_exec_scope_first_searches_tight_before_top_up():
     payload = build_ui_brief_payload(
         {
             "role_title": "Chief Executive Officer (CEO)",
@@ -763,7 +705,7 @@ def test_build_ui_brief_payload_keeps_peer_company_exec_searches_in_discovery_mo
 
     brief = payload["brief_config"]
 
-    assert brief["brief_search_profile"] == "exploratory"
+    assert brief.get("scope_first_enabled", False) is False
     assert brief["provider_settings"]["retrieval"]["include_history_slices"] is True
     assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
     assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
@@ -806,12 +748,12 @@ def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():
 def test_build_ui_brief_payload_top_up_round_respects_explicit_opt_outs():
     payload = build_ui_brief_payload(
         {
-            "role_title": "Data Analyst",
-            "titles": ["Data Analyst"],
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
             "cities": ["Dubai"],
             "countries": ["United Arab Emirates"],
-            "must_have_keywords": ["SQL", "Python"],
-            "job_description": "Need SQL, Python, BI reporting, dashboards, and stakeholder support.",
+            "must_have_keywords": ["Brand Strategy", "Campaigns"],
+            "job_description": "Need brand planning, campaign execution, and consumer marketing leadership.",
             "limit": 50,
             "top_up_round": 3,
             "geo_fanout_enabled": False,
@@ -832,6 +774,56 @@ def test_build_ui_brief_payload_top_up_round_respects_explicit_opt_outs():
     assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
     assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] >= 200
+
+
+def test_build_ui_brief_payload_technical_top_up_overrides_strict_market_cage() -> None:
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "AI Engineer",
+            "titles": ["AI Engineer", "Machine Learning Engineer"],
+            "cities": ["Dubai", "Abu Dhabi"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "must_have_keywords": ["Python", "LLM", "RAG"],
+            "nice_to_have_keywords": ["PyTorch", "Transformers", "MLOps"],
+            "job_description": "Need production AI engineers shipping LLM systems across GCC markets.",
+            "limit": 300,
+            "top_up_round": 2,
+            "brief_clarifications": {
+                "allow_adjacent_titles": False,
+                "strict_market_scope": True,
+                "expand_search_when_thin": False,
+            },
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["top_up_round"] == 2
+    assert brief["top_up_strategy"]["auto_broadened"] is True
+    assert brief["brief_clarifications"]["strict_market_scope"] is True
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
+    assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is True
+    assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is True
+
+
+def test_build_ui_brief_payload_high_volume_technical_search_verifies_full_target() -> None:
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "AI Engineer",
+            "titles": ["AI Engineer", "Machine Learning Engineer"],
+            "cities": ["Dubai", "Abu Dhabi"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "must_have_keywords": ["Python", "LLM", "RAG"],
+            "nice_to_have_keywords": ["PyTorch", "Transformers", "MLOps"],
+            "job_description": "Need production AI engineers shipping LLM systems across GCC markets.",
+            "limit": 300,
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["provider_settings"]["verification"]["top_n"] == 300
+    assert brief["provider_settings"]["verification"]["parallel_candidates"] >= 10
 
 
 def test_build_ui_brief_payload_preserves_explicit_clarifications_without_follow_up_question():

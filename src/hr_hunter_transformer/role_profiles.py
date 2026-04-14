@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import re
+
+from hr_hunter_transformer.taxonomy import family_hints_map, load_taxonomy, resolve_subfamily
+
+ROLE_FAMILIES: dict[str, tuple[str, ...]] = family_hints_map()
+
+
+TECHNICAL_SOURCES = {
+    "github.com",
+    "gitlab.com",
+    "huggingface.co",
+    "kaggle.com",
+    "stackoverflow.com",
+    "dev.to",
+    "medium.com",
+}
+
+PROFESSIONAL_SOURCES = {
+    "linkedin.com",
+    "ae.linkedin.com",
+    "sa.linkedin.com",
+    "in.linkedin.com",
+    "pk.linkedin.com",
+    "people.bayt.com",
+    "theorg.com",
+    "rocketreach.co",
+    "signalhire.com",
+    "apollo.io",
+    "contactout.com",
+    "wellfound.com",
+    "clenchedfist.co",
+    "navitalglobal.com",
+    "behance.net",
+    "archinect.com",
+    "architizer.com",
+}
+
+
+def normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9+/#&.-]+", " ", str(value or "").lower())).strip()
+
+
+def infer_role_family(*values: str) -> str:
+    haystack = " ".join(normalize_text(value) for value in values if str(value).strip())
+    for family, hints in ROLE_FAMILIES.items():
+        if any(normalize_text(hint) in haystack for hint in hints):
+            return family
+    return "other"
+
+
+def role_family_hints(role_family: str) -> tuple[str, ...]:
+    return ROLE_FAMILIES.get(role_family, ())
+
+
+def role_subfamily(role_family: str, title_value: str) -> str:
+    return resolve_subfamily(role_family, title_value, normalize_text)
+
+
+def title_variants(role_family: str, role_title: str, titles: list[str] | tuple[str, ...]) -> list[str]:
+    taxonomy = load_taxonomy()
+    variants: list[str] = []
+    for value in [role_title, *titles]:
+        normalized = normalize_text(value)
+        if value and normalized and normalized not in {normalize_text(existing) for existing in variants}:
+            variants.append(str(value))
+    for aliases in taxonomy.get(role_family, {}).values():
+        for alias in aliases:
+            normalized = normalize_text(alias)
+            if normalized and normalized not in {normalize_text(existing) for existing in variants}:
+                variants.append(alias)
+    return variants

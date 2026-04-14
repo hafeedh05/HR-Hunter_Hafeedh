@@ -22,6 +22,19 @@ CONTINENT_OPTIONS = [
     "South America",
     "Middle East",
 ]
+MIDDLE_EAST_COUNTRY_EXPANSION = [
+    "United Arab Emirates",
+    "Saudi Arabia",
+    "Qatar",
+    "Kuwait",
+    "Bahrain",
+    "Oman",
+    "Jordan",
+    "Egypt",
+    "Lebanon",
+    "Turkey",
+    "Morocco",
+]
 COUNTRY_TO_ALPHA2 = {
     "argentina": "ar",
     "australia": "au",
@@ -1092,6 +1105,36 @@ TITLE_SCOPE_EXAMPLE_MAP = (
     ("marketing manager", ["Performance Marketing Manager", "Growth Marketing Manager", "Demand Generation Manager"]),
     ("data analyst", ["Business Analyst", "Commercial Analyst", "Insights Analyst"]),
 )
+TECHNICAL_ROLE_HINTS = (
+    "ai engineer",
+    "machine learning engineer",
+    "ml engineer",
+    "applied ai engineer",
+    "llm engineer",
+    "software engineer",
+    "platform engineer",
+    "developer",
+    "data engineer",
+    "mlops",
+    "devops",
+    "site reliability",
+)
+TECHNICAL_KEYWORD_HINTS = (
+    "python",
+    "pytorch",
+    "tensorflow",
+    "transformers",
+    "llm",
+    "rag",
+    "vector database",
+    "langchain",
+    "llamaindex",
+    "fastapi",
+    "mlops",
+    "kubernetes",
+    "model serving",
+    "open source",
+)
 
 
 def _is_executive_brief(role_title: str, titles: List[str]) -> bool:
@@ -1281,6 +1324,78 @@ def _derive_search_profile(
     return BALANCED_SEARCH_PROFILE
 
 
+def _expanded_top_up_geography(
+    *,
+    countries: List[str],
+    continents: List[str],
+    cities: List[str],
+    top_up_round: int,
+    expand_search_when_thin: bool,
+    limit: int,
+) -> Dict[str, List[str]]:
+    resolved_countries = unique_preserving_order(countries)
+    resolved_continents = unique_preserving_order(continents)
+    resolved_cities = unique_preserving_order(cities)
+    if top_up_round <= 0 or not expand_search_when_thin or limit < 180:
+        return {
+            "countries": resolved_countries,
+            "continents": resolved_continents,
+            "cities": resolved_cities,
+        }
+
+    normalized_scope = {
+        normalize_text(value)
+        for value in [*resolved_countries, *resolved_continents]
+        if normalize_text(value)
+    }
+    middle_east_selected = "middle east" in normalized_scope or any(
+        normalize_text(country) in normalized_scope
+        for country in MIDDLE_EAST_COUNTRY_EXPANSION
+    )
+
+    if middle_east_selected:
+        resolved_countries = unique_preserving_order(
+            [*resolved_countries, *MIDDLE_EAST_COUNTRY_EXPANSION]
+        )
+        resolved_continents = unique_preserving_order([*resolved_continents, "Middle East"])
+        if top_up_round >= 1:
+            resolved_cities = []
+        if top_up_round >= 2:
+            resolved_continents = unique_preserving_order([*resolved_continents, "Europe", "Asia"])
+        if top_up_round >= 3:
+            resolved_continents = unique_preserving_order([*resolved_continents, "North America"])
+    elif top_up_round >= 1:
+        resolved_cities = []
+        if top_up_round >= 2:
+            resolved_continents = unique_preserving_order([*resolved_continents, "Europe", "Asia"])
+        if top_up_round >= 3:
+            resolved_continents = unique_preserving_order([*resolved_continents, "North America"])
+
+    return {
+        "countries": resolved_countries,
+        "continents": resolved_continents,
+        "cities": resolved_cities,
+    }
+
+
+def _is_technical_engineering_brief(
+    *,
+    role_title: str,
+    titles: List[str],
+    required_keywords: List[str],
+    preferred_keywords: List[str],
+    industry_keywords: List[str],
+) -> bool:
+    normalized_targets = " ".join(
+        normalize_text(str(value))
+        for value in [role_title, *titles, *required_keywords, *preferred_keywords, *industry_keywords]
+        if str(value).strip()
+    )
+    if any(hint in normalized_targets for hint in TECHNICAL_ROLE_HINTS):
+        return True
+    return any(hint in normalized_targets for hint in TECHNICAL_KEYWORD_HINTS)
+
+
 def _build_brief_follow_up_questions(
     *,
     role_title: str,
@@ -1466,6 +1581,7 @@ def _resolve_top_up_expansion_strategy(
     top_up_round: int,
     search_profile: str,
     executive_brief: bool,
+    technical_brief: bool,
     has_explicit_query_family_budgets: bool,
     raw_brief_clarifications: Dict[str, Any],
     explicit_geo_fanout: bool | None,
@@ -1485,8 +1601,16 @@ def _resolve_top_up_expansion_strategy(
         "auto_broadened": False,
         "steps": [],
     }
-    controlled_focus = bool(search_profile == FOCUSED_SEARCH_PROFILE)
-    if top_up_round <= 0 or not controlled_focus:
+    top_up_broadening_enabled = bool(
+        top_up_round > 0
+        and (
+            expand_search_when_thin
+            or executive_brief
+            or search_profile == FOCUSED_SEARCH_PROFILE
+            or limit >= 180
+        )
+    )
+    if not top_up_broadening_enabled:
         return {
             "allow_adjacent_titles": allow_adjacent_titles,
             "expand_search_when_thin": expand_search_when_thin,
@@ -1505,10 +1629,14 @@ def _resolve_top_up_expansion_strategy(
 
     budgets = dict(query_family_budgets)
 
-    if explicit_expand_search is None and not expand_search_when_thin:
+    if (explicit_expand_search is None or technical_brief) and not expand_search_when_thin:
         expand_search_when_thin = True
         strategy["auto_broadened"] = True
-        strategy["steps"].append("enabled discovery slices after a thin focused first pass")
+        strategy["steps"].append(
+            "enabled discovery slices after a thin first pass"
+            if not technical_brief
+            else "enabled technical discovery spillover after the first thin pass"
+        )
 
     if expand_search_when_thin:
         if not include_country_only_queries:
@@ -1521,14 +1649,14 @@ def _resolve_top_up_expansion_strategy(
             strategy["steps"].append("expanded geography fanout for top-up discovery")
         max_geo_groups = max(max_geo_groups, min(6, max(3, len(location_targets) + 2)))
 
-    if top_up_round >= 2 and explicit_adjacent_titles is None and not allow_adjacent_titles:
+    if top_up_round >= 1 and explicit_adjacent_titles is None and not allow_adjacent_titles and not technical_brief:
         allow_adjacent_titles = True
         strategy["auto_broadened"] = True
-        strategy["steps"].append("opened adjacent title families after repeated thin rounds")
+        strategy["steps"].append("opened adjacent title families after a thin first pass")
 
     if top_up_round >= 1:
-        scrapingbee_parallel_requests = max(scrapingbee_parallel_requests, 10 if top_up_round >= 2 else 8)
-        scrapingbee_max_queries = max(scrapingbee_max_queries, max(120, limit * (3 if top_up_round == 1 else 4)))
+        scrapingbee_parallel_requests = max(scrapingbee_parallel_requests, 12 if top_up_round >= 2 else 10)
+        scrapingbee_max_queries = max(scrapingbee_max_queries, max(180, limit * (4 if top_up_round == 1 else 5)))
         if has_explicit_query_family_budgets:
             pass
         elif executive_brief:
@@ -1545,7 +1673,7 @@ def _resolve_top_up_expansion_strategy(
                 budgets.get("appointment_news_pages", 0),
                 5 if top_up_round == 1 else 7,
             )
-        elif expand_search_when_thin:
+        elif expand_search_when_thin or limit >= 180:
             budgets = _default_query_family_budgets(
                 search_profile=search_profile,
                 executive_brief=False,
@@ -1553,6 +1681,10 @@ def _resolve_top_up_expansion_strategy(
             )
             strategy["auto_broadened"] = True
             strategy["steps"].append("shifted top-up queries toward profile-heavy discovery for non-executive roles")
+        if top_up_round >= 2 and limit >= 180 and not has_explicit_query_family_budgets:
+            budgets = {}
+            strategy["auto_broadened"] = True
+            strategy["steps"].append("removed query-family caps for hard-fulfillment recovery")
 
     return {
         "allow_adjacent_titles": allow_adjacent_titles,
@@ -1788,6 +1920,13 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     required_keywords = unique_preserving_order([*must_have, *breakdown.get("required_keywords", [])])
     preferred_keywords = unique_preserving_order([*nice_to_have, *breakdown.get("preferred_keywords", [])])
     industry_keywords = unique_preserving_order([*industry_keywords, *breakdown.get("industry_keywords", [])])
+    technical_brief = _is_technical_engineering_brief(
+        role_title=role_title,
+        titles=titles,
+        required_keywords=required_keywords,
+        preferred_keywords=preferred_keywords,
+        industry_keywords=industry_keywords,
+    )
     portfolio_keywords = unique_preserving_order(parse_multi_value(keyword_tracks.get("portfolio_keywords")))
     commercial_keywords = unique_preserving_order(parse_multi_value(keyword_tracks.get("commercial_keywords")))
     leadership_keywords = unique_preserving_order(parse_multi_value(keyword_tracks.get("leadership_keywords")))
@@ -1799,7 +1938,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     output_dir = resolve_output_dir(payload.get("output_dir"))
     feedback_db = resolve_feedback_db_path(payload.get("feedback_db"))
     model_dir = resolve_ranker_model_dir(payload.get("model_dir"))
-    limit = max(1, int(payload.get("limit", 20) or 20))
+    limit = max(1, int(payload.get("limit", 300) or 300))
+    top_up_round = max(0, _coerce_int(payload.get("top_up_round")) or 0)
     configured_search_profile = str(
         payload.get("search_profile")
         or payload.get("brief_search_profile")
@@ -1875,6 +2015,20 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     exact_company_scope = bool(brief_clarifications.get("exact_company_scope"))
     strict_market_scope = bool(brief_clarifications.get("strict_market_scope"))
     expand_search_when_thin = bool(brief_clarifications.get("expand_search_when_thin", search_profile != FOCUSED_SEARCH_PROFILE))
+    expanded_geography = _expanded_top_up_geography(
+        countries=countries,
+        continents=continents,
+        cities=cities,
+        top_up_round=top_up_round,
+        expand_search_when_thin=expand_search_when_thin,
+        limit=limit,
+    )
+    countries = expanded_geography["countries"]
+    continents = expanded_geography["continents"]
+    cities = expanded_geography["cities"]
+    location_targets = unique_preserving_order([*cities, *countries, *continents])
+    geography_country = countries[0] if len(countries) == 1 else ""
+    geography_location = cities[0] if cities else (countries[0] if len(countries) == 1 else "")
     if exact_company_scope and companies:
         payload["company_match_mode"] = "current_only"
     if prioritize_first_location and location_targets:
@@ -1897,10 +2051,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if common_volume_search and limit >= 80:
             focused_fetch_cap = max(focused_fetch_cap, min(260, limit + 140))
         internal_fetch_limit = min(internal_fetch_limit, focused_fetch_cap)
-    csv_export_limit = max(1, int(payload.get("csv_export_limit", limit) or limit))
     reranker_enabled = bool(payload.get("reranker_enabled", True))
     learned_ranker_enabled = bool(payload.get("learned_ranker_enabled", False))
-    top_up_round = max(0, _coerce_int(payload.get("top_up_round")) or 0)
     country_code = _selected_country_code(countries)
     reranker_requested_top_n = _coerce_int(payload.get("reranker_top_n"))
     if reranker_requested_top_n is None:
@@ -1928,10 +2080,11 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         4,
         explicit_provider_parallel_requests
         or (10 if common_volume_search and limit >= 80 else 0)
+        or (20 if technical_brief and limit >= 180 else 0)
         or (16 if limit >= 220 else (12 if limit >= 120 else 8)),
     )
     if search_profile == FOCUSED_SEARCH_PROFILE and explicit_provider_parallel_requests is None:
-        focused_parallel_cap = 10 if common_volume_search and limit >= 80 else 8
+        focused_parallel_cap = 12 if technical_brief and limit >= 120 else (10 if common_volume_search and limit >= 80 else 8)
         scrapingbee_parallel_requests = min(scrapingbee_parallel_requests, focused_parallel_cap)
     scrapingbee_pages_per_query = max(
         1,
@@ -1981,9 +2134,6 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     tuned_verification_company_location_probe_queries = _coerce_int(
         search_tuning.get("verification_company_location_probe_queries")
     )
-    tuned_quality_recovery = search_tuning.get("quality_recovery", {})
-    if not isinstance(tuned_quality_recovery, dict):
-        tuned_quality_recovery = {}
     tuned_query_family_budgets = search_tuning.get("query_family_budgets", {})
     if not isinstance(tuned_query_family_budgets, dict):
         tuned_query_family_budgets = {}
@@ -2006,23 +2156,27 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         verification_top_n = tuned_verification_top_n
     if verification_top_n is None:
         if limit >= 300:
-            verification_top_n = 120
+            verification_top_n = 180 if technical_brief else 120
         elif limit >= 180:
-            verification_top_n = 90
+            verification_top_n = 140 if technical_brief else 90
         elif limit >= 100:
-            verification_top_n = 60
+            verification_top_n = 100 if technical_brief else 60
         else:
             verification_top_n = limit
+    if technical_brief and limit >= 250:
+        verification_top_n = max(verification_top_n, min(limit, 300))
     verification_top_n = min(internal_fetch_limit, max(0, verification_top_n))
     if search_profile == FOCUSED_SEARCH_PROFILE:
         verification_top_n = min(verification_top_n, max(limit, 50))
-    focused_executive_search = bool(executive_brief and search_profile == FOCUSED_SEARCH_PROFILE)
+    executive_scope_first = False
     verification_parallel_candidates = max(
         1,
         _coerce_int(payload.get("verification_parallel_candidates"))
         or tuned_verification_parallel_candidates
         or 6,
     )
+    if technical_brief and limit >= 250:
+        verification_parallel_candidates = max(verification_parallel_candidates, 10)
     verification_queries_per_candidate = max(
         1,
         _coerce_int(payload.get("verification_queries_per_candidate"))
@@ -2083,13 +2237,13 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if str(family).strip()
     }
     has_explicit_query_family_budgets = bool(payload_query_family_budgets or tuned_query_family_budgets)
-    if not resolved_query_family_budgets and (search_profile == FOCUSED_SEARCH_PROFILE or focused_executive_search):
+    if not resolved_query_family_budgets and (search_profile == FOCUSED_SEARCH_PROFILE or executive_scope_first):
         resolved_query_family_budgets = _default_query_family_budgets(
-            search_profile=FOCUSED_SEARCH_PROFILE if focused_executive_search else search_profile,
+            search_profile=FOCUSED_SEARCH_PROFILE if executive_scope_first else search_profile,
             executive_brief=executive_brief,
             top_up_round=top_up_round,
         )
-    if focused_executive_search and top_up_round <= 0:
+    if executive_scope_first and top_up_round <= 0:
         if explicit_include_history_slices is None:
             resolved_include_history_slices = False
         if explicit_include_discovery_slices is None:
@@ -2108,6 +2262,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         top_up_round=top_up_round,
         search_profile=search_profile,
         executive_brief=executive_brief,
+        technical_brief=technical_brief,
         has_explicit_query_family_budgets=has_explicit_query_family_budgets,
         raw_brief_clarifications=raw_brief_clarifications,
         explicit_geo_fanout=explicit_geo_fanout,
@@ -2134,15 +2289,15 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if explicit_include_discovery_slices is not None
         else (tuned_include_discovery_slices if tuned_include_discovery_slices is not None else expand_search_when_thin)
     )
-    if focused_executive_search and top_up_round <= 0 and explicit_include_discovery_slices is None:
+    if executive_scope_first and top_up_round <= 0 and explicit_include_discovery_slices is None:
         resolved_include_discovery_slices = False
     if exact_company_scope and companies:
         resolved_include_history_slices = False
         resolved_include_discovery_slices = False
-    if strict_market_scope and location_targets:
+    if strict_market_scope and location_targets and not (technical_brief and top_up_round > 0):
         resolved_geo_fanout = False
         include_country_only_queries = False
-    elif focused_executive_search and top_up_round <= 0:
+    elif executive_scope_first and top_up_round <= 0:
         if explicit_geo_fanout is None:
             resolved_geo_fanout = False
         include_country_only_queries = False
@@ -2180,7 +2335,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             ),
         },
         "registry_memory": {
-            "enabled": bool(payload.get("registry_memory_enabled", True)),
+            "enabled": bool(payload.get("registry_memory_enabled", False)),
             "limit": max(internal_fetch_limit, int(payload.get("registry_memory_limit", 20) or 20)),
         },
         "reranker": {
@@ -2241,6 +2396,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "verification": {
             "enabled": bool(verification_enabled),
             "top_n": verification_top_n,
+            "scope_target": 0,
             "parallel_candidates": verification_parallel_candidates,
             "country_code": str(payload.get("scrapingbee_country_code", "") or country_code or "us"),
             "queries_per_candidate": verification_queries_per_candidate,
@@ -2250,115 +2406,6 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "results_per_query": 10,
         },
     }
-    quality_recovery_enabled = _coerce_bool(payload.get("quality_recovery_enabled"))
-    if quality_recovery_enabled is None:
-        quality_recovery_enabled = _coerce_bool(tuned_quality_recovery.get("enabled"))
-    if quality_recovery_enabled:
-        quality_recovery_disable_history = _coerce_bool(payload.get("quality_recovery_disable_history_slices"))
-        if quality_recovery_disable_history is None:
-            quality_recovery_disable_history = _coerce_bool(tuned_quality_recovery.get("disable_history_slices"))
-        quality_recovery_disable_registry = _coerce_bool(payload.get("quality_recovery_disable_registry_memory"))
-        if quality_recovery_disable_registry is None:
-            quality_recovery_disable_registry = _coerce_bool(tuned_quality_recovery.get("disable_registry_memory"))
-        quality_recovery_force_discovery = _coerce_bool(payload.get("quality_recovery_force_discovery_slices"))
-        if quality_recovery_force_discovery is None:
-            quality_recovery_force_discovery = _coerce_bool(tuned_quality_recovery.get("force_discovery_slices"))
-        quality_recovery_force_geo_fanout = _coerce_bool(payload.get("quality_recovery_force_geo_fanout"))
-        if quality_recovery_force_geo_fanout is None:
-            quality_recovery_force_geo_fanout = _coerce_bool(tuned_quality_recovery.get("force_geo_fanout"))
-        quality_recovery_force_country_queries = _coerce_bool(
-            payload.get("quality_recovery_force_country_only_queries")
-        )
-        if quality_recovery_force_country_queries is None:
-            quality_recovery_force_country_queries = _coerce_bool(
-                tuned_quality_recovery.get("force_country_only_queries")
-            )
-        quality_recovery_force_adjacent_titles = _coerce_bool(payload.get("quality_recovery_force_adjacent_titles"))
-        if quality_recovery_force_adjacent_titles is None:
-            quality_recovery_force_adjacent_titles = _coerce_bool(
-                tuned_quality_recovery.get("force_adjacent_titles")
-            )
-        providers_settings["quality_recovery"] = {
-            "enabled": True,
-            "min_verified_count": max(
-                0,
-                _coerce_int(payload.get("quality_recovery_min_verified_count"))
-                or _coerce_int(tuned_quality_recovery.get("min_verified_count"))
-                or 0,
-            ),
-            "max_reject_count": max(
-                0,
-                _coerce_int(payload.get("quality_recovery_max_reject_count"))
-                or _coerce_int(tuned_quality_recovery.get("max_reject_count"))
-                or 0,
-            ),
-            "max_rounds": max(
-                1,
-                _coerce_int(payload.get("quality_recovery_max_rounds"))
-                or _coerce_int(tuned_quality_recovery.get("max_rounds"))
-                or 2,
-            ),
-            "fetch_limit_increment": max(
-                40,
-                _coerce_int(payload.get("quality_recovery_fetch_limit_increment"))
-                or _coerce_int(tuned_quality_recovery.get("fetch_limit_increment"))
-                or max(80, int(round(limit * 0.35))),
-            ),
-            "parallel_requests": max(
-                1,
-                _coerce_int(payload.get("quality_recovery_parallel_requests"))
-                or _coerce_int(tuned_quality_recovery.get("parallel_requests"))
-                or scrapingbee_parallel_requests,
-            ),
-            "max_queries": max(
-                1,
-                _coerce_int(payload.get("quality_recovery_max_queries"))
-                or _coerce_int(tuned_quality_recovery.get("max_queries"))
-                or scrapingbee_max_queries,
-            ),
-            "max_geo_groups": max(
-                1,
-                _coerce_int(payload.get("quality_recovery_max_geo_groups"))
-                or _coerce_int(tuned_quality_recovery.get("max_geo_groups"))
-                or resolved_max_geo_groups,
-            ),
-            "reranker_top_n": max(
-                limit,
-                _coerce_int(payload.get("quality_recovery_reranker_top_n"))
-                or _coerce_int(tuned_quality_recovery.get("reranker_top_n"))
-                or reranker_top_n,
-            ),
-            "verification_top_n": max(
-                0,
-                _coerce_int(payload.get("quality_recovery_verification_top_n"))
-                or _coerce_int(tuned_quality_recovery.get("verification_top_n"))
-                or verification_top_n,
-            ),
-            "verification_parallel_candidates": max(
-                1,
-                _coerce_int(payload.get("quality_recovery_verification_parallel_candidates"))
-                or _coerce_int(tuned_quality_recovery.get("verification_parallel_candidates"))
-                or verification_parallel_candidates,
-            ),
-            "disable_history_slices": bool(quality_recovery_disable_history),
-            "disable_registry_memory": bool(quality_recovery_disable_registry),
-            "force_discovery_slices": (
-                True if quality_recovery_force_discovery is None else bool(quality_recovery_force_discovery)
-            ),
-            "force_geo_fanout": (
-                True if quality_recovery_force_geo_fanout is None else bool(quality_recovery_force_geo_fanout)
-            ),
-            "force_country_only_queries": (
-                True
-                if quality_recovery_force_country_queries is None
-                else bool(quality_recovery_force_country_queries)
-            ),
-            "force_adjacent_titles": (
-                True
-                if quality_recovery_force_adjacent_titles is None
-                else bool(quality_recovery_force_adjacent_titles)
-            ),
-        }
 
     summary_lines = []
     if role_title:
@@ -2462,7 +2509,6 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "providers": providers,
         "limit": limit,
         "internal_fetch_limit": internal_fetch_limit,
-        "csv_export_limit": csv_export_limit,
         "output_dir": str(output_dir),
         "feedback_db": str(feedback_db),
         "model_dir": str(model_dir),
@@ -2494,13 +2540,12 @@ def build_app_bootstrap() -> Dict[str, Any]:
         "employment_status_options": EMPLOYMENT_STATUS_OPTIONS,
         "defaults": {
             "providers": ["scrapingbee_google"],
-            "limit": 20,
-            "csv_export_limit": 20,
+            "limit": 300,
             "radius_miles": 25,
             "company_match_mode": "both",
             "employment_status_mode": "any",
             "theme": "bright",
-            "registry_memory_enabled": True,
+            "registry_memory_enabled": False,
             "include_history_slices": True,
             "include_discovery_slices": True,
             "reranker_enabled": True,
@@ -2717,20 +2762,9 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Senior Supply Chain Manager",
                     "Supply Planning Manager",
                     "Demand Planning Manager",
-                    "Logistics & Supply Chain Manager",
-                    "S&OP Manager",
-                    "Distribution Manager",
-                    "Inventory Planning Manager",
                 ],
                 "countries": [
                     "United Arab Emirates",
-                    "Saudi Arabia",
-                    "Qatar",
-                    "Kuwait",
-                    "Oman",
-                    "Bahrain",
-                    "Egypt",
-                    "Jordan",
                 ],
                 "continents": [],
                 "cities": [
@@ -2738,16 +2772,6 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "Abu Dhabi",
                     "Sharjah",
                     "Jebel Ali",
-                    "Riyadh",
-                    "Jeddah",
-                    "Dammam",
-                    "Doha",
-                    "Kuwait City",
-                    "Muscat",
-                    "Manama",
-                    "Cairo",
-                    "Alexandria",
-                    "Amman",
                 ],
                 "company_targets": [],
                 "peer_company_targets": [
@@ -2761,12 +2785,6 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "DHL",
                     "Unilever",
                     "Nestle",
-                    "PepsiCo",
-                    "P&G",
-                    "Lulu Group",
-                    "Carrefour",
-                    "DP World",
-                    "Almarai",
                 ],
                 "company_match_mode": "both",
                 "employment_status_mode": "any",
@@ -2790,9 +2808,6 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "IBP",
                     "Regional Distribution",
                     "SAP",
-                    "Warehouse Management",
-                    "Supply Network Planning",
-                    "Transportation",
                 ],
                 "industry_keywords": [
                     "retail",
@@ -2800,35 +2815,30 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "consumer goods",
                     "logistics",
                     "distribution",
-                    "fmcg",
-                    "manufacturing",
-                    "food distribution",
                 ],
                 "job_description": (
-                    "We are hiring a regional Supply Chain Manager to lead planning, inventory, logistics, and "
-                    "fulfillment performance across the United Arab Emirates, Saudi Arabia, Qatar, Kuwait, Oman, "
-                    "Bahrain, Egypt, and Jordan. The brief prioritizes candidates with strong public evidence of "
-                    "S&OP ownership, demand and supply planning, inventory optimization, ERP-led operations, and "
-                    "distribution or warehouse coordination across GCC or wider MENA supply chains. Experience "
-                    "scaling service levels across omnichannel retail, consumer goods, 3PL, manufacturing, or "
-                    "regional distribution environments is highly valuable."
+                    "We are hiring a UAE-based Supply Chain Manager to lead planning, inventory, logistics, and "
+                    "fulfillment performance across a fast-moving retail and ecommerce network. The brief prioritizes "
+                    "candidates with strong public evidence of S&OP ownership, demand and supply planning, inventory "
+                    "optimization, ERP-led operations, and distribution or warehouse coordination in the UAE market. "
+                    "Experience scaling service levels across omnichannel retail, consumer goods, 3PL, or regional "
+                    "distribution environments is highly valuable."
                 ),
                 "brief_clarifications": {
-                    "prioritize_first_location": False,
+                    "prioritize_first_location": True,
                     "allow_adjacent_titles": True,
-                    "strict_market_scope": False,
+                    "strict_market_scope": True,
                     "expand_search_when_thin": True,
                 },
                 "jd_breakdown": {
                     **extract_job_description_breakdown(
                         (
-                            "We are hiring a regional Supply Chain Manager to lead planning, inventory, logistics, and "
-                            "fulfillment performance across the United Arab Emirates, Saudi Arabia, Qatar, Kuwait, Oman, "
-                            "Bahrain, Egypt, and Jordan. The brief prioritizes candidates with strong public evidence of "
-                            "S&OP ownership, demand and supply planning, inventory optimization, ERP-led operations, and "
-                            "distribution or warehouse coordination across GCC or wider MENA supply chains. Experience "
-                            "scaling service levels across omnichannel retail, consumer goods, 3PL, manufacturing, or "
-                            "regional distribution environments is highly valuable."
+                            "We are hiring a UAE-based Supply Chain Manager to lead planning, inventory, logistics, and "
+                            "fulfillment performance across a fast-moving retail and ecommerce network. The brief prioritizes "
+                            "candidates with strong public evidence of S&OP ownership, demand and supply planning, inventory "
+                            "optimization, ERP-led operations, and distribution or warehouse coordination in the UAE market. "
+                            "Experience scaling service levels across omnichannel retail, consumer goods, 3PL, or regional "
+                            "distribution environments is highly valuable."
                         ),
                         role_title="Supply Chain Manager",
                     ),
@@ -2837,10 +2847,6 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         "Senior Supply Chain Manager",
                         "Supply Planning Manager",
                         "Demand Planning Manager",
-                        "Logistics & Supply Chain Manager",
-                        "S&OP Manager",
-                        "Distribution Manager",
-                        "Inventory Planning Manager",
                     ],
                     "required_keywords": [
                         "s&op",
@@ -2863,9 +2869,6 @@ def build_app_bootstrap() -> Dict[str, Any]:
                         "consumer goods",
                         "logistics",
                         "distribution",
-                        "fmcg",
-                        "manufacturing",
-                        "food distribution",
                     ],
                     "years": {
                         "mode": "plus_minus",
@@ -2894,67 +2897,40 @@ def build_app_bootstrap() -> Dict[str, Any]:
                             "stakeholder management",
                         ],
                         "scope_keywords": [
-                            "gcc",
                             "uae",
                             "dubai",
-                            "riyadh",
-                            "doha",
                             "jebel ali",
                             "regional distribution",
-                            "mena",
-                            "cairo",
-                            "amman",
                         ],
                     },
                     "search_tuning": {
-                        "search_profile": BALANCED_SEARCH_PROFILE,
+                        "search_profile": FOCUSED_SEARCH_PROFILE,
                         "reranker_model_name": DEFAULT_UI_RERANKER_MODEL,
-                        "internal_fetch_limit_override": 540,
-                        "top_up_max_rounds": 1,
-                        "reranker_top_n": 300,
-                        "provider_parallel_requests": 32,
-                        "scrapingbee_max_queries": 96,
-                        "max_geo_groups": 8,
+                        "internal_fetch_limit_override": 420,
+                        "reranker_top_n": 220,
+                        "provider_parallel_requests": 24,
+                        "scrapingbee_max_queries": 54,
+                        "max_geo_groups": 2,
                         "geo_group_size": 1,
                         "company_chunk_size": 4,
                         "company_slice_location_group_limit": 1,
                         "max_company_terms_per_query": 6,
-                        "stagnation_query_window": 10,
-                        "stagnation_min_results": 280,
-                        "include_history_slices": False,
+                        "stagnation_query_window": 8,
+                        "stagnation_min_results": 240,
+                        "include_history_slices": True,
                         "include_discovery_slices": True,
-                        "verification_top_n": 260,
-                        "verification_parallel_candidates": 48,
+                        "verification_top_n": 160,
+                        "verification_parallel_candidates": 32,
                         "verification_location_probe_queries": 1,
-                        "verification_company_location_probe_queries": 2,
-                        "quality_recovery": {
-                            "enabled": True,
-                            "min_verified_count": 50,
-                            "max_reject_count": 50,
-                            "max_rounds": 3,
-                            "fetch_limit_increment": 120,
-                            "parallel_requests": 36,
-                            "max_queries": 120,
-                            "max_geo_groups": 8,
-                            "reranker_top_n": 320,
-                            "verification_top_n": 300,
-                            "verification_parallel_candidates": 56,
-                            "disable_history_slices": True,
-                            "disable_registry_memory": True,
-                            "force_discovery_slices": True,
-                            "force_geo_fanout": True,
-                            "force_country_only_queries": True,
-                            "force_adjacent_titles": True,
-                        },
                         "query_family_budgets": {
-                            "team_leadership_pages": 2,
+                            "team_leadership_pages": 1,
                             "appointment_news_pages": 3,
                             "speaker_bio_pages": 1,
                             "award_industry_pages": 0,
-                            "industry_association_pages": 3,
+                            "industry_association_pages": 2,
                             "trade_directory_pages": 2,
-                            "org_chart_profile_pages": 3,
-                            "profile_like_public_pages": 24,
+                            "org_chart_profile_pages": 2,
+                            "profile_like_public_pages": 18,
                         },
                     },
                 },
@@ -2968,7 +2944,6 @@ def build_app_bootstrap() -> Dict[str, Any]:
                     "function": "important",
                     "semantic": "preferred",
                 },
-                "registry_memory_enabled": False,
             },
             "data_analyst_uae": {
                 "project_name": "UAE Data Analyst Search",
