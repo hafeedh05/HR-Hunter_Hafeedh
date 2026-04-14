@@ -1412,9 +1412,6 @@ def build_candidate(payload: dict) -> CandidateProfile:
         current_target_company_match=bool(payload.get("current_target_company_match", False)),
         target_company_history_match=bool(payload.get("target_company_history_match", False)),
         current_title_match=bool(payload.get("current_title_match", False)),
-        in_scope=bool(payload.get("in_scope", False)),
-        precise_market_in_scope=bool(payload.get("precise_market_in_scope", False)),
-        scope_bucket=payload.get("scope_bucket", "out_of_scope"),
         industry_aligned=bool(payload.get("industry_aligned", False)),
         location_aligned=bool(payload.get("location_aligned", False)),
         current_company_confirmed=bool(payload.get("current_company_confirmed", False)),
@@ -1478,4 +1475,9 @@ def build_candidate(payload: dict) -> CandidateProfile:
         score=float(payload.get("score", 0.0)),
         raw=payload.get("raw", {}),
     )
+    # Older saved reports still carry deprecated scope-era fields. Preserve
+    # them as ad-hoc attributes so historical projects remain loadable.
+    candidate.in_scope = bool(payload.get("in_scope", False))
+    candidate.precise_market_in_scope = bool(payload.get("precise_market_in_scope", False))
+    candidate.scope_bucket = payload.get("scope_bucket", "out_of_scope")
     return hydrate_candidate_reporting(candidate)
