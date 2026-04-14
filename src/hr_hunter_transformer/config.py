@@ -46,6 +46,15 @@ def resolve_secret(name: str, default: str | None = None) -> str | None:
         if name in values:
             os.environ.setdefault(name, values[name])
             return values[name]
+    try:
+        from hr_hunter.config import resolve_secret as resolve_main_app_secret
+    except Exception:
+        resolve_main_app_secret = None
+    if resolve_main_app_secret is not None:
+        shared_value = resolve_main_app_secret(name)
+        if shared_value:
+            os.environ.setdefault(name, shared_value)
+            return shared_value
     return default
 
 
