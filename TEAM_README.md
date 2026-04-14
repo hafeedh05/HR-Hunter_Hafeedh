@@ -34,6 +34,16 @@ This is the working team position:
 - workspace-state startup compatibility fix
 - legacy saved-run compatibility fix for Results/Candidates loading
 
+## Current Verification Baseline
+
+Use these local transformer benchmark numbers as the current reference when validating another environment:
+
+- Supply Chain Manager: `282 returned / 105 verified / 164 review / 13 reject` in `32.26s`
+- AI Engineer: `300 returned / 11 verified / 289 review / 0 reject` in `146.38s`
+- Chief Executive Officer (CEO): `300 returned / 10 verified / 290 review / 0 reject` in `165.69s`
+
+If another environment performs materially worse than these on the same brief, treat it as a deployment/config/runtime issue until proven otherwise.
+
 ## What Was Wrong In The Previous Deploy Cycle
 
 - production transformer search initially failed because transformer config was not inheriting the main app secret-resolution behavior, so ScrapingBee was missing in transformer mode

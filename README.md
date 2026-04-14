@@ -146,6 +146,16 @@ This release includes the following practical changes:
 - startup compatibility fix for workspace state loading
 - legacy report compatibility fix so older saved project runs still open in Results/Candidates
 
+## Current Laptop Benchmark Baseline
+
+These are the latest local transformer-first benchmark numbers that should be treated as the working baseline to match or improve:
+
+- Supply Chain Manager: `282 returned / 105 verified / 164 review / 13 reject` in `32.26s`
+- AI Engineer: `300 returned / 11 verified / 289 review / 0 reject` in `146.38s`
+- Chief Executive Officer (CEO): `300 returned / 10 verified / 290 review / 0 reject` in `165.69s`
+
+These numbers are not universal guarantees. They are the current reference points for teammate verification and production smoke comparison.
+
 ## Known Production Gotchas
 
 - transformer mode must inherit the same secret resolution path as the main app, especially for `SCRAPINGBEE_API_KEY`
