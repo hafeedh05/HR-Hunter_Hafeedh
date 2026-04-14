@@ -1,5 +1,7 @@
 # HR Hunter Team README
 
-Canonical handoff doc: [TEAM_README.md](/Users/ahmad/HR%20Hunter/TEAM_README.md)
+Canonical team readme: [TEAM_README.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/TEAM_README.md)
 
-This file is kept so existing links do not break. Use the root-level team README when sharing the project internally.
+Canonical deploy handoff: [codex-production-handoff.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/docs/codex-production-handoff.md)
+
+This file is kept so existing links do not break. Use the root-level team README for internal handoff and the production handoff doc for deploy instructions.

@@ -1,52 +1,17 @@
 # HR Hunter
 
-HR Hunter is a recruiter-focused search and ranking platform for building project-based candidate pipelines. It combines structured hunt briefs, public-web sourcing, semantic ranking, recruiter feedback, and a full local web app into one workflow.
+HR Hunter is a recruiter-facing sourcing app with a familiar project workflow and a transformer-first search engine.
 
-Operator handoff for the live stack: [`docs/codex-production-handoff.md`](docs/codex-production-handoff.md)
+- Repo: [https://github.com/hafeedh05/HR-Hunter_Hafeedh.git](https://github.com/hafeedh05/HR-Hunter_Hafeedh.git)
+- Deploy handoff: [docs/codex-production-handoff.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/docs/codex-production-handoff.md)
 
-This repository now includes:
+## Current Release Reality
 
-- a FastAPI backend
-- a full recruiter UI
-- TOTP-based sign-in
-- project and run history
-- background search jobs
-- candidate review and feedback capture
-- optional semantic reranking
-- optional learned ranking from recruiter feedback
-- local SQLite support and a Postgres/Cloud SQL-ready database path
+This repo is now cut for a **client-safe transformer-first release**.
 
-## Product Overview
-
-HR Hunter is built around a project-first workflow:
-
-1. Sign in with a recruiter account using a 6-digit authenticator code.
-2. Create or open a project for a role or mandate.
-3. Build the hunt brief with titles, years, location, companies, employment status, JD, and anchors.
-4. Run search in the background without freezing the UI.
-5. Review candidates, feedback, and run history inside the same project.
-6. Log recruiter feedback and train a ranking model from it.
-
-The app supports multiple recruiters, admin-only controls, recruiter account provisioning, and project history across runs.
-
-## Core Features
-
-- Project-based recruiter workspace
-- TOTP-only login flow
-- Admin-managed recruiter accounts
-- Hunt brief builder for:
-  - target titles
-  - years and tolerance
-  - countries, continents, cities, and radius
-  - target companies and company match mode
-  - employment status mode
-  - must-have and nice-to-have keywords
-  - typed job descriptions and recruiter notes
-  - JD uploads from `pdf`, `doc`, `docx`, `txt`, `md`, and `rtf`
-  - automatic structured JD breakdown from uploaded files
-  - manual JD breakdown from typed descriptions
-  - ranking anchors
-- Separate tabs for:
+- Canonical engine: `transformer_v2`
+- Classic engine: fallback only
+- UI stays familiar:
   - Projects
   - Hunt
   - Results
@@ -54,225 +19,124 @@ The app supports multiple recruiters, admin-only controls, recruiter account pro
   - Feedback
   - History
   - Settings
-- Background search jobs with retry and failure handling
-- Candidate registry and cross-search memory
-- Recruiter feedback logging
-- Learned ranking with LightGBM
-- Semantic reranking support
-- CSV and JSON report exports
-- Optional remote sourcing bridge
-- Secret Manager-aware runtime configuration
+  - Admin
+- Hunt Brief stays familiar and is not redesigned in this release
 
-## Ranking Model
+This release does **not** claim equal strength across every job family.
 
-HR Hunter keeps verification labels honest and score-based.
+## Safe Usage Scope Today
 
-Score bands:
+### Strong families
 
-- `70.00 - 100.00` = `Verified`
-- `50.00 - 69.99` = `Needs Review`
-- `0.00 - 49.99` = `Rejected`
+- Supply Chain / Logistics
+- Digital Marketing
+- Interior Design
+- Architecture / Project Architect
 
-The stack can combine:
+### Pilot-only families
 
-- heuristic scoring
-- semantic reranking
-- learned ranking from recruiter feedback
+- Finance / Accounting
+- HR / Talent Acquisition
+- Legal / Compliance
+- Sustainability / ESG
+- General Operations
 
-The semantic reranker is optional and currently uses:
+### Weak families not to oversell
 
-- `BAAI/bge-reranker-v2-m3`
+- AI / Data / Software for strict verified promises
+- Executive / CEO
+- Healthcare / Doctors
+- Pharma / Clinical
+- Government / Public Sector
+- Aviation / Maritime
 
-The learned ranker is optional and currently uses:
+## Product Overview
 
-- `LightGBM LambdaRank`
+HR Hunter is built around a project-first recruiter workflow:
+
+1. Sign in with an invite-only TOTP account.
+2. Create or open a project.
+3. Fill the Hunt Brief with titles, geography, companies, years, keywords, and JD context.
+4. Run search in the background.
+5. Review candidates and results inside the same project.
+6. Export CSV and JSON reports.
+7. Capture recruiter feedback and use it to improve ranking over time.
+
+## Core Features
+
+- Project-based recruiter workspace
+- TOTP-only login flow
+- Admin-managed recruiter accounts
+- Hunt Brief with:
+  - target titles
+  - years and tolerance
+  - countries, continents, cities, radius
+  - current companies and peer companies
+  - must-have and nice-to-have keywords
+  - typed JD and uploaded JD support
+  - recruiter notes
+- Background search jobs
+- Results, Candidates, Feedback, History, Settings, Admin
+- Transformer-first ranking and verification
+- CSV and JSON exports
+- Recruiter feedback capture
+- Learned ranking support from recruiter feedback
+- SQLite local support and Postgres-compatible deployment path
 
 ## Tech Stack
 
 - Python 3.10+
 - FastAPI
 - Uvicorn
-- SQLite for local state and feedback by default
-- Postgres-compatible database layer for Cloud SQL readiness
-- Hugging Face Transformers for semantic reranking
+- SQLite for local state by default
+- Postgres-compatible database path for deployment
+- Hugging Face Transformers for local transformer inference
 - LightGBM + scikit-learn for learned ranking
-- Google Cloud Secret Manager support
+- ScrapingBee for retrieval
+- Vanilla HTML/CSS/JS frontend
 
-## Install
-
-Base install:
-
-```bash
-uv sync --extra dev
-```
-
-If you want the local web app and API:
-
-```bash
-uv sync --extra dev --extra api
-```
-
-If you want semantic reranking:
-
-```bash
-uv sync --extra reranker
-```
-
-If you want learned ranking:
-
-```bash
-uv sync --extra ranker
-```
-
-If you want all major runtime features:
+## Run Locally
 
 ```bash
 uv sync --extra dev --extra api --extra reranker --extra ranker
-```
-
-## Run the App
-
-Start the local app:
-
-```bash
 uv run hr-hunter serve --host 127.0.0.1 --port 8765
 ```
 
-Then open:
+Open:
 
-- `http://127.0.0.1:8765`
+- [http://127.0.0.1:8765](http://127.0.0.1:8765)
 
-JD handling in the app:
-
-- Uploading a JD file automatically runs structured JD breakdown.
-- Typed JD text can be broken down with the `Break Down JD` button.
-- If both an uploaded file and typed text are present, the uploaded file is used as the primary JD source and the typed text is treated as optional recruiter notes.
-
-## CLI Commands
-
-Run a brief:
-
-```bash
-uv run hr-hunter search --brief examples/search_briefs/senior_data_analyst_uae.yaml --providers scrapingbee_google --limit 100
-```
-
-Verify an existing report:
-
-```bash
-uv run hr-hunter verify --brief examples/search_briefs/senior_data_analyst_uae.yaml --report output/search/<run_id>.json --limit 50
-```
-
-Run a search matrix:
-
-```bash
-uv run hr-hunter matrix-search --matrix examples/matrices/sr_product_lead_ai_jan26_ireland_fmcg.yaml --limit 180 --verify-top 80
-```
-
-Log recruiter feedback:
-
-```bash
-uv run hr-hunter feedback-log --report output/search/<run_id>.json --candidate "<candidate name>" --recruiter-id recruiter_1 --action shortlist
-```
-
-Export training rows:
-
-```bash
-uv run hr-hunter feedback-export --output output/feedback/training_rows.json
-```
-
-Train the learned ranker:
-
-```bash
-uv run hr-hunter train-ranker --feedback-db output/feedback/hr_hunter_feedback.db --model-dir output/models/ranker/latest
-```
-
-## Environment
-
-Create a local `.env` file from `.env.example` if you want local secrets and overrides.
-
-Important runtime variables include:
+## Important Runtime Variables
 
 - `SCRAPINGBEE_API_KEY`
 - `HR_HUNTER_OUTPUT_DIR`
+- `HR_HUNTER_STATE_DB`
 - `HR_HUNTER_FEEDBACK_DB`
 - `HR_HUNTER_RANKER_MODEL_DIR`
-- `HR_HUNTER_STATE_DB`
 - `HR_HUNTER_DATABASE_URL`
-- `HR_HUNTER_SECRET_ENV_FILES`
-- `HR_HUNTER_USE_SECRET_MANAGER`
-- `HR_HUNTER_GCP_PROJECT`
-- `GOOGLE_CLOUD_PROJECT`
-- `SCRAPINGBEE_API_KEY_SECRET_NAME`
+- TOTP/login env vars if using fixed-login bootstrap
 
-## Secret Manager Support
-
-The runtime can load secrets from Google Cloud Secret Manager instead of hardcoding them into the repo or a local `.env`.
-
-Example environment setup:
+## Local Validation
 
 ```bash
-export HR_HUNTER_USE_SECRET_MANAGER=true
-export GOOGLE_CLOUD_PROJECT=<your-gcp-project>
-export SCRAPINGBEE_API_KEY_SECRET_NAME=hr-hunter-scrapingbee-api-key
+uv run pytest -q tests/test_api.py tests/test_state.py tests/test_verifier.py tests/test_transformer_query_planner.py tests/test_transformer_verifier.py tests/test_transformer_extraction.py
+node --check UI/app.js
 ```
 
-## Database Support
+## Today’s Release Notes
 
-Local development uses SQLite by default for:
+This release branch includes the following practical changes:
 
-- workspace state
-- project history
-- recruiter accounts
-- feedback storage
-
-The codebase now also supports a shared Postgres-compatible connection path through:
-
-- `HR_HUNTER_DATABASE_URL`
-
-That makes the app ready for Cloud SQL-style deployments without forcing local development off SQLite.
-
-## Remote Sourcing Support
-
-HR Hunter can also call a remote sourcing backend server-to-server when configured. The local app can still fall back to local ranking/report handling around that remote response.
-
-Relevant runtime controls live in:
-
-- `src/hr_hunter/remote.py`
-- `src/hr_hunter/api.py`
-
-## Outputs
-
-Search runs write recruiter-facing artifacts under the output directory, including:
-
-- JSON report
-- CSV export
-- feedback DB
-- state DB
-- learned-ranker model files
-
-Typical output folders:
-
-- `output/search`
-- `output/feedback`
-- `output/state`
-- `output/models/ranker`
-
-## Current Direction
-
-This repository has moved well beyond the earlier retrieval-only workflow. It now behaves as a recruiter product with:
-
-- project memory
-- candidate memory
-- admin-managed access
-- background jobs
-- recruiter review loops
-- learned ranking
-
-It is designed to keep getting better as recruiter feedback accumulates.
+- transformer-first search path committed into the main repo
+- taxonomy and transformer query profile files added
+- transformer verifier and telemetry wiring added
+- candidate name/company sanitation improved in UI and CSV export
+- CSV download behavior fixed
+- feedback page wording cleaned up for client readability
+- deployment handoff updated for GitHub-to-GCP release flow
 
 ## Notes
 
-- The UI and backend evolve together in this repo.
-- Verification labels are not faked to satisfy quotas.
-- Recruiter feedback improves ranking quality over time, especially once the learned ranker is trained.
-- Requested candidate counts are best-effort and depend on source coverage, dedupe, and quality filtering.
+- Do not present this release as universal coverage for every role family.
+- Keep classic fallback internal.
+- Use the safe families above for demos and early client positioning.

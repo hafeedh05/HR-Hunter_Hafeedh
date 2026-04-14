@@ -1,323 +1,97 @@
 # HR Hunter Team README
 
-## Purpose
-
-HR Hunter is the internal talent-sourcing product we are building to help our team find, grade, review, and operationalize candidate search workflows.
-
-The goal is not to build another generic lead scraper. The goal is to build a controlled internal system that:
-
-- takes structured recruiter input
-- runs targeted candidate discovery scripts
-- uses open-source AI agents to plan and refine searches
-- verifies candidates with public evidence
-- grades them consistently
-- shows the results in a reviewable UI
-- supports a clean local -> PR -> validate -> deploy to GCP workflow
-
-## Product Direction
-
-We are building an internal HR Hunter application that should accept the following recruiter inputs:
-
-- `Country / countries`
-  - multiple countries can be selected
-  - optional city or cities inside those countries
-  - optional radius around a selected city
-- `Preferred job title / job titles`
-  - multiple titles can be entered
-- `Preferred company / companies`
-  - multiple companies can be entered
-- `Job description upload`
-  - recruiter uploads the JD
-  - the system parses it and uses it to refine search logic, role fit, required signals, and grading
-
-The current working example in this repo is FMCG-heavy and Ireland-focused, but the product should be reusable for other mandates and other countries as well.
-
-## Product Goals
-
-Primary goals:
-
-- help recruiters produce better candidate lists faster
-- make search logic transparent instead of black-box
-- preserve search history and reviewer decisions
-- prevent the same candidate from being surfaced repeatedly unless the user wants that
-- keep verification strong enough that approved candidates are defensible
-
-Non-goals for the first versions:
-
-- public self-serve signup
-- consumer-grade social product features
-- password-based auth
-- one-click "AI decides everything" candidate approval
-- replacing human review entirely
-
-## Core Search Anchors
-
-The search system should be driven by explicit anchors selected by the user after they enter the brief.
-
-Anchors are the highest-priority filters and scoring signals. Examples:
-
-- location
-- current company
-- target company history
-- current title family
-- relevant experience family
-- sector / industry
-- seniority
-
-For the current FMCG search shape, the main anchors are:
-
-- Ireland location
-- relevant FMCG experience
-- current or target-company alignment
-- relevant title family
-
-Users should be able to mark anchors as:
-
-- `critical`
-- `important`
-- `nice to have`
-
-This matters because the search logic and grading should behave differently depending on what is locked in. A mandate where location is critical should not behave the same way as a mandate where location is only preferred.
-
-## Search Philosophy
-
-We want this built around scripts and open-source AI agents, not a single opaque black box.
-
-That means:
-
-- use scripts to run controlled search lanes
-- use open-source AI agents to help with planning, parsing, evidence collection, and operator workflows
-- keep the evidence and grading logic inspectable
-- keep a hard verification layer so agent output does not become truth on its own
-
-The system should support multiple search lanes in parallel. Examples:
-
-- `current-target-company-strict`
-  - candidates who currently work at the preferred companies and currently hold relevant roles
-- `current-target-company-adjacent`
-  - candidates at the preferred companies whose current roles are adjacent but still relevant
-- `history-target-company-relevant-role`
-  - candidates who previously worked at target companies but currently remain relevant for the mandate
-- `location-first-fmcg`
-  - candidates strongly anchored on the location and sector, even if the company match is broader
-- `location-recovery`
-  - candidates with strong role/company fit where location evidence needs to be recovered from public sources
-
-Each lane should:
-
-- use different query logic
-- avoid re-searching the same candidates
-- avoid reusing equivalent provider queries
-- write explainable outputs
-- feed a single deduped review surface
-
-## Recommended Script Lanes
-
-The implementation should explicitly support separate scripts or strategy lanes, each with a clear purpose.
-
-Suggested lanes:
-
-- `current_target_company_exact`
-  - current company is in the preferred list
-  - current role is an exact or near-exact role match
-- `current_target_company_adjacent`
-  - current company is in the preferred list
-  - current role is adjacent but still relevant
-- `current_target_company_location_first`
-  - location anchor is strict
-  - company still matters, but the lane prioritizes Ireland evidence first
-- `historical_target_company_recovery`
-  - previous target-company experience is present
-  - current role still relevant
-  - feeds mostly into `Needs Review`, not direct approval
-- `location_recovery_probe`
-  - strong role/company fit but weak location evidence
-  - tries to recover Ireland or city-level evidence
-- `role_recovery_probe`
-  - strong company/location fit but weak or noisy title evidence
-  - tries to confirm the actual current remit
-
-Each lane should have:
-
-- a query cap
-- a verification cap
-- dedupe against prior runs
-- its own audit label so we know where the candidate came from
-
-## Public-Only Search Model
-
-Right now the public-web workflow uses ScrapingBee as a search layer and public evidence recovery layer.
-
-We need to create search scripts that use ScrapingBee intelligently, not expensively and not randomly.
-
-That means:
-
-- high-precision query slices first
-- broader recovery queries second
-- evidence fetches only for top-ranked candidates
-- dedupe before verification
-- avoid re-querying previously seen candidates and previously seen search fingerprints
-
-ScrapingBee is the search infrastructure, not the product logic. The value must live in our scripts, scoring, verification, and workflow design.
-
-## Grading Schema
-
-The grading schema is fixed:
-
-- `70.00 - 100.00` = `Verified`
-- `50.00 - 69.99` = `Needs Review`
-- `0.00 - 49.99` = `Rejected`
-
-The UI and exports must always respect those bands.
-
-Alongside strict grading, we also use a second reporting layer in the underlying engine:
-
-- `strict_verified`
-- `search_qualified`
-- `weak`
-
-This helps us separate:
-
-- what is safe to approve immediately
-- what is promising but still needs a human
-- what should be dropped
-
-## Scoring Dimensions
-
-The team should assume that scoring is multi-factor and should stay multi-factor.
-
-Core scoring dimensions:
-
-- `experience_fit`
-- `company_fit`
-- `title_fit`
-- `industry_fit`
-- `location_fit`
-- `skill_fit`
-- `verification_fit`
-- `company_size_fit`
-
-Additional precision dimensions already aligned with the current direction:
-
-- `current_function_fit`
-- `location_precision`
-- `current_fmcg_fit`
-- `source_quality`
-- `evidence_freshness`
-
-Operational fields that should be exposed in outputs:
-
-- `qualification_tier`
-- `cap_reasons`
-- `disqualifier_reasons`
-- `matched_title_family`
-- `location_precision_bucket`
-- `current_role_proof_count`
-
-The point is not just to generate a number. The point is to explain why a number was earned and why a candidate was capped or downgraded.
-
-## How Verification Should Work
-
-The system should not approve candidates just because a search result looks good.
-
-The verification layer must check:
-
-- does the person currently appear to work there
-- is the current role actually relevant
-- is the location real and current
-- is the sector / FMCG fit real
-- is the title family a real match or just a noisy nearby title
-
-Important rule:
-
-- current role proof matters more than historical experience
-
-Examples of what should push a candidate down:
-
-- role is historical, not current
-- company is historical, not current
-- country-only signal with no usable locality when locality matters
-- off-function current role
-- tech PM or unrelated product title when the search is for FMCG brand / product / category work
-
-Verification should be layered:
-
-1. retrieval
-2. local dedupe
-3. cheap local scoring
-4. targeted public evidence collection for the strongest candidates
-5. current-role / current-company / location proof checks
-6. final status assignment
-
-Agents may help summarize evidence, but agents should not directly decide approval without the hard rule checks.
-
-## UI Requirements
-
-We want a UI for internal team use only.
-
-Requirements:
-
-- access is invite-only
-- we create the account for the user
-- there is no password
-- login uses Google Authenticator-compatible OTP / TOTP
-- only allowlisted users that we provision can get in
-
-The safest implementation shape is:
-
-- invite-only account provisioning by us
-- no public signup
-- no local password login
-- Google Authenticator or another TOTP-compatible authenticator app for sign-in / MFA
-- a user identity model based on invited email addresses plus TOTP enrollment
-
-Important clarification:
-
-- this should not default to public Google OAuth sign-in
-- the requirement is private, invite-only, passwordless access with Google Authenticator-style verification
-
-The UI should support:
-
-- form inputs for countries, cities, radius, titles, companies, JD upload
-- anchor selection after the brief is entered
-- a run / re-run workflow
-- candidate tables with clear rationale
-- human review actions
-- historical memory so we do not lose prior work for the same mandate
-
-Recommended screens:
-
-- `Login`
-- `Mandates`
-- `Create Mandate`
-- `Run Search`
-- `Candidates`
-- `Candidate Detail`
-- `History / Prior Runs`
-- `Admin / Access Management`
-
-## Candidate Review Surface
-
-The UI should display three table states, effectively like three sheets:
-
-- `Approved`
-- `Needs Review`
-- `Rejected`
-
-Each candidate row should show at least:
-
-- candidate name
-- current title
-- current company
-- location
-- score
-- strict status
-- qualification tier
-- why they matched
-- what anchors they matched
-- what evidence was used
-- whether the role/company/location are current or only historical
-- notes from the verifier
+Canonical deploy handoff: [docs/codex-production-handoff.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/docs/codex-production-handoff.md)
+
+## Current Team Reality
+
+HR Hunter is now a **transformer-first recruiter sourcing app** with a stable recruiter UI shell and a client-safe release cut prepared for deployment from GitHub to GCP.
+
+This is the working team position:
+
+- canonical engine: `transformer_v2`
+- classic engine: fallback only
+- UI stays familiar:
+  - Projects
+  - Hunt
+  - Results
+  - Candidates
+  - Feedback
+  - History
+  - Settings
+  - Admin
+- TOTP login stays the same
+- Hunt Brief stays familiar for this release
+
+## What We Shipped In This Release Cut
+
+- transformer-first search path committed into the repo
+- taxonomy and family query profile files added
+- transformer verifier, telemetry, ranking, and export flow added
+- candidate name/company cleanup in UI and CSV export
+- CSV download fixed to return real CSV files
+- feedback page wording simplified for user understanding
+- production deploy handoff updated for GitHub-to-GCP deployment
+
+## Safe Internal/Product Scope
+
+### Safe families right now
+
+- Supply Chain / Logistics
+- Digital Marketing
+- Interior Design
+- Architecture / Project Architect
+
+### Pilot-only families
+
+- Finance / Accounting
+- HR / Talent Acquisition
+- Legal / Compliance
+- Sustainability / ESG
+- General Operations
+
+### Weak families not to oversell
+
+- AI / Data / Software for strict verified-yield promises
+- Executive / CEO
+- Healthcare / Doctors
+- Pharma / Clinical
+- Government / Public Sector
+- Aviation / Maritime
+
+## Operating Rules For The Team
+
+- do not present the product as universal coverage for every role family
+- do not expose classic fallback as a normal user-facing mode
+- do not redesign the UI before this deploy
+- do not redesign the Hunt Brief before this deploy
+- do not start a large verifier rewrite on the release branch
+
+## Practical Team Workflow
+
+1. make changes in the repo
+2. validate locally
+3. push to GitHub
+4. deploy from GitHub to GCP
+5. smoke test on a safe family
+6. roll back fast if health or search behavior is broken
+
+## Validation Baseline
+
+Before deploy, the minimum checks are:
+
+- app starts
+- login works
+- Hunt loads cleanly
+- search starts
+- progress updates
+- results attach to the correct project
+- CSV export downloads correctly
+- Candidates tab shows clean names and companies
+
+## Reference
+
+- deploy handoff: `docs/codex-production-handoff.md`
+- repo: `https://github.com/hafeedh05/HR-Hunter_Hafeedh.git`
 - reviewer notes
 
 For `Needs Review`, the user should be able to:
