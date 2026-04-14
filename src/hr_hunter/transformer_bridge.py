@@ -175,6 +175,12 @@ def _candidate_from_transformer_entity(entity: Any, brief: SearchBrief) -> Candi
         )
         for evidence in top_evidence
     ]
+    if entity.current_location_confirmed:
+        location_precision_bucket = "named_target_location"
+    elif entity.location_match:
+        location_precision_bucket = "country_only"
+    else:
+        location_precision_bucket = "outside_target_area"
     return CandidateProfile(
         full_name=full_name,
         current_title=entity.current_title,
@@ -189,9 +195,6 @@ def _candidate_from_transformer_entity(entity: Any, brief: SearchBrief) -> Candi
         current_target_company_match=bool(entity.company_match),
         target_company_history_match=False,
         current_title_match=bool(entity.title_match),
-        in_scope=False,
-        precise_market_in_scope=False,
-        scope_bucket="out_of_scope",
         industry_aligned=bool(primary and primary.supporting_keywords),
         location_aligned=bool(entity.location_match),
         current_company_confirmed=bool(entity.current_company_confirmed),
@@ -204,7 +207,7 @@ def _candidate_from_transformer_entity(entity: Any, brief: SearchBrief) -> Candi
         cap_reasons=[],
         disqualifier_reasons=[] if entity.verification_status != "reject" else ["insufficient_current_role_proof"],
         matched_title_family=entity.role_family,
-        location_precision_bucket="precise" if entity.current_location_confirmed else "unknown",
+        location_precision_bucket=location_precision_bucket,
         current_role_proof_count=int(entity.current_role_proof_count or 0),
         source_quality_score=float(min(1.0, len(entity.source_domains) / 4.0)),
         current_function_fit=1.0 if entity.title_match else 0.0,
