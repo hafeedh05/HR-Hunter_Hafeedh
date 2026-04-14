@@ -22,21 +22,23 @@ This document is the deploy handoff for the current release cut from:
 
 ## What This Release Includes
 
-- Transformer-first search path is the default
-- Existing taxonomy in `src/hr_hunter_transformer/taxonomy_data.yaml`
-- Existing family query profiles in `src/hr_hunter_transformer/query_profiles.py`
-- Existing transformer verifier in `src/hr_hunter_transformer/verifier.py`
-- Candidate/name/company sanitation in UI and CSV export
-- Truthful progress/status improvements
+- transformer-first search path is the default
+- existing taxonomy in `src/hr_hunter_transformer/taxonomy_data.yaml`
+- existing family query profiles in `src/hr_hunter_transformer/query_profiles.py`
+- existing transformer verifier in `src/hr_hunter_transformer/verifier.py`
+- candidate/name/company sanitation in UI and CSV export
+- truthful progress/status improvements
 - CSV export that downloads as a real CSV file
-- Feedback page language cleaned up for client comprehension
+- feedback page language cleaned up for client comprehension
+- startup compatibility fix for workspace state loading
+- legacy saved-run compatibility fix so older project runs still load
 
 ## What This Release Does Not Claim
 
-- Full family-complete performance
-- Equal strength across every role family
-- Universal verified-yield quality for executive / AI / clinical / government roles
-- Full benchmark coverage across all families
+- full family-complete performance
+- equal strength across every role family
+- universal verified-yield quality for executive / AI / clinical / government roles
+- full benchmark coverage across all families
 
 ## Safe Client Positioning
 
@@ -72,24 +74,34 @@ This document is the deploy handoff for the current release cut from:
 - runtime environment must have:
   - `transformers`
   - `torch`
+- transformer config must inherit the same secret-resolution behavior as the main app
 - state storage must be verified before deploy:
   - Postgres if production uses it
   - or the configured SQLite path if intentionally running local-style
 
+## Production Storage Reality
+
+Production is mixed-storage today:
+
+- `Cloud SQL / Postgres` stores structured app state such as users, sessions, projects, runs, and latest-run attachments
+- the `VM` still stores runtime and file-based assets such as release folders, `.venv`, logs, backups, CSV/JSON artifacts, and caches
+- SQLite feedback can still exist on the VM unless explicitly migrated
+
+Do not describe production as “everything on Cloud SQL.”
+
+## Known Deploy Gotchas
+
+- previous production deployment needed a hotfix because transformer config was not picking up the same secret-loading path as the main app
+- previous production deployment needed a hotfix because old saved runs still contained deprecated scope-era fields in report JSON
+- old saved projects can appear to have no Results/Candidates if that compatibility path breaks
+- operators should not push code back to GitHub from deployment work unless explicitly asked
+
 ## Branch And Merge Flow
 
-1. Create a release branch from the current local state:
-   - `codex/release-cut-transformer-gcp`
-2. Commit only deploy-safe work:
-   - transformer default behavior
-   - UI clarity/sanitization
-   - progress truthfulness
-   - export fixes
-   - handoff docs
-3. Push branch to `origin`
-4. Open PR into `main`
-5. Merge after smoke checks pass
-6. Deploy merged `main` to GCP
+1. Commit and push changes from local repo into GitHub
+2. Merge into `main`
+3. Deploy merged `main` to GCP
+4. Smoke test on a safe family
 
 ## Pre-Deploy Verification
 
@@ -106,7 +118,7 @@ Then run the app locally and smoke test:
 ```powershell
 cd "C:\Users\abdul\Desktop\HR Hunter\HR Hunter Clone"
 $env:PYTHONPATH = "C:\Users\abdul\Desktop\HR Hunter\HR Hunter Clone\src"
-.\.venv\Scripts\python.exe -m hr_hunter.api
+.\.venv\Scripts\python.exe -m hr_hunter.cli serve --host 127.0.0.1 --port 8765
 ```
 
 Check:
@@ -116,6 +128,7 @@ Check:
 - search starts
 - progress updates
 - results attach to the correct project
+- old saved projects still open Results/Candidates
 - CSV download works
 - Candidates tab renders clean names/companies
 
@@ -126,7 +139,7 @@ On the VM:
 1. Pull latest merged `main` from GitHub
 2. Create a new release directory
 3. Sync the repo into the release directory
-4. Activate/install dependencies in the app venv
+4. Reuse or update the app venv safely
 5. Point the service to the new release
 6. Restart the service
 
@@ -149,8 +162,10 @@ journalctl -u hr-hunter -n 100 --no-pager
 In browser:
 
 - sign in
-- open existing project
-- run Supply Chain search
+- verify old projects are visible
+- open an old project and confirm Results load
+- open Candidates and confirm candidate rows load
+- run a Supply Chain search
 - verify progress moves
 - verify latest run lands on the right project
 - verify CSV download opens a real CSV
@@ -168,8 +183,9 @@ Do not delete the previous release until rollback confidence is high.
 
 ## Do Not Change In This Release
 
-- Do not redesign the UI
-- Do not redesign the Hunt Brief
-- Do not expose classic fallback as a normal setting
-- Do not claim full role-family coverage
-- Do not begin major verifier redesign in the release branch
+- do not redesign the UI
+- do not redesign the Hunt Brief
+- do not expose classic fallback as a normal setting
+- do not claim full role-family coverage
+- do not begin major verifier redesign in the release branch
+- do not push code back to GitHub during deploy unless explicitly asked

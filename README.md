@@ -7,7 +7,7 @@ HR Hunter is a recruiter-facing sourcing app with a familiar project workflow an
 
 ## Current Release Reality
 
-This repo is now cut for a **client-safe transformer-first release**.
+This repo is cut for a client-safe transformer-first release.
 
 - Canonical engine: `transformer_v2`
 - Classic engine: fallback only
@@ -22,7 +22,7 @@ This repo is now cut for a **client-safe transformer-first release**.
   - Admin
 - Hunt Brief stays familiar and is not redesigned in this release
 
-This release does **not** claim equal strength across every job family.
+This release does not claim equal strength across every job family.
 
 ## Safe Usage Scope Today
 
@@ -123,9 +123,18 @@ uv run pytest -q tests/test_api.py tests/test_state.py tests/test_verifier.py te
 node --check UI/app.js
 ```
 
-## Today’s Release Notes
+## Production Storage Reality
 
-This release branch includes the following practical changes:
+The current production shape is mixed:
+
+- `Cloud SQL / Postgres` holds structured app state such as users, sessions, projects, runs, and latest-run attachments
+- the `VM` still holds runtime and file-based assets such as code releases, `.venv`, logs, backups, CSV/JSON artifacts, caches, and SQLite feedback unless explicitly migrated
+
+Do not assume that moving to Postgres alone removes VM disk pressure.
+
+## Today's Release Notes
+
+This release includes the following practical changes:
 
 - transformer-first search path committed into the main repo
 - taxonomy and transformer query profile files added
@@ -134,6 +143,15 @@ This release branch includes the following practical changes:
 - CSV download behavior fixed
 - feedback page wording cleaned up for client readability
 - deployment handoff updated for GitHub-to-GCP release flow
+- startup compatibility fix for workspace state loading
+- legacy report compatibility fix so older saved project runs still open in Results/Candidates
+
+## Known Production Gotchas
+
+- transformer mode must inherit the same secret resolution path as the main app, especially for `SCRAPINGBEE_API_KEY`
+- old saved run JSON files may still contain deprecated scope-era fields; current code keeps them backward-compatible at load time
+- safe smoke tests should use Supply Chain / Logistics or Architecture / Interior Design, not CEO or AI as the main go/no-go
+- deploy operators should not commit or push back to GitHub unless explicitly asked
 
 ## Notes
 
