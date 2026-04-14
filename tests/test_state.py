@@ -8,7 +8,7 @@ import pytest
 
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.db import connect_database, resolve_database_target
-from hr_hunter.models import CandidateProfile, SearchRunReport
+from hr_hunter.models import CandidateProfile, EvidenceRecord, SearchRunReport
 from hr_hunter.remote import RemoteSourcingClient, RemoteSourcingError
 from hr_hunter.scoring import score_candidate
 from hr_hunter.state import (
@@ -308,6 +308,79 @@ def test_list_run_history_recovers_summary_from_saved_report(tmp_path: Path) -> 
 
     assert history[0]["summary"]["verified_count"] == 1
     assert history[0]["summary"]["candidate_count"] == 1
+
+
+def test_persist_search_run_records_transformer_queries_and_evidence(tmp_path: Path) -> None:
+    brief = _build_brief()
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Transformer Candidate",
+            current_title="Senior Data Analyst",
+            current_company="noon",
+            location_name="Dubai, United Arab Emirates",
+            linkedin_url="https://www.linkedin.com/in/transformer-candidate",
+            summary="SQL and Python analytics leader.",
+            evidence_records=[
+                EvidenceRecord(
+                    source_url="https://www.linkedin.com/in/transformer-candidate",
+                    source_domain="linkedin.com",
+                    title="Transformer Candidate | Senior Data Analyst",
+                    snippet="Senior Data Analyst at noon in Dubai",
+                    source_type="scrapingbee_google",
+                    company_match="noon",
+                    location_match=True,
+                    location_match_text="Dubai, United Arab Emirates",
+                    current_employment_signal=True,
+                    confidence=0.9,
+                )
+            ],
+            raw={"transformer_mode": True},
+        ),
+        brief,
+    )
+    report = SearchRunReport(
+        run_id="transformer-run",
+        brief_id=brief.id,
+        dry_run=False,
+        generated_at="2026-04-14T00:00:00+00:00",
+        provider_results=[],
+        candidates=[candidate],
+        summary={
+            "execution_backend": "transformer_v2",
+            "query_plan": [
+                {
+                    "ordinal": 1,
+                    "query_text": "\"Senior Data Analyst\" Dubai site:linkedin.com/in",
+                    "query_type": "exact_title_geo",
+                    "source_pack": "professional_profiles",
+                    "page_budget": 1,
+                }
+            ],
+        },
+    )
+    db_path = tmp_path / "state.db"
+
+    persist_search_run(
+        brief,
+        report,
+        provider_names=["transformer_scrapingbee"],
+        limit_requested=20,
+        db_path=db_path,
+    )
+
+    import sqlite3
+
+    with sqlite3.connect(str(db_path)) as connection:
+        query_count = connection.execute(
+            "SELECT COUNT(*) FROM run_queries WHERE run_id = ?",
+            ("transformer-run",),
+        ).fetchone()[0]
+        evidence_count = connection.execute(
+            "SELECT COUNT(*) FROM run_evidence WHERE run_id = ?",
+            ("transformer-run",),
+        ).fetchone()[0]
+    assert query_count == 1
+    assert evidence_count == 1
 
 
 def test_remote_sourcing_client_uses_default_endpoint_when_required(monkeypatch) -> None:

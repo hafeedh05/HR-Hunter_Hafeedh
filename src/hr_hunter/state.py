@@ -457,6 +457,54 @@ def init_state_db(db_path: Path | str | None = None) -> Path | str:
             CREATE INDEX IF NOT EXISTS idx_audit_events_entity
                 ON audit_events(entity_type, entity_id, created_at DESC);
 
+            CREATE TABLE IF NOT EXISTS run_queries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                stage TEXT DEFAULT '',
+                query_text TEXT NOT NULL,
+                source_pack TEXT DEFAULT '',
+                page_budget INTEGER DEFAULT 1,
+                completed INTEGER DEFAULT 0,
+                raw_hits INTEGER DEFAULT 0,
+                retries INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS run_evidence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                candidate_key TEXT NOT NULL,
+                source_url TEXT DEFAULT '',
+                source_domain TEXT DEFAULT '',
+                source_type TEXT DEFAULT '',
+                extracted_title TEXT DEFAULT '',
+                extracted_company TEXT DEFAULT '',
+                extracted_location TEXT DEFAULT '',
+                title_confidence REAL DEFAULT 0,
+                company_confidence REAL DEFAULT 0,
+                location_confidence REAL DEFAULT 0,
+                freshness_confidence REAL DEFAULT 0,
+                currentness_confidence REAL DEFAULT 0,
+                raw_json TEXT DEFAULT '{}'
+            );
+
+            CREATE TABLE IF NOT EXISTS run_stage_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                percent INTEGER DEFAULT 0,
+                metrics_json TEXT DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS taxonomy_versions (
+                id TEXT PRIMARY KEY,
+                version TEXT NOT NULL,
+                source_hash TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY,
                 job_type TEXT NOT NULL,
@@ -604,6 +652,80 @@ def persist_search_run(
     accepted_count = len(
         [candidate for candidate in report.candidates if candidate.verification_status in {"verified", "review"}]
     )
+
+    def _persist_transformer_query_rows(connection: Any) -> None:
+        summary = dict(report.summary or {})
+        query_plan = summary.get("query_plan")
+        if not isinstance(query_plan, list):
+            return
+        connection.execute("DELETE FROM run_queries WHERE run_id = ?", (report.run_id,))
+        for index, item in enumerate(query_plan, start=1):
+            payload = dict(item) if isinstance(item, dict) else {}
+            connection.execute(
+                """
+                INSERT INTO run_queries (
+                    run_id, ordinal, stage, query_text, source_pack, page_budget, completed, raw_hits, retries, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report.run_id,
+                    int(payload.get("ordinal", index) or index),
+                    str(payload.get("query_type", "planned") or "planned"),
+                    str(payload.get("query_text", "") or "").strip(),
+                    str(payload.get("source_pack", "") or "").strip(),
+                    int(payload.get("page_budget", 1) or 1),
+                    1,
+                    0,
+                    0,
+                    _now(),
+                ),
+            )
+
+    def _persist_transformer_evidence_rows(connection: Any) -> None:
+        connection.execute("DELETE FROM run_evidence WHERE run_id = ?", (report.run_id,))
+        for candidate in report.candidates:
+            candidate_key = candidate_primary_key(candidate)
+            for evidence in list(candidate.evidence_records or []):
+                raw_payload = {
+                    "title": evidence.title,
+                    "snippet": evidence.snippet,
+                    "name_match": bool(evidence.name_match),
+                    "company_match": evidence.company_match,
+                    "title_matches": list(evidence.title_matches or []),
+                    "location_match": bool(evidence.location_match),
+                    "location_match_text": evidence.location_match_text,
+                    "precise_location_match": bool(evidence.precise_location_match),
+                    "profile_signal": bool(evidence.profile_signal),
+                    "current_employment_signal": bool(evidence.current_employment_signal),
+                    "confidence": float(evidence.confidence or 0.0),
+                }
+                connection.execute(
+                    """
+                    INSERT INTO run_evidence (
+                        run_id, candidate_key, source_url, source_domain, source_type,
+                        extracted_title, extracted_company, extracted_location,
+                        title_confidence, company_confidence, location_confidence,
+                        freshness_confidence, currentness_confidence, raw_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        report.run_id,
+                        candidate_key,
+                        str(evidence.source_url or ""),
+                        str(evidence.source_domain or ""),
+                        str(evidence.source_type or ""),
+                        str(evidence.title or ""),
+                        str(evidence.company_match or ""),
+                        str(evidence.location_match_text or ""),
+                        float(getattr(evidence, "title_confidence", 0.0) or 0.0),
+                        float(getattr(evidence, "company_confidence", 0.0) or 0.0),
+                        float(getattr(evidence, "location_confidence", 0.0) or 0.0),
+                        float(getattr(evidence, "freshness_confidence", 0.0) or 0.0),
+                        float(getattr(evidence, "currentness_confidence", 0.0) or 0.0),
+                        _json(raw_payload),
+                    ),
+                )
+
     with _connect(resolved) as connection:
         connection.execute(
             """
@@ -705,6 +827,9 @@ def persist_search_run(
                     _now(),
                 ),
             )
+        if str(report.summary.get("execution_backend", execution_backend) or execution_backend) == "transformer_v2":
+            _persist_transformer_query_rows(connection)
+            _persist_transformer_evidence_rows(connection)
         connection.execute(
             """
             INSERT INTO audit_events (event_type, entity_type, entity_id, actor_id, payload_json, created_at)
@@ -1399,6 +1524,19 @@ def update_job_progress(
         connection.execute(
             "UPDATE jobs SET progress_json = ?, checkpoint_json = ?, heartbeat_at = ? WHERE id = ?",
             (_json(progress), _json(checkpoint_payload), heartbeat_at, job_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO run_stage_events (job_id, stage, percent, metrics_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                str(progress.get("stage", "")).strip(),
+                int(progress.get("percent", 0) or 0),
+                _json(progress),
+                heartbeat_at,
+            ),
         )
     return load_job(job_id, db_path=resolved)
 

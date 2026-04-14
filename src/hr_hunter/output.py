@@ -7,12 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Set, Tuple
 
-from hr_hunter.candidate_order import (
-    candidate_has_scope_anchor,
-    candidate_is_in_scope,
-    candidate_is_precise_market_match,
-    candidate_priority_sort_tuple,
-)
+from hr_hunter.candidate_order import candidate_priority_sort_tuple
 from hr_hunter.features import looks_like_non_company_fragment
 from hr_hunter.identity import candidate_identity_keys, candidate_primary_key
 from hr_hunter.models import (
@@ -32,31 +27,25 @@ TITLE_FAMILY_KEYWORDS = (
     ("product", ("product",)),
 )
 CSV_FIELDNAMES = [
-    "identity_key",
-    "full_name",
-    "verification_status",
-    "qualification_tier",
-    "in_scope",
-    "scope_bucket",
-    "score",
-    "current_title",
-    "current_company",
-    "location_name",
-    "company_match_context",
-    "employment_signal",
-    "title_similarity_score",
-    "company_match_score",
-    "location_match_score",
-    "skill_overlap_score",
-    "industry_fit_score",
-    "years_fit_score",
-    "semantic_similarity_score",
-    "matched_titles",
-    "matched_companies",
-    "key_signals",
-    "linkedin_url",
-    "source_url",
-    "source",
+    "Serial No",
+    "Candidate Name",
+    "Verification Status",
+    "Current Title",
+    "Current Company",
+    "Current Location",
+    "Role Family",
+    "Final Score",
+    "Title Fit",
+    "Company Fit",
+    "Location Fit",
+    "Skills Fit",
+    "Semantic Fit",
+    "Employment Signal",
+    "Matched Titles",
+    "Matched Companies",
+    "Key Signals",
+    "Profile URL",
+    "Source",
 ]
 
 
@@ -76,6 +65,96 @@ def _clean_reason_values(values: Iterable[str]) -> List[str]:
 
 def _serialize_multi_value(values: Iterable[str]) -> str:
     return "; ".join(_clean_reason_values(values))
+
+
+def _looks_like_bad_company_value(value: str, current_title: str = "") -> bool:
+    text = _repair_display_text(value).strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered in {"at", "@", "company", "current", "present", "view", "educational", "experience", "dr", "profile"}:
+        return True
+    if re.fullmatch(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\d{2}", lowered):
+        return True
+    if re.fullmatch(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{2,4}", lowered):
+        return True
+    if re.search(r"\bfrom\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{2,4}\b", lowered):
+        return True
+    if lowered.startswith(("view org chart", "org ...", "view manager", "view profile")):
+        return True
+    if " is a " in lowered or lowered.startswith("at "):
+        return True
+    if current_title and lowered == _repair_display_text(current_title).strip().lower():
+        return True
+    roleish_suffixes = ("manager", "lead", "director", "engineer", "specialist", "planner", "analyst")
+    if lowered.endswith(roleish_suffixes):
+        return True
+    if any(fragment in lowered for fragment in ("manager at", "engineer at", "planner at", "senior sc planning engineer")):
+        return True
+    return looks_like_non_company_fragment(text)
+
+
+def _company_from_theorg_url(url: str) -> str:
+    match = re.search(r"theorg\.com/org/([^/]+)/", str(url or ""), flags=re.IGNORECASE)
+    if not match:
+        return ""
+    slug = match.group(1).strip().strip("/")
+    if not slug:
+        return ""
+    parts = [part for part in re.split(r"[-_]+", slug) if part]
+    return " ".join(part.capitalize() for part in parts[:6]).strip()
+
+
+def _best_display_company(candidate: CandidateProfile) -> str:
+    candidates: List[str] = []
+    if candidate.current_company and not _looks_like_bad_company_value(candidate.current_company, candidate.current_title):
+        candidates.append(candidate.current_company)
+    for record in candidate.evidence_records:
+        record_company = ""
+        if hasattr(record, "current_company"):
+            record_company = str(getattr(record, "current_company") or "")
+        elif hasattr(record, "company_match"):
+            record_company = str(getattr(record, "company_match") or "")
+        if record_company and not _looks_like_bad_company_value(record_company, candidate.current_title):
+            candidates.append(record_company)
+    if candidate.source_url:
+        inferred = _company_from_theorg_url(candidate.source_url)
+        if inferred and not _looks_like_bad_company_value(inferred, candidate.current_title):
+            candidates.append(inferred)
+    if candidate.linkedin_url:
+        inferred = _company_from_theorg_url(candidate.linkedin_url)
+        if inferred and not _looks_like_bad_company_value(inferred, candidate.current_title):
+            candidates.append(inferred)
+    for value in candidates:
+        cleaned = _repair_display_text(value)
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _best_display_name(candidate: CandidateProfile) -> str:
+    text = _repair_display_text(candidate.full_name)
+    text = text.split("(")[0].strip()
+    parts = [part for part in text.split() if part]
+    while parts and (any(char.isdigit() for char in parts[-1]) or re.fullmatch(r"[a-f0-9]{6,}", parts[-1], flags=re.IGNORECASE)):
+        parts.pop()
+    while parts and parts[-1].lower() in {"mba", "cscp", "cppm", "cscm", "pmp", "phd"}:
+        parts.pop()
+    return " ".join(parts[:5]).strip()
+
+
+def _clean_matched_companies(candidate: CandidateProfile) -> List[str]:
+    cleaned: List[str] = []
+    for value in candidate.matched_companies:
+        if _looks_like_bad_company_value(value, candidate.current_title):
+            continue
+        repaired = _repair_display_text(value)
+        if repaired:
+            cleaned.append(repaired)
+    best_company = _best_display_company(candidate)
+    if best_company and best_company not in cleaned:
+        cleaned.insert(0, best_company)
+    return _clean_reason_values(cleaned)
 
 
 def _repair_display_text(value: object) -> str:
@@ -367,24 +446,10 @@ def _candidate_precise_market_match(candidate: CandidateProfile) -> bool:
 
 
 def _infer_in_scope(candidate: CandidateProfile) -> bool:
-    parser_confidence = _infer_parser_confidence(candidate)
-    if "parser_confidence_too_low" in set(candidate.cap_reasons or []):
-        return False
-    return bool(
-        candidate.current_title_match
-        and _candidate_market_match(candidate)
-        and parser_confidence >= 0.35
-        and candidate_has_scope_anchor(candidate)
-    )
+    return False
 
 
 def _infer_scope_bucket(candidate: CandidateProfile) -> str:
-    if _infer_in_scope(candidate):
-        return "in_scope_precise" if _candidate_precise_market_match(candidate) else "in_scope_country"
-    if candidate.current_title_match:
-        return "title_only"
-    if _candidate_market_match(candidate):
-        return "market_only"
     return "out_of_scope"
 
 
@@ -544,9 +609,9 @@ def hydrate_candidate_reporting(candidate: CandidateProfile) -> CandidateProfile
     candidate.evidence_quality_score = round(evidence_quality_score, 3)
     candidate.current_function_fit = round(current_function_fit, 3)
     candidate.current_fmcg_fit = round(current_fmcg_fit, 3)
-    candidate.in_scope = in_scope
-    candidate.precise_market_in_scope = precise_market_in_scope
-    candidate.scope_bucket = scope_bucket
+    candidate.in_scope = False
+    candidate.precise_market_in_scope = False
+    candidate.scope_bucket = "out_of_scope"
     if not candidate.feature_scores:
         candidate.feature_scores = {
             "title_similarity": candidate.title_similarity_score,
@@ -585,8 +650,8 @@ def build_reporting_summary(
 ) -> Dict[str, object]:
     hydrated_candidates = [hydrate_candidate_reporting(candidate) for candidate in candidates]
     scope_counts = {
-        "in_scope": len([candidate for candidate in hydrated_candidates if candidate.in_scope]),
-        "precise_in_scope": len([candidate for candidate in hydrated_candidates if candidate.precise_market_in_scope]),
+        "in_scope": 0,
+        "precise_in_scope": 0,
         "title_match": len([candidate for candidate in hydrated_candidates if candidate.current_title_match]),
         "market_match": len([candidate for candidate in hydrated_candidates if _candidate_market_match(candidate)]),
     }
@@ -639,10 +704,8 @@ def build_scope_progress_counts(
 ) -> Dict[str, int]:
     hydrated_candidates = [hydrate_candidate_reporting(candidate) for candidate in candidates]
     return {
-        "in_scope_count": len([candidate for candidate in hydrated_candidates if candidate.in_scope]),
-        "precise_in_scope_count": len(
-            [candidate for candidate in hydrated_candidates if candidate.precise_market_in_scope]
-        ),
+        "in_scope_count": 0,
+        "precise_in_scope_count": 0,
         "title_match_count": len([candidate for candidate in hydrated_candidates if candidate.current_title_match]),
         "market_match_count": len([candidate for candidate in hydrated_candidates if _candidate_market_match(candidate)]),
     }
@@ -694,67 +757,11 @@ def prepare_verification_candidate_order(
     verification_limit: int,
     scope_target: int = 0,
 ) -> List[CandidateProfile]:
-    prioritized = prioritize_verification_candidates(
+    return prioritize_verification_candidates(
         candidates,
         brief=brief,
         company_required=company_required,
     )
-    shortlist_limit = max(0, min(int(verification_limit or 0), len(prioritized)))
-    scope_goal = max(0, min(int(scope_target or 0), shortlist_limit))
-    if shortlist_limit <= 0 or scope_goal <= 0:
-        return prioritized
-
-    selected_keys: Set[str] = set()
-    shortlisted: List[CandidateProfile] = []
-    remainder: List[CandidateProfile] = []
-
-    def _identity_key(candidate: CandidateProfile) -> str:
-        return candidate_primary_key(candidate) or f"memory:{id(candidate)}"
-
-    for candidate in prioritized:
-        identity_key = _identity_key(candidate)
-        if (
-            candidate_is_in_scope(candidate)
-            and candidate_is_precise_market_match(candidate)
-            and len(shortlisted) < scope_goal
-            and identity_key not in selected_keys
-        ):
-            shortlisted.append(candidate)
-            selected_keys.add(identity_key)
-            continue
-        remainder.append(candidate)
-
-    if len(shortlisted) < scope_goal:
-        secondary_remainder: List[CandidateProfile] = []
-        for candidate in remainder:
-            identity_key = _identity_key(candidate)
-            if (
-                candidate_is_in_scope(candidate)
-                and len(shortlisted) < scope_goal
-                and identity_key not in selected_keys
-            ):
-                shortlisted.append(candidate)
-                selected_keys.add(identity_key)
-                continue
-            secondary_remainder.append(candidate)
-        remainder = secondary_remainder
-
-    if len(shortlisted) < shortlist_limit:
-        for candidate in remainder:
-            identity_key = _identity_key(candidate)
-            if identity_key in selected_keys:
-                continue
-            shortlisted.append(candidate)
-            selected_keys.add(identity_key)
-            if len(shortlisted) >= shortlist_limit:
-                break
-
-    trailing = [
-        candidate
-        for candidate in prioritized
-        if _identity_key(candidate) not in selected_keys
-    ]
-    return [*shortlisted, *trailing]
 
 
 def _diagnostic_issue(
@@ -1157,34 +1164,30 @@ def filter_new_candidates(candidates: Iterable[CandidateProfile], seen_keys: Set
     return net_new
 
 
-def candidate_to_row(candidate: CandidateProfile) -> Dict[str, object]:
+def candidate_to_row(candidate: CandidateProfile, ordinal: int) -> Dict[str, object]:
     hydrated = hydrate_candidate_reporting(candidate)
+    current_company = _best_display_company(hydrated)
+    matched_companies = _clean_matched_companies(hydrated)
     return {
-        "identity_key": candidate_primary_key(hydrated),
-        "full_name": _repair_display_text(hydrated.full_name),
-        "verification_status": hydrated.verification_status,
-        "qualification_tier": hydrated.qualification_tier,
-        "in_scope": hydrated.in_scope,
-        "scope_bucket": hydrated.scope_bucket,
-        "score": hydrated.score,
-        "current_title": _repair_display_text(hydrated.current_title),
-        "current_company": _repair_display_text(hydrated.current_company),
-        "location_name": _repair_display_text(hydrated.location_name),
-        "company_match_context": _company_match_context(hydrated),
-        "employment_signal": _employment_signal(hydrated),
-        "title_similarity_score": round(hydrated.title_similarity_score, 3),
-        "company_match_score": round(hydrated.company_match_score, 3),
-        "location_match_score": round(hydrated.location_match_score, 3),
-        "skill_overlap_score": round(hydrated.skill_overlap_score, 3),
-        "industry_fit_score": round(hydrated.industry_fit_score, 3),
-        "years_fit_score": round(hydrated.years_fit_score, 3),
-        "semantic_similarity_score": round(hydrated.semantic_similarity_score, 3),
-        "matched_titles": _serialize_multi_value([_repair_display_text(value) for value in hydrated.matched_titles]),
-        "matched_companies": _serialize_multi_value([_repair_display_text(value) for value in hydrated.matched_companies]),
-        "key_signals": _candidate_key_signals(hydrated),
-        "linkedin_url": hydrated.linkedin_url,
-        "source_url": hydrated.source_url,
-        "source": hydrated.source,
+        "Serial No": ordinal,
+        "Candidate Name": _best_display_name(hydrated),
+        "Verification Status": hydrated.verification_status.title(),
+        "Final Score": hydrated.score,
+        "Current Title": _repair_display_text(hydrated.current_title),
+        "Current Company": current_company,
+        "Current Location": _repair_display_text(hydrated.location_name),
+        "Role Family": (hydrated.matched_title_family or _infer_matched_title_family(hydrated)).replace("_", " ").title(),
+        "Title Fit": round(hydrated.title_similarity_score, 3),
+        "Company Fit": round(hydrated.company_match_score, 3),
+        "Location Fit": round(hydrated.location_match_score, 3),
+        "Skills Fit": round(hydrated.skill_overlap_score, 3),
+        "Semantic Fit": round(hydrated.semantic_similarity_score, 3),
+        "Employment Signal": _employment_signal(hydrated),
+        "Matched Titles": _serialize_multi_value([_repair_display_text(value) for value in hydrated.matched_titles]),
+        "Matched Companies": _serialize_multi_value(matched_companies),
+        "Key Signals": _candidate_key_signals(hydrated),
+        "Profile URL": hydrated.linkedin_url or hydrated.source_url,
+        "Source": hydrated.source.replace("_", " ").title(),
     }
 
 
@@ -1193,8 +1196,8 @@ def write_candidates_csv(candidates: Iterable[CandidateProfile], path: Path) -> 
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDNAMES)
         writer.writeheader()
-        for candidate in candidates:
-            writer.writerow(candidate_to_row(candidate))
+        for index, candidate in enumerate(candidates, start=1):
+            writer.writerow(candidate_to_row(candidate, index))
     return path
 
 

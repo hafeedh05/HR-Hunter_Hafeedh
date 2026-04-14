@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HR Hunter</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260413projfix3" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260414candidateclean1" />
   </head>
   <body class="theme-bright">
     <div class="auth-shell" id="auth-shell">
@@ -222,7 +222,7 @@
                 </label>
                 <label>
                   <span>No. of Candidates</span>
-                  <input id="candidate-limit" type="number" min="1" step="1" placeholder="20" />
+                  <input id="candidate-limit" type="number" min="1" step="1" placeholder="1000" />
                 </label>
                 <div class="span-2 form-split">
                   <div>
@@ -545,21 +545,28 @@
               <div class="card-header">
                 <div>
                   <p class="eyebrow">Learning</p>
-                  <h3>Train Learned Ranker</h3>
+                  <h3>Improve Ranking From Recruiter Feedback</h3>
                 </div>
               </div>
-              <div class="form-grid">
-                <label>
-                  <span>Ranker Estimators</span>
-                  <input id="ranker-estimators" type="number" min="1" step="1" value="80" />
-                </label>
-                <label>
-                  <span>Ranker Num Leaves</span>
-                  <input id="ranker-num-leaves" type="number" min="2" step="1" value="31" />
-                </label>
-              </div>
-              <button type="button" class="button button-primary" id="train-ranker-button">Train Model From Feedback</button>
-              <p class="form-note">Admin only. Training uses the saved feedback database and current model directory.</p>
+                <div class="info-banner">
+                  <strong>How feedback works</strong>
+                  <p>Recruiters should use the Results or Candidates tab to mark profiles as strong fits, weak fits, or needs review. HR Hunter learns from those saved decisions and improves result ordering for similar searches later.</p>
+                  <p>Admins only need to refresh the ranking model after enough recruiter feedback has been collected. This does not change saved projects. It only improves future searches.</p>
+                </div>
+                <div class="feedback-training-grid">
+                  <label class="feedback-setting-card">
+                    <span>Training Rounds</span>
+                    <input id="ranker-estimators" type="number" min="1" step="1" value="80" />
+                    <small>Think of this as how many times HR Hunter studies the saved recruiter decisions before updating the ranking model. More rounds can improve learning, but too many can start memorizing noisy feedback. Keep the default unless you are testing model quality.</small>
+                  </label>
+                  <label class="feedback-setting-card">
+                    <span>Pattern Detail</span>
+                    <input id="ranker-num-leaves" type="number" min="2" step="1" value="31" />
+                    <small>This controls how detailed the learned ranking patterns can become. Higher values let the model notice more nuance, but they also make it easier to overfit small or messy feedback sets. Keep the default unless you are deliberately tuning the model.</small>
+                  </label>
+                </div>
+              <button type="button" class="button button-primary" id="train-ranker-button">Refresh Ranking Model</button>
+              <p class="form-note">Admin only. This trains a better ranking model from saved recruiter feedback and updates future result ordering.</p>
             </article>
           </div>
         </section>
@@ -624,6 +631,14 @@
                   </div>
                   <div class="settings-toggle-grid">
                     <label class="owner-toggle settings-toggle">
+                      <input id="settings-transformer-enabled" type="checkbox" checked disabled />
+                      <span class="owner-toggle-copy">
+                        <strong>Transformer Mode</strong>
+                        <small>HR Hunter now runs searches through Transformer V2 by default. Classic-only controls stay disabled.</small>
+                      </span>
+                      <span class="toggle-pill" aria-hidden="true"></span>
+                    </label>
+                    <label class="owner-toggle settings-toggle">
                       <input id="settings-semantic-enabled" type="checkbox" checked />
                       <span class="owner-toggle-copy">
                         <strong>Use HR Hunter AI Match Scoring</strong>
@@ -648,15 +663,14 @@
                       <span class="toggle-pill" aria-hidden="true"></span>
                     </label>
                     <div class="settings-model-pill">
-                      <span>HR Hunter Model</span>
+                      <span>Active Search Engine</span>
                       <strong id="settings-model-display">HR Hunter Model V1</strong>
                     </div>
+                    <p class="muted small span-2" id="settings-transformer-note" hidden>
+                      Transformer mode keeps the same hunt brief and tabs, but ignores classic memory/discovery/feedback-ranker toggles.
+                    </p>
                   </div>
                 </div>
-                <label>
-                  <span>Candidate Row Limit</span>
-                  <input id="settings-limit" type="number" min="1" step="1" />
-                </label>
                 <label>
                   <span>Feedback DB Path</span>
                   <input id="settings-feedback-db" type="text" />
@@ -855,7 +869,7 @@
             </label>
             <div class="span-2 card-actions owner-admin-actions">
               <button type="button" class="button button-secondary" id="load-demo-button">Load Demo Brief</button>
-              <button type="button" class="button button-primary" id="owner-train-ranker-button">Train Model From Feedback</button>
+              <button type="button" class="button button-primary" id="owner-train-ranker-button">Refresh Ranking Model</button>
             </div>
           </div>
         </section>
@@ -1024,7 +1038,7 @@
         }
       })();
     </script>
-    <script src="/assets/app.js?v=20260413projfix3" defer></script>
+    <script src="/assets/app.js?v=20260414candidateclean1" defer></script>
     <script>
       // If the main bundle fails to load/parse, make that obvious instead of looking like "login is broken".
       window.setTimeout(() => {

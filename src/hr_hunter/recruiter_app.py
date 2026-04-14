@@ -22,6 +22,19 @@ CONTINENT_OPTIONS = [
     "South America",
     "Middle East",
 ]
+MIDDLE_EAST_COUNTRY_EXPANSION = [
+    "United Arab Emirates",
+    "Saudi Arabia",
+    "Qatar",
+    "Kuwait",
+    "Bahrain",
+    "Oman",
+    "Jordan",
+    "Egypt",
+    "Lebanon",
+    "Turkey",
+    "Morocco",
+]
 COUNTRY_TO_ALPHA2 = {
     "argentina": "ar",
     "australia": "au",
@@ -1092,6 +1105,36 @@ TITLE_SCOPE_EXAMPLE_MAP = (
     ("marketing manager", ["Performance Marketing Manager", "Growth Marketing Manager", "Demand Generation Manager"]),
     ("data analyst", ["Business Analyst", "Commercial Analyst", "Insights Analyst"]),
 )
+TECHNICAL_ROLE_HINTS = (
+    "ai engineer",
+    "machine learning engineer",
+    "ml engineer",
+    "applied ai engineer",
+    "llm engineer",
+    "software engineer",
+    "platform engineer",
+    "developer",
+    "data engineer",
+    "mlops",
+    "devops",
+    "site reliability",
+)
+TECHNICAL_KEYWORD_HINTS = (
+    "python",
+    "pytorch",
+    "tensorflow",
+    "transformers",
+    "llm",
+    "rag",
+    "vector database",
+    "langchain",
+    "llamaindex",
+    "fastapi",
+    "mlops",
+    "kubernetes",
+    "model serving",
+    "open source",
+)
 
 
 def _is_executive_brief(role_title: str, titles: List[str]) -> bool:
@@ -1216,66 +1259,6 @@ def _recommended_strict_market_scope(
     return False
 
 
-def _recommended_scope_first_enabled(
-    *,
-    search_profile: str,
-    executive_brief: bool,
-    common_volume_search: bool,
-    strict_market_scope: bool,
-    company_count: int,
-) -> bool:
-    if common_volume_search:
-        return True
-    if strict_market_scope:
-        return True
-    if executive_brief and company_count > 0:
-        return True
-    return search_profile == FOCUSED_SEARCH_PROFILE
-
-
-def _recommended_in_scope_target(
-    *,
-    limit: int,
-    executive_brief: bool,
-    company_count: int,
-    common_volume_search: bool,
-    search_profile: str,
-    strict_market_scope: bool,
-) -> int:
-    requested = max(1, int(limit or 1))
-    if requested <= 20:
-        return requested
-    if executive_brief and company_count > 0:
-        return min(requested, max(20, int(round(requested * 0.2))))
-    if common_volume_search:
-        return min(requested, max(50, int(round(requested * 0.6))))
-    if strict_market_scope:
-        return min(requested, max(25, int(round(requested * 0.5))))
-    if search_profile == FOCUSED_SEARCH_PROFILE:
-        return min(requested, max(20, int(round(requested * 0.45))))
-    return min(requested, max(15, int(round(requested * 0.35))))
-
-
-def _recommended_verification_scope_target(
-    *,
-    limit: int,
-    verification_top_n: int,
-    in_scope_target: int,
-    executive_brief: bool,
-) -> int:
-    requested = max(1, int(limit or 1))
-    verification_limit = max(0, int(verification_top_n or 0))
-    scope_target = max(0, int(in_scope_target or 0))
-    if verification_limit <= 0:
-        return 0
-    if executive_brief and requested >= 200:
-        return min(verification_limit, max(scope_target, 80))
-    return min(
-        verification_limit,
-        max(min(requested, 50), int(round(scope_target * 0.8))),
-    )
-
-
 def _default_query_family_budgets(
     *,
     search_profile: str,
@@ -1339,6 +1322,78 @@ def _derive_search_profile(
     if limit >= 180 or location_count >= 4 or title_count >= 5 or executive_brief:
         return EXPLORATORY_SEARCH_PROFILE
     return BALANCED_SEARCH_PROFILE
+
+
+def _expanded_top_up_geography(
+    *,
+    countries: List[str],
+    continents: List[str],
+    cities: List[str],
+    top_up_round: int,
+    expand_search_when_thin: bool,
+    limit: int,
+) -> Dict[str, List[str]]:
+    resolved_countries = unique_preserving_order(countries)
+    resolved_continents = unique_preserving_order(continents)
+    resolved_cities = unique_preserving_order(cities)
+    if top_up_round <= 0 or not expand_search_when_thin or limit < 180:
+        return {
+            "countries": resolved_countries,
+            "continents": resolved_continents,
+            "cities": resolved_cities,
+        }
+
+    normalized_scope = {
+        normalize_text(value)
+        for value in [*resolved_countries, *resolved_continents]
+        if normalize_text(value)
+    }
+    middle_east_selected = "middle east" in normalized_scope or any(
+        normalize_text(country) in normalized_scope
+        for country in MIDDLE_EAST_COUNTRY_EXPANSION
+    )
+
+    if middle_east_selected:
+        resolved_countries = unique_preserving_order(
+            [*resolved_countries, *MIDDLE_EAST_COUNTRY_EXPANSION]
+        )
+        resolved_continents = unique_preserving_order([*resolved_continents, "Middle East"])
+        if top_up_round >= 1:
+            resolved_cities = []
+        if top_up_round >= 2:
+            resolved_continents = unique_preserving_order([*resolved_continents, "Europe", "Asia"])
+        if top_up_round >= 3:
+            resolved_continents = unique_preserving_order([*resolved_continents, "North America"])
+    elif top_up_round >= 1:
+        resolved_cities = []
+        if top_up_round >= 2:
+            resolved_continents = unique_preserving_order([*resolved_continents, "Europe", "Asia"])
+        if top_up_round >= 3:
+            resolved_continents = unique_preserving_order([*resolved_continents, "North America"])
+
+    return {
+        "countries": resolved_countries,
+        "continents": resolved_continents,
+        "cities": resolved_cities,
+    }
+
+
+def _is_technical_engineering_brief(
+    *,
+    role_title: str,
+    titles: List[str],
+    required_keywords: List[str],
+    preferred_keywords: List[str],
+    industry_keywords: List[str],
+) -> bool:
+    normalized_targets = " ".join(
+        normalize_text(str(value))
+        for value in [role_title, *titles, *required_keywords, *preferred_keywords, *industry_keywords]
+        if str(value).strip()
+    )
+    if any(hint in normalized_targets for hint in TECHNICAL_ROLE_HINTS):
+        return True
+    return any(hint in normalized_targets for hint in TECHNICAL_KEYWORD_HINTS)
 
 
 def _build_brief_follow_up_questions(
@@ -1526,7 +1581,7 @@ def _resolve_top_up_expansion_strategy(
     top_up_round: int,
     search_profile: str,
     executive_brief: bool,
-    scope_first_enabled: bool,
+    technical_brief: bool,
     has_explicit_query_family_budgets: bool,
     raw_brief_clarifications: Dict[str, Any],
     explicit_geo_fanout: bool | None,
@@ -1546,8 +1601,16 @@ def _resolve_top_up_expansion_strategy(
         "auto_broadened": False,
         "steps": [],
     }
-    controlled_scope_first = bool(search_profile == FOCUSED_SEARCH_PROFILE or (executive_brief and scope_first_enabled))
-    if top_up_round <= 0 or not controlled_scope_first:
+    top_up_broadening_enabled = bool(
+        top_up_round > 0
+        and (
+            expand_search_when_thin
+            or executive_brief
+            or search_profile == FOCUSED_SEARCH_PROFILE
+            or limit >= 180
+        )
+    )
+    if not top_up_broadening_enabled:
         return {
             "allow_adjacent_titles": allow_adjacent_titles,
             "expand_search_when_thin": expand_search_when_thin,
@@ -1566,10 +1629,14 @@ def _resolve_top_up_expansion_strategy(
 
     budgets = dict(query_family_budgets)
 
-    if explicit_expand_search is None and not expand_search_when_thin:
+    if (explicit_expand_search is None or technical_brief) and not expand_search_when_thin:
         expand_search_when_thin = True
         strategy["auto_broadened"] = True
-        strategy["steps"].append("enabled discovery slices after a thin focused first pass")
+        strategy["steps"].append(
+            "enabled discovery slices after a thin first pass"
+            if not technical_brief
+            else "enabled technical discovery spillover after the first thin pass"
+        )
 
     if expand_search_when_thin:
         if not include_country_only_queries:
@@ -1582,14 +1649,14 @@ def _resolve_top_up_expansion_strategy(
             strategy["steps"].append("expanded geography fanout for top-up discovery")
         max_geo_groups = max(max_geo_groups, min(6, max(3, len(location_targets) + 2)))
 
-    if top_up_round >= 2 and explicit_adjacent_titles is None and not allow_adjacent_titles:
+    if top_up_round >= 1 and explicit_adjacent_titles is None and not allow_adjacent_titles and not technical_brief:
         allow_adjacent_titles = True
         strategy["auto_broadened"] = True
-        strategy["steps"].append("opened adjacent title families after repeated thin rounds")
+        strategy["steps"].append("opened adjacent title families after a thin first pass")
 
     if top_up_round >= 1:
-        scrapingbee_parallel_requests = max(scrapingbee_parallel_requests, 10 if top_up_round >= 2 else 8)
-        scrapingbee_max_queries = max(scrapingbee_max_queries, max(120, limit * (3 if top_up_round == 1 else 4)))
+        scrapingbee_parallel_requests = max(scrapingbee_parallel_requests, 12 if top_up_round >= 2 else 10)
+        scrapingbee_max_queries = max(scrapingbee_max_queries, max(180, limit * (4 if top_up_round == 1 else 5)))
         if has_explicit_query_family_budgets:
             pass
         elif executive_brief:
@@ -1606,7 +1673,7 @@ def _resolve_top_up_expansion_strategy(
                 budgets.get("appointment_news_pages", 0),
                 5 if top_up_round == 1 else 7,
             )
-        elif expand_search_when_thin:
+        elif expand_search_when_thin or limit >= 180:
             budgets = _default_query_family_budgets(
                 search_profile=search_profile,
                 executive_brief=False,
@@ -1614,6 +1681,10 @@ def _resolve_top_up_expansion_strategy(
             )
             strategy["auto_broadened"] = True
             strategy["steps"].append("shifted top-up queries toward profile-heavy discovery for non-executive roles")
+        if top_up_round >= 2 and limit >= 180 and not has_explicit_query_family_budgets:
+            budgets = {}
+            strategy["auto_broadened"] = True
+            strategy["steps"].append("removed query-family caps for hard-fulfillment recovery")
 
     return {
         "allow_adjacent_titles": allow_adjacent_titles,
@@ -1849,6 +1920,13 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     required_keywords = unique_preserving_order([*must_have, *breakdown.get("required_keywords", [])])
     preferred_keywords = unique_preserving_order([*nice_to_have, *breakdown.get("preferred_keywords", [])])
     industry_keywords = unique_preserving_order([*industry_keywords, *breakdown.get("industry_keywords", [])])
+    technical_brief = _is_technical_engineering_brief(
+        role_title=role_title,
+        titles=titles,
+        required_keywords=required_keywords,
+        preferred_keywords=preferred_keywords,
+        industry_keywords=industry_keywords,
+    )
     portfolio_keywords = unique_preserving_order(parse_multi_value(keyword_tracks.get("portfolio_keywords")))
     commercial_keywords = unique_preserving_order(parse_multi_value(keyword_tracks.get("commercial_keywords")))
     leadership_keywords = unique_preserving_order(parse_multi_value(keyword_tracks.get("leadership_keywords")))
@@ -1860,7 +1938,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     output_dir = resolve_output_dir(payload.get("output_dir"))
     feedback_db = resolve_feedback_db_path(payload.get("feedback_db"))
     model_dir = resolve_ranker_model_dir(payload.get("model_dir"))
-    limit = max(1, int(payload.get("limit", 20) or 20))
+    limit = max(1, int(payload.get("limit", 300) or 300))
+    top_up_round = max(0, _coerce_int(payload.get("top_up_round")) or 0)
     configured_search_profile = str(
         payload.get("search_profile")
         or payload.get("brief_search_profile")
@@ -1936,6 +2015,20 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     exact_company_scope = bool(brief_clarifications.get("exact_company_scope"))
     strict_market_scope = bool(brief_clarifications.get("strict_market_scope"))
     expand_search_when_thin = bool(brief_clarifications.get("expand_search_when_thin", search_profile != FOCUSED_SEARCH_PROFILE))
+    expanded_geography = _expanded_top_up_geography(
+        countries=countries,
+        continents=continents,
+        cities=cities,
+        top_up_round=top_up_round,
+        expand_search_when_thin=expand_search_when_thin,
+        limit=limit,
+    )
+    countries = expanded_geography["countries"]
+    continents = expanded_geography["continents"]
+    cities = expanded_geography["cities"]
+    location_targets = unique_preserving_order([*cities, *countries, *continents])
+    geography_country = countries[0] if len(countries) == 1 else ""
+    geography_location = cities[0] if cities else (countries[0] if len(countries) == 1 else "")
     if exact_company_scope and companies:
         payload["company_match_mode"] = "current_only"
     if prioritize_first_location and location_targets:
@@ -1958,10 +2051,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if common_volume_search and limit >= 80:
             focused_fetch_cap = max(focused_fetch_cap, min(260, limit + 140))
         internal_fetch_limit = min(internal_fetch_limit, focused_fetch_cap)
-    csv_export_limit = max(1, int(payload.get("csv_export_limit", limit) or limit))
     reranker_enabled = bool(payload.get("reranker_enabled", True))
     learned_ranker_enabled = bool(payload.get("learned_ranker_enabled", False))
-    top_up_round = max(0, _coerce_int(payload.get("top_up_round")) or 0)
     country_code = _selected_country_code(countries)
     reranker_requested_top_n = _coerce_int(payload.get("reranker_top_n"))
     if reranker_requested_top_n is None:
@@ -1989,10 +2080,11 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         4,
         explicit_provider_parallel_requests
         or (10 if common_volume_search and limit >= 80 else 0)
+        or (20 if technical_brief and limit >= 180 else 0)
         or (16 if limit >= 220 else (12 if limit >= 120 else 8)),
     )
     if search_profile == FOCUSED_SEARCH_PROFILE and explicit_provider_parallel_requests is None:
-        focused_parallel_cap = 10 if common_volume_search and limit >= 80 else 8
+        focused_parallel_cap = 12 if technical_brief and limit >= 120 else (10 if common_volume_search and limit >= 80 else 8)
         scrapingbee_parallel_requests = min(scrapingbee_parallel_requests, focused_parallel_cap)
     scrapingbee_pages_per_query = max(
         1,
@@ -2064,63 +2156,27 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         verification_top_n = tuned_verification_top_n
     if verification_top_n is None:
         if limit >= 300:
-            verification_top_n = 120
+            verification_top_n = 180 if technical_brief else 120
         elif limit >= 180:
-            verification_top_n = 90
+            verification_top_n = 140 if technical_brief else 90
         elif limit >= 100:
-            verification_top_n = 60
+            verification_top_n = 100 if technical_brief else 60
         else:
             verification_top_n = limit
+    if technical_brief and limit >= 250:
+        verification_top_n = max(verification_top_n, min(limit, 300))
     verification_top_n = min(internal_fetch_limit, max(0, verification_top_n))
     if search_profile == FOCUSED_SEARCH_PROFILE:
         verification_top_n = min(verification_top_n, max(limit, 50))
-    scope_first_enabled = _coerce_bool(payload.get("scope_first_enabled"))
-    if scope_first_enabled is None:
-        scope_first_enabled = _coerce_bool(ui_meta.get("scope_first_enabled"))
-    scope_first_explicit = scope_first_enabled is not None
-    if scope_first_enabled is None:
-        scope_first_enabled = _recommended_scope_first_enabled(
-            search_profile=search_profile,
-            executive_brief=executive_brief,
-            common_volume_search=common_volume_search,
-            strict_market_scope=strict_market_scope,
-            company_count=len(companies),
-        )
-    if peer_company_only_executive_search and not scope_first_explicit:
-        # Executive searches that only have peer-company hints stall when they spend round 0 in
-        # narrow scope-first mode. Let them use the focused profile, but start discovery immediately.
-        scope_first_enabled = False
-    in_scope_target = _coerce_int(payload.get("in_scope_target"))
-    if in_scope_target is None:
-        in_scope_target = _coerce_int(ui_meta.get("in_scope_target"))
-    if in_scope_target is None:
-        in_scope_target = _recommended_in_scope_target(
-            limit=limit,
-            executive_brief=executive_brief,
-            company_count=len(companies),
-            common_volume_search=common_volume_search,
-            search_profile=search_profile,
-            strict_market_scope=strict_market_scope,
-        )
-    in_scope_target = min(limit, max(0, int(in_scope_target or 0)))
-    verification_scope_target = _coerce_int(payload.get("verification_scope_target"))
-    if verification_scope_target is None:
-        verification_scope_target = _coerce_int(ui_meta.get("verification_scope_target"))
-    if verification_scope_target is None:
-        verification_scope_target = _recommended_verification_scope_target(
-            limit=limit,
-            verification_top_n=verification_top_n,
-            in_scope_target=in_scope_target,
-            executive_brief=executive_brief,
-        )
-    verification_scope_target = min(max(0, int(verification_scope_target or 0)), max(verification_top_n, 0))
-    executive_scope_first = bool(executive_brief and scope_first_enabled)
+    executive_scope_first = False
     verification_parallel_candidates = max(
         1,
         _coerce_int(payload.get("verification_parallel_candidates"))
         or tuned_verification_parallel_candidates
         or 6,
     )
+    if technical_brief and limit >= 250:
+        verification_parallel_candidates = max(verification_parallel_candidates, 10)
     verification_queries_per_candidate = max(
         1,
         _coerce_int(payload.get("verification_queries_per_candidate"))
@@ -2206,7 +2262,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         top_up_round=top_up_round,
         search_profile=search_profile,
         executive_brief=executive_brief,
-        scope_first_enabled=bool(scope_first_enabled),
+        technical_brief=technical_brief,
         has_explicit_query_family_budgets=has_explicit_query_family_budgets,
         raw_brief_clarifications=raw_brief_clarifications,
         explicit_geo_fanout=explicit_geo_fanout,
@@ -2238,7 +2294,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     if exact_company_scope and companies:
         resolved_include_history_slices = False
         resolved_include_discovery_slices = False
-    if strict_market_scope and location_targets:
+    if strict_market_scope and location_targets and not (technical_brief and top_up_round > 0):
         resolved_geo_fanout = False
         include_country_only_queries = False
     elif executive_scope_first and top_up_round <= 0:
@@ -2279,7 +2335,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             ),
         },
         "registry_memory": {
-            "enabled": bool(payload.get("registry_memory_enabled", True)),
+            "enabled": bool(payload.get("registry_memory_enabled", False)),
             "limit": max(internal_fetch_limit, int(payload.get("registry_memory_limit", 20) or 20)),
         },
         "reranker": {
@@ -2340,7 +2396,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "verification": {
             "enabled": bool(verification_enabled),
             "top_n": verification_top_n,
-            "scope_target": verification_scope_target,
+            "scope_target": 0,
             "parallel_candidates": verification_parallel_candidates,
             "country_code": str(payload.get("scrapingbee_country_code", "") or country_code or "us"),
             "queries_per_candidate": verification_queries_per_candidate,
@@ -2403,9 +2459,6 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "result_target_max": max(limit, 40),
         "max_profiles": max(limit, 80),
         "provider_settings": providers_settings,
-        "scope_first_enabled": bool(scope_first_enabled),
-        "in_scope_target": in_scope_target,
-        "verification_scope_target": verification_scope_target,
         "ui_meta": {
             "titles": titles,
             "countries": countries,
@@ -2442,9 +2495,6 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "brief_clarifications": brief_clarifications,
             "top_up_round": top_up_round,
             "top_up_strategy": top_up_strategy["strategy"],
-            "scope_first_enabled": bool(scope_first_enabled),
-            "in_scope_target": in_scope_target,
-            "verification_scope_target": verification_scope_target,
             "keyword_tracks": {
                 "portfolio_keywords": portfolio_keywords,
                 "commercial_keywords": commercial_keywords,
@@ -2459,7 +2509,6 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "providers": providers,
         "limit": limit,
         "internal_fetch_limit": internal_fetch_limit,
-        "csv_export_limit": csv_export_limit,
         "output_dir": str(output_dir),
         "feedback_db": str(feedback_db),
         "model_dir": str(model_dir),
@@ -2491,13 +2540,12 @@ def build_app_bootstrap() -> Dict[str, Any]:
         "employment_status_options": EMPLOYMENT_STATUS_OPTIONS,
         "defaults": {
             "providers": ["scrapingbee_google"],
-            "limit": 20,
-            "csv_export_limit": 20,
+            "limit": 300,
             "radius_miles": 25,
             "company_match_mode": "both",
             "employment_status_mode": "any",
             "theme": "bright",
-            "registry_memory_enabled": True,
+            "registry_memory_enabled": False,
             "include_history_slices": True,
             "include_discovery_slices": True,
             "reranker_enabled": True,

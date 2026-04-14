@@ -65,12 +65,6 @@ def provider_candidate_limit(
 
     remaining = max(0, requested - current)
     quality_buffer = max(30, min(160, int(round(requested * 0.2))))
-    scope_gap = 0
-    if bool(getattr(brief, "scope_first_enabled", False)):
-        scope_gap = max(0, int(getattr(brief, "in_scope_target", 0) or 0) - max(0, int(in_scope_count or 0)))
-    if scope_gap > 0:
-        quality_buffer = max(quality_buffer, min(requested, max(45, int(round(scope_gap * 2.0)))))
-
     return min(
         requested,
         max(40, remaining + quality_buffer),
@@ -344,8 +338,6 @@ class SearchEngine:
             semantic_reranked_count = 0
             if reranker_settings.enabled:
                 optimized_top_n = max(limit + 40, int(round(limit * 1.6)))
-                if bool(getattr(brief, "scope_first_enabled", False)):
-                    optimized_top_n = max(limit + 50, int(round(limit * 1.5)))
                 optimized_top_n = min(optimized_top_n, reranker_settings.top_n, 360, len(candidate_pool))
                 brief.provider_settings.setdefault("reranker", {})["top_n"] = max(1, int(optimized_top_n))
                 rerank_target_count = min(len(candidate_pool), max(1, int(optimized_top_n)))

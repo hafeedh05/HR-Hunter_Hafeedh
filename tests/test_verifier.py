@@ -240,6 +240,117 @@ def test_apply_evidence_hard_verifies_exact_exec_match_below_default_threshold()
     assert updated.score >= 72.0
 
 
+def test_apply_evidence_promotes_strong_technical_profile_to_review_without_company_proof() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-technical-soft-proof-test",
+            "role_title": "AI Engineer",
+            "titles": ["AI Engineer", "Machine Learning Engineer"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Abu Dhabi", "Dubai"],
+            },
+            "required_keywords": ["Python", "LLM"],
+            "industry_keywords": ["artificial intelligence"],
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Technical Review Candidate",
+            current_title="AI Engineer",
+            current_company="",
+            location_name="Dubai, United Arab Emirates",
+            summary="AI engineer building production LLM systems.",
+        ),
+        brief,
+    )
+    candidate.current_title_match = True
+    candidate.current_function_fit = 1.0
+    candidate.parser_confidence = 0.7
+    candidate.location_aligned = True
+    candidate.score = 46.0
+    evidence = [
+        EvidenceRecord(
+            source_url="https://github.com/technical-review-candidate",
+            source_domain="github.com",
+            name_match=True,
+            company_match="",
+            title_matches=["AI Engineer"],
+            location_match=True,
+            location_match_text="Dubai, United Arab Emirates",
+            precise_location_match=True,
+            profile_signal=True,
+            current_employment_signal=False,
+            confidence=0.74,
+        )
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.current_employment_confirmed is False
+    assert updated.current_title_confirmed is True
+    assert updated.verification_status == "review"
+    assert "missing_current_company_confirmation" in getattr(updated, "cap_reasons")
+
+
+def test_apply_evidence_promotes_corroborated_technical_match_to_review_floor() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-technical-review-floor-test",
+            "role_title": "AI Engineer",
+            "titles": ["AI Engineer", "Machine Learning Engineer"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Abu Dhabi", "Dubai"],
+            },
+            "required_keywords": ["Python", "LLM"],
+            "industry_keywords": ["artificial intelligence"],
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Technical Floor Candidate",
+            current_title="AI Engineer",
+            current_company="Stealth AI",
+            location_name="Dubai, United Arab Emirates",
+            summary="AI engineer with production inference and LLM systems experience.",
+        ),
+        brief,
+    )
+    candidate.current_title_match = True
+    candidate.current_function_fit = 1.0
+    candidate.parser_confidence = 0.85
+    candidate.location_aligned = True
+    candidate.current_company_confirmed = True
+    candidate.current_title_confirmed = True
+    candidate.score = 47.5
+    evidence = [
+        EvidenceRecord(
+            source_url="https://example.com/people/technical-floor-candidate",
+            source_domain="example.com",
+            name_match=True,
+            company_match="Stealth AI",
+            title_matches=["AI Engineer"],
+            location_match=True,
+            location_match_text="Dubai, United Arab Emirates",
+            precise_location_match=True,
+            profile_signal=True,
+            current_employment_signal=True,
+            confidence=0.82,
+        )
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.current_employment_confirmed is True
+    assert updated.verification_status in {"review", "verified"}
+    assert updated.score >= 55.0
+
+
 def test_build_queries_adds_location_probe_for_imprecise_location() -> None:
     verifier = PublicEvidenceVerifier({"queries_per_candidate": 2, "location_probe_queries": 1})
     brief = build_search_brief(

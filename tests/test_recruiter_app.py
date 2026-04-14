@@ -68,7 +68,7 @@ def test_build_ui_brief_payload_maps_company_mode_and_location_targets():
     assert "United Arab Emirates" in brief.location_targets
     assert brief.geography.country == "United Arab Emirates"
     assert brief.anchor_weights["company_match"] > 0
-    assert brief.provider_settings["registry_memory"]["enabled"] is True
+    assert brief.provider_settings["registry_memory"]["enabled"] is False
     assert brief.provider_settings["retrieval"]["include_history_slices"] is True
 
 
@@ -251,6 +251,20 @@ def test_top_up_fetch_limit_expands_large_candidate_targets():
     assert compute_top_up_fetch_limit(200, 800) == 1400
 
 
+def test_build_ui_brief_payload_defaults_blank_limit_to_300():
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "AI Engineer",
+            "titles": ["AI Engineer"],
+            "countries": ["United Arab Emirates"],
+            "limit": "",
+        }
+    )
+
+    assert payload["limit"] == 300
+    assert payload["brief_config"]["max_profiles"] == 300
+
+
 def test_build_ui_brief_payload_uses_internal_fetch_budget_for_retrieval():
     payload = build_ui_brief_payload(
         {
@@ -407,9 +421,9 @@ def test_build_ui_brief_payload_preserves_saved_ui_meta_search_tuning() -> None:
     assert brief["jd_breakdown"]["search_tuning"]["provider_parallel_requests"] == 18
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 48
     assert brief["provider_settings"]["scrapingbee_google"]["parallel_requests"] == 18
-    assert brief["scope_first_enabled"] is True
-    assert brief["in_scope_target"] == 45
-    assert brief["verification_scope_target"] == 30
+    assert brief.get("scope_first_enabled", False) is False
+    assert brief.get("in_scope_target", 0) == 0
+    assert brief.get("verification_scope_target", 0) == 0
     assert brief["brief_search_profile"] == "focused"
     assert brief["brief_clarifications"]["allow_adjacent_titles"] is False
 
@@ -691,12 +705,12 @@ def test_build_ui_brief_payload_keeps_exec_scope_first_searches_tight_before_top
 
     brief = payload["brief_config"]
 
-    assert brief["scope_first_enabled"] is True
-    assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
-    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is False
+    assert brief.get("scope_first_enabled", False) is False
+    assert brief["provider_settings"]["retrieval"]["include_history_slices"] is True
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
     assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
     assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
-    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["org_chart_profile_pages"] >= 8
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"] == {}
 
 
 def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():
@@ -734,12 +748,12 @@ def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():
 def test_build_ui_brief_payload_top_up_round_respects_explicit_opt_outs():
     payload = build_ui_brief_payload(
         {
-            "role_title": "Data Analyst",
-            "titles": ["Data Analyst"],
+            "role_title": "Brand Manager",
+            "titles": ["Brand Manager"],
             "cities": ["Dubai"],
             "countries": ["United Arab Emirates"],
-            "must_have_keywords": ["SQL", "Python"],
-            "job_description": "Need SQL, Python, BI reporting, dashboards, and stakeholder support.",
+            "must_have_keywords": ["Brand Strategy", "Campaigns"],
+            "job_description": "Need brand planning, campaign execution, and consumer marketing leadership.",
             "limit": 50,
             "top_up_round": 3,
             "geo_fanout_enabled": False,
@@ -760,6 +774,56 @@ def test_build_ui_brief_payload_top_up_round_respects_explicit_opt_outs():
     assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
     assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] >= 200
+
+
+def test_build_ui_brief_payload_technical_top_up_overrides_strict_market_cage() -> None:
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "AI Engineer",
+            "titles": ["AI Engineer", "Machine Learning Engineer"],
+            "cities": ["Dubai", "Abu Dhabi"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "must_have_keywords": ["Python", "LLM", "RAG"],
+            "nice_to_have_keywords": ["PyTorch", "Transformers", "MLOps"],
+            "job_description": "Need production AI engineers shipping LLM systems across GCC markets.",
+            "limit": 300,
+            "top_up_round": 2,
+            "brief_clarifications": {
+                "allow_adjacent_titles": False,
+                "strict_market_scope": True,
+                "expand_search_when_thin": False,
+            },
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["top_up_round"] == 2
+    assert brief["top_up_strategy"]["auto_broadened"] is True
+    assert brief["brief_clarifications"]["strict_market_scope"] is True
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
+    assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is True
+    assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is True
+
+
+def test_build_ui_brief_payload_high_volume_technical_search_verifies_full_target() -> None:
+    payload = build_ui_brief_payload(
+        {
+            "role_title": "AI Engineer",
+            "titles": ["AI Engineer", "Machine Learning Engineer"],
+            "cities": ["Dubai", "Abu Dhabi"],
+            "countries": ["United Arab Emirates", "Saudi Arabia"],
+            "must_have_keywords": ["Python", "LLM", "RAG"],
+            "nice_to_have_keywords": ["PyTorch", "Transformers", "MLOps"],
+            "job_description": "Need production AI engineers shipping LLM systems across GCC markets.",
+            "limit": 300,
+        }
+    )
+
+    brief = payload["brief_config"]
+
+    assert brief["provider_settings"]["verification"]["top_n"] == 300
+    assert brief["provider_settings"]["verification"]["parallel_candidates"] >= 10
 
 
 def test_build_ui_brief_payload_preserves_explicit_clarifications_without_follow_up_question():

@@ -40,6 +40,12 @@ NON_PERSON_NAME_TOKENS = {
     "staff",
     "team",
     "works",
+    "github",
+    "gitlab",
+    "huggingface",
+    "kaggle",
+    "stackoverflow",
+    "substack",
 }
 BIDI_CONTROL_RE = re.compile(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 NOISY_PROFILE_PATTERNS = (
@@ -94,6 +100,14 @@ ROLE_LIKE_TOKENS = {
 DEFAULT_PROFILE_URL_SUBSTRINGS = [
     "linkedin.com/in/",
     "theorg.com/org/",
+    "github.com/",
+    "huggingface.co/",
+    "kaggle.com/",
+    "stackoverflow.com/users/",
+    "gitlab.com/",
+    "dev.to/",
+    "medium.com/@",
+    "substack.com/",
     "/people/",
     "/person/",
     "/profile",
@@ -131,6 +145,65 @@ PUBLIC_QUERY_FAMILY_TERMS = {
     "trade_directory_pages": ['"directory"', '"supplier"', '"buyers guide"', '"contact"', '"members"'],
     "org_chart_profile_pages": ['"org chart"', '"org"', '"profile"', '"leadership"'],
     "profile_like_public_pages": ['"profile"', '"profiles"', '"bio"', '"biography"', '"people"'],
+}
+TECHNICAL_ROLE_HINTS = (
+    "ai engineer",
+    "machine learning engineer",
+    "ml engineer",
+    "applied ai engineer",
+    "llm engineer",
+    "software engineer",
+    "platform engineer",
+    "developer",
+    "data engineer",
+    "mlops",
+    "site reliability",
+    "devops",
+)
+TECHNICAL_KEYWORD_HINTS = (
+    "python",
+    "pytorch",
+    "tensorflow",
+    "transformers",
+    "llm",
+    "rag",
+    "vector database",
+    "langchain",
+    "llamaindex",
+    "fastapi",
+    "mlops",
+    "kubernetes",
+    "model serving",
+    "open source",
+)
+TECHNICAL_PUBLIC_QUERY_FAMILY_TERMS = {
+    "developer_platform_profiles": [
+        "site:github.com",
+        "site:gitlab.com",
+        "site:huggingface.co",
+        "site:kaggle.com",
+        "site:stackoverflow.com/users",
+    ],
+    "technical_writing_profiles": [
+        "site:dev.to",
+        "site:medium.com/@",
+        "site:substack.com",
+        "site:hashnode.dev",
+    ],
+    "open_source_contribution_pages": [
+        '"open source"',
+        '"maintainer"',
+        '"contributor"',
+        '"author"',
+        '"repository"',
+    ],
+    "technical_talk_profiles": [
+        '"speaker"',
+        '"conference"',
+        '"meetup"',
+        '"workshop"',
+        '"sessionize"',
+    ],
 }
 HISTORICAL_ROLE_MARKERS = (
     "before joining",
@@ -286,6 +359,33 @@ class ScrapingBeeGoogleProvider(SearchProvider):
             return [values]
         return [values[index : index + size] for index in range(0, len(values), size)]
 
+    @staticmethod
+    def _is_technical_engineering_brief(brief: SearchBrief) -> bool:
+        targets = [
+            brief.role_title,
+            *brief.titles,
+            *brief.title_keywords,
+            *brief.required_keywords,
+            *brief.preferred_keywords,
+            *brief.industry_keywords,
+        ]
+        normalized_targets = " ".join(
+            normalize_text(str(value))
+            for value in targets
+            if str(value).strip()
+        )
+        if any(hint in normalized_targets for hint in TECHNICAL_ROLE_HINTS):
+            return True
+        return any(hint in normalized_targets for hint in TECHNICAL_KEYWORD_HINTS)
+
+    def _public_query_family_terms(self, brief: SearchBrief) -> Dict[str, List[str]]:
+        if self._is_technical_engineering_brief(brief):
+            return {
+                **TECHNICAL_PUBLIC_QUERY_FAMILY_TERMS,
+                **PUBLIC_QUERY_FAMILY_TERMS,
+            }
+        return dict(PUBLIC_QUERY_FAMILY_TERMS)
+
     def _title_groups(self, brief: SearchBrief, slice_config: SearchSlice) -> List[List[str]]:
         if slice_config.search_mode == "strict":
             title_values = self._unique(slice_config.titles)
@@ -414,6 +514,70 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         path = parsed.path.lower()
         if host in self.blocked_hostnames:
             return False
+        path_segments = [segment for segment in path.split("/") if segment]
+        if host == "github.com":
+            if len(path_segments) != 1 or path_segments[0] in {
+                "orgs",
+                "topics",
+                "collections",
+                "marketplace",
+                "search",
+                "features",
+                "sponsors",
+                "settings",
+                "apps",
+                "events",
+                "pulls",
+                "issues",
+                "explore",
+            }:
+                return False
+        if host == "gitlab.com":
+            if len(path_segments) != 1 or path_segments[0] in {
+                "explore",
+                "users",
+                "groups",
+                "projects",
+                "help",
+                "dashboard",
+            }:
+                return False
+        if host == "huggingface.co":
+            if len(path_segments) != 1 or path_segments[0] in {
+                "models",
+                "datasets",
+                "spaces",
+                "docs",
+                "blog",
+                "learn",
+                "collections",
+                "organizations",
+            }:
+                return False
+        if host == "kaggle.com":
+            if len(path_segments) != 1 or path_segments[0] in {
+                "competitions",
+                "datasets",
+                "code",
+                "models",
+                "docs",
+                "learn",
+                "organizations",
+            }:
+                return False
+        if host == "stackoverflow.com":
+            if len(path_segments) < 2 or path_segments[0] not in {"users", "story"}:
+                return False
+        if host == "dev.to":
+            if len(path_segments) != 1 or path_segments[0] in {
+                "about",
+                "tags",
+                "top",
+                "latest",
+                "pod",
+                "code-of-conduct",
+            }:
+                return False
         looks_profile_like = any(token in lowered for token in self.allowed_url_substrings) or any(
             token in path
             for token in (
@@ -561,7 +725,7 @@ class ScrapingBeeGoogleProvider(SearchProvider):
                 if slice_config.search_mode in {"discovery", "market"} and not query_terms:
                     continue
 
-                for family, family_terms in PUBLIC_QUERY_FAMILY_TERMS.items():
+                for family, family_terms in self._public_query_family_terms(brief).items():
                     family_clause = f"({' OR '.join(family_terms)})"
                     if slice_config.search_mode == "history":
                         history_terms = self._adjacent_query_terms(slice_config)
@@ -765,6 +929,72 @@ class ScrapingBeeGoogleProvider(SearchProvider):
         path = parsed.path.lower()
         if host in self.blocked_hostnames:
             return False
+        path_segments = [segment for segment in path.split("/") if segment]
+        if host in {"api.substack.com", "gist.github.com"}:
+            return False
+        if host == "github.com":
+            if len(path_segments) != 1 or path_segments[0] in {
+                "orgs",
+                "topics",
+                "collections",
+                "marketplace",
+                "search",
+                "features",
+                "sponsors",
+                "settings",
+                "apps",
+                "events",
+                "pulls",
+                "issues",
+                "explore",
+            }:
+                return False
+        if host == "gitlab.com":
+            if len(path_segments) != 1 or path_segments[0] in {
+                "explore",
+                "users",
+                "groups",
+                "projects",
+                "help",
+                "dashboard",
+            }:
+                return False
+        if host == "huggingface.co":
+            if len(path_segments) != 1 or path_segments[0] in {
+                "models",
+                "datasets",
+                "spaces",
+                "docs",
+                "blog",
+                "learn",
+                "collections",
+                "organizations",
+            }:
+                return False
+        if host == "kaggle.com":
+            if len(path_segments) != 1 or path_segments[0] in {
+                "competitions",
+                "datasets",
+                "code",
+                "models",
+                "docs",
+                "learn",
+                "organizations",
+            }:
+                return False
+        if host == "stackoverflow.com":
+            if len(path_segments) < 2 or path_segments[0] not in {"users", "story"}:
+                return False
+        if host == "dev.to":
+            if len(path_segments) != 1 or path_segments[0] in {
+                "about",
+                "tags",
+                "top",
+                "latest",
+                "pod",
+                "code-of-conduct",
+            }:
+                return False
         looks_profile_like = any(token in lowered for token in self.allowed_url_substrings) or any(
             token in path
             for token in (

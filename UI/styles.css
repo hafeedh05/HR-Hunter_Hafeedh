@@ -1543,6 +1543,53 @@ select:focus {
   color: var(--text-muted);
 }
 
+.info-banner {
+  margin: 0 0 1rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(113, 219, 255, 0.18);
+  border-radius: 18px;
+  background: rgba(113, 219, 255, 0.06);
+}
+
+.info-banner strong {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.info-banner p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.info-banner p + p {
+  margin-top: 0.8rem;
+}
+
+.feedback-training-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+.feedback-setting-card {
+  display: grid;
+  gap: 0.65rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.feedback-setting-card span {
+  font-weight: 700;
+}
+
+.feedback-setting-card small {
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
 @media (max-width: 1080px) {
   .hero-panel,
   .projects-grid,

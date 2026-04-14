@@ -244,6 +244,10 @@ function titleCaseWords(value) {
     .join(" ");
 }
 
+function humanizeStageLabel(value) {
+  return titleCaseWords(String(value || "").replace(/_/g, " "));
+}
+
 function humanizeNote(note) {
   const text = String(note || "")
     .replace(/_/g, " ")
@@ -254,6 +258,11 @@ function humanizeNote(note) {
 
 function artifactHref(path) {
   return `/app/artifact?path=${encodeURIComponent(path)}`;
+}
+
+function downloadLinkMarkup(path, label, className = "inline-link") {
+  const fileName = String(path || "").split(/[\\/]/).pop() || String(path || "");
+  return `<a class="${escapeHtml(className)}" href="${artifactHref(path)}" download="${escapeHtml(fileName)}">${escapeHtml(label)}</a>`;
 }
 
 function sessionHeaders() {
@@ -418,7 +427,7 @@ function defaultSettingsFromConfig() {
   const paths = state.config?.paths || {};
   return {
     theme: defaults.theme || "bright",
-    limit: safeNumber(defaults.limit, 20),
+    limit: safeNumber(defaults.limit, 1000),
     feedback_db: defaults.feedback_db || paths.feedback_db || "",
     model_dir: defaults.model_dir || paths.model_dir || "",
     output_dir: defaults.output_dir || paths.output_dir || "",
@@ -429,7 +438,142 @@ function defaultSettingsFromConfig() {
     include_discovery_slices: defaults.include_discovery_slices !== false,
     registry_memory_enabled: defaults.registry_memory_enabled !== false,
     reranker_model_name: defaults.reranker_model_name || "cross-encoder/ms-marco-MiniLM-L6-v2",
+    search_backend: "transformer",
   };
+}
+
+function normalizeRoleHint(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9+/#&.-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inferTransformerRoleFamily(payload = {}) {
+  const values = [
+    payload.role_title,
+    ...(Array.isArray(payload.titles) ? payload.titles : []),
+    ...(Array.isArray(payload.must_have_keywords) ? payload.must_have_keywords : []),
+    ...(Array.isArray(payload.nice_to_have_keywords) ? payload.nice_to_have_keywords : []),
+    ...(Array.isArray(payload.industry_keywords) ? payload.industry_keywords : []),
+  ];
+  const haystack = values.map(normalizeRoleHint).filter(Boolean).join(" ");
+  const familyHints = [
+    ["executive", ["chief executive officer", "ceo", "president", "managing director", "general manager", "vice president"]],
+    ["operations_process", ["operations manager", "business operations manager", "process analyst", "service operations manager"]],
+    ["supply_chain", ["supply chain manager", "demand planning", "supply planning", "logistics manager", "procurement manager"]],
+    ["finance", ["accountant", "senior accountant", "finance manager", "financial controller", "accounts manager"]],
+    ["sales_business_development", ["sales manager", "sales executive", "business development manager", "account manager", "partnerships manager"]],
+    ["technical_ai", ["ai engineer", "machine learning engineer", "ml engineer", "llm engineer", "applied ai engineer", "generative ai engineer", "nlp engineer", "mlops engineer", "pytorch", "rag"]],
+    ["data", ["data analyst", "data scientist", "analytics manager", "business intelligence analyst"]],
+    ["marketing", ["digital marketing manager", "marketing manager", "growth manager", "performance marketing manager", "demand generation"]],
+    ["customer_service_success", ["customer success manager", "customer support manager", "client success manager", "support lead"]],
+    ["hr_talent", ["recruiter", "talent acquisition", "talent partner", "hr manager", "hr business partner"]],
+    ["product_management", ["product manager", "senior product manager", "product owner", "platform product manager"]],
+    ["project_program_management", ["project manager", "program manager", "scrum master", "pmo analyst", "delivery manager"]],
+    ["procurement_sourcing", ["procurement manager", "strategic sourcing manager", "buyer", "category manager", "sourcing specialist"]],
+    ["manufacturing_production", ["production manager", "plant manager", "production supervisor", "manufacturing engineer"]],
+    ["engineering_non_it", ["mechanical engineer", "electrical engineer", "civil engineer", "industrial engineer"]],
+    ["construction_facilities", ["site engineer", "facilities manager", "maintenance manager", "construction manager"]],
+    ["healthcare_medical", ["doctor", "physician", "nurse", "pharmacist", "clinic manager"]],
+    ["education_training", ["teacher", "lecturer", "trainer", "instructional designer", "academic coordinator"]],
+    ["legal_compliance", ["legal counsel", "lawyer", "compliance officer", "contracts manager"]],
+    ["risk_audit_security", ["internal auditor", "risk manager", "cybersecurity analyst", "information security manager"]],
+    ["research_development", ["research scientist", "r&d engineer", "innovation manager", "applied researcher"]],
+    ["design_creative", ["graphic designer", "ux designer", "ui designer", "motion designer", "video editor"]],
+    ["design_architecture", ["interior designer", "senior interior designer", "interior design manager", "architect", "project architect", "design manager", "design director", "fit out"]],
+    ["media_communications", ["communications manager", "pr manager", "journalist", "corporate communications lead"]],
+    ["admin_office_support", ["admin assistant", "executive assistant", "office manager", "office coordinator"]],
+    ["hospitality_tourism", ["hotel manager", "guest relations manager", "front office manager", "travel consultant", "restaurant manager"]],
+    ["retail_merchandising", ["store manager", "merchandiser", "retail operations manager", "category executive"]],
+    ["real_estate_property", ["property manager", "leasing manager", "real estate consultant", "property consultant"]],
+    ["public_sector_government", ["policy analyst", "civil servant", "public administration officer", "municipal operations manager"]],
+    ["agriculture_environment", ["sustainability manager", "esg manager", "environmental manager", "agronomist", "hse manager"]],
+    ["transportation_mobility", ["fleet manager", "dispatcher", "aviation operations manager", "transport manager"]],
+  ];
+  for (const [family, hints] of familyHints) {
+    if (hints.some((hint) => haystack.includes(normalizeRoleHint(hint)))) {
+      return family;
+    }
+  }
+  return "other";
+}
+
+function transformerAutoTuning(payload = {}, candidateLimit = 300) {
+  const limit = Math.max(1, safeNumber(candidateLimit, 300));
+  const family = inferTransformerRoleFamily(payload);
+  const scale = Math.max(0.75, Math.min(2.0, limit / 300));
+  const profileMap = {
+    supply_chain: { maxQueries: 54, pagesPerQuery: 1, parallelRequests: 10 },
+    finance: { maxQueries: 54, pagesPerQuery: 1, parallelRequests: 10 },
+    operations_process: { maxQueries: 72, pagesPerQuery: 1, parallelRequests: 10 },
+    sales_business_development: { maxQueries: 72, pagesPerQuery: 1, parallelRequests: 10 },
+    customer_service_success: { maxQueries: 64, pagesPerQuery: 1, parallelRequests: 10 },
+    hr_talent: { maxQueries: 70, pagesPerQuery: 1, parallelRequests: 10 },
+    data: { maxQueries: 60, pagesPerQuery: 1, parallelRequests: 10 },
+    marketing: { maxQueries: 60, pagesPerQuery: 1, parallelRequests: 10 },
+    product_management: { maxQueries: 80, pagesPerQuery: 1, parallelRequests: 10 },
+    project_program_management: { maxQueries: 80, pagesPerQuery: 1, parallelRequests: 10 },
+    procurement_sourcing: { maxQueries: 72, pagesPerQuery: 1, parallelRequests: 10 },
+    manufacturing_production: { maxQueries: 90, pagesPerQuery: 1, parallelRequests: 10 },
+    engineering_non_it: { maxQueries: 100, pagesPerQuery: 2, parallelRequests: 8 },
+    construction_facilities: { maxQueries: 100, pagesPerQuery: 2, parallelRequests: 8 },
+    healthcare_medical: { maxQueries: 100, pagesPerQuery: 2, parallelRequests: 8 },
+    education_training: { maxQueries: 70, pagesPerQuery: 1, parallelRequests: 10 },
+    legal_compliance: { maxQueries: 84, pagesPerQuery: 1, parallelRequests: 8 },
+    risk_audit_security: { maxQueries: 84, pagesPerQuery: 1, parallelRequests: 8 },
+    research_development: { maxQueries: 100, pagesPerQuery: 2, parallelRequests: 8 },
+    design_creative: { maxQueries: 84, pagesPerQuery: 2, parallelRequests: 8 },
+    design_architecture: { maxQueries: 100, pagesPerQuery: 2, parallelRequests: 8 },
+    media_communications: { maxQueries: 72, pagesPerQuery: 1, parallelRequests: 10 },
+    admin_office_support: { maxQueries: 60, pagesPerQuery: 1, parallelRequests: 10 },
+    hospitality_tourism: { maxQueries: 80, pagesPerQuery: 1, parallelRequests: 10 },
+    retail_merchandising: { maxQueries: 80, pagesPerQuery: 1, parallelRequests: 10 },
+    real_estate_property: { maxQueries: 90, pagesPerQuery: 1, parallelRequests: 10 },
+    public_sector_government: { maxQueries: 84, pagesPerQuery: 1, parallelRequests: 8 },
+    agriculture_environment: { maxQueries: 100, pagesPerQuery: 2, parallelRequests: 8 },
+    transportation_mobility: { maxQueries: 84, pagesPerQuery: 1, parallelRequests: 10 },
+    technical_ai: { maxQueries: 140, pagesPerQuery: 2, parallelRequests: 8 },
+    executive: { maxQueries: 180, pagesPerQuery: 2, parallelRequests: 6 },
+    other: { maxQueries: 120, pagesPerQuery: 2, parallelRequests: 8 },
+  };
+  const base = profileMap[family] || profileMap.other;
+  return {
+    roleFamily: family,
+    maxQueries: Math.max(24, Math.round(base.maxQueries * scale)),
+    pagesPerQuery: base.pagesPerQuery,
+    parallelRequests: base.parallelRequests,
+  };
+}
+
+function updateSearchBackendUI() {
+  state.settings.search_backend = "transformer";
+  const transformerEnabled = true;
+  const classicOnlyIds = [
+    "settings-semantic-enabled",
+    "settings-feedback-model-enabled",
+    "settings-history-context-enabled",
+    "owner-semantic-enabled",
+    "owner-feedback-model-enabled",
+    "owner-history-context-enabled",
+    "owner-discovery-enabled",
+    "owner-memory-enabled",
+  ];
+  classicOnlyIds.forEach((id) => {
+    const element = document.getElementById(id);
+    if (element) {
+      element.disabled = transformerEnabled;
+    }
+  });
+  const modelLabel = document.getElementById("settings-model-display");
+  if (modelLabel) {
+    modelLabel.textContent = transformerEnabled ? "HR Hunter Transformer V2" : "HR Hunter Model V1";
+  }
+  const note = document.getElementById("settings-transformer-note");
+  if (note) {
+    note.hidden = !transformerEnabled;
+  }
 }
 
 function hydrateSettings() {
@@ -443,11 +587,15 @@ function hydrateSettings() {
     ...(stored.settings || {}),
     providers: candidateProviders.filter((provider) => (state.config?.providers || []).includes(provider)),
   };
+  state.settings.search_backend = "transformer";
   if (!state.settings.providers.length) {
     state.settings.providers = [...defaults.providers];
   }
   if (!Number.isFinite(Number(state.settings.limit)) || Number(state.settings.limit) < 1) {
     state.settings.limit = defaults.limit;
+  }
+  if (Number(state.settings.limit) < 1000) {
+    state.settings.limit = 1000;
   }
   applyTheme(state.settings.theme);
 }
@@ -850,10 +998,10 @@ function getCheckedMemberIds() {
 }
 
 function populateSettingsFields() {
-  document.getElementById("settings-limit").value = String(state.settings.limit || 20);
   document.getElementById("settings-feedback-db").value = state.settings.feedback_db || "";
   document.getElementById("settings-model-dir").value = state.settings.model_dir || "";
   document.getElementById("settings-output-dir").value = state.settings.output_dir || "";
+  document.getElementById("settings-transformer-enabled").checked = true;
   document.getElementById("settings-semantic-enabled").checked = Boolean(state.settings.reranker_enabled);
   document.getElementById("settings-feedback-model-enabled").checked = Boolean(state.settings.learned_ranker_enabled);
   document.getElementById("settings-history-context-enabled").checked = Boolean(state.settings.include_history_slices);
@@ -862,24 +1010,26 @@ function populateSettingsFields() {
   setCheckboxIfPresent("owner-history-context-enabled", state.settings.include_history_slices);
   setCheckboxIfPresent("owner-discovery-enabled", state.settings.include_discovery_slices);
   setCheckboxIfPresent("owner-memory-enabled", state.settings.registry_memory_enabled);
-  const modelLabel = document.getElementById("settings-model-display");
-  if (modelLabel) {
-    modelLabel.textContent = "HR Hunter Model V1";
-  }
+  updateSearchBackendUI();
 }
 
 function collectSettingsFromInputs() {
-  state.settings.limit = Math.max(1, safeNumber(document.getElementById("settings-limit").value, 20));
   state.settings.feedback_db = document.getElementById("settings-feedback-db").value.trim();
   state.settings.model_dir = document.getElementById("settings-model-dir").value.trim();
   state.settings.output_dir = document.getElementById("settings-output-dir").value.trim();
-  state.settings.reranker_enabled = document.getElementById("settings-semantic-enabled").checked;
-  state.settings.learned_ranker_enabled = document.getElementById("settings-feedback-model-enabled").checked;
-  state.settings.include_history_slices = document.getElementById("settings-history-context-enabled").checked;
+  state.settings.search_backend = "transformer";
+  document.getElementById("settings-transformer-enabled").checked = true;
+  const transformerEnabled = true;
+  state.settings.reranker_enabled = transformerEnabled ? true : document.getElementById("settings-semantic-enabled").checked;
+  state.settings.learned_ranker_enabled = transformerEnabled ? false : document.getElementById("settings-feedback-model-enabled").checked;
+  state.settings.include_history_slices = transformerEnabled ? false : document.getElementById("settings-history-context-enabled").checked;
+  state.settings.include_discovery_slices = transformerEnabled ? false : state.settings.include_discovery_slices;
+  state.settings.registry_memory_enabled = transformerEnabled ? false : state.settings.registry_memory_enabled;
   state.settings.providers = Array.isArray(state.config?.defaults?.providers)
     ? [...state.config.defaults.providers]
     : ["scrapingbee_google"];
   state.settings.reranker_model_name = state.config?.defaults?.reranker_model_name || "BAAI/bge-reranker-v2-m3";
+  updateSearchBackendUI();
 }
 
 function resetProjectForm() {
@@ -895,7 +1045,7 @@ function resetProjectForm() {
   document.getElementById("min-years").value = "";
   document.getElementById("max-years").value = "";
   document.getElementById("radius-miles").value = String(state.config?.defaults?.radius_miles || 25);
-  document.getElementById("candidate-limit").value = String(state.settings.limit || state.config?.defaults?.limit || 20);
+  document.getElementById("candidate-limit").value = String(state.settings.limit || state.config?.defaults?.limit || 1000);
   document.getElementById("company-match-mode").value = state.config?.defaults?.company_match_mode || "both";
   document.getElementById("employment-status-mode").value = state.config?.defaults?.employment_status_mode || "any";
   document.getElementById("job-description").value = "";
@@ -983,9 +1133,6 @@ function buildUiMeta(options = {}) {
     brief_clarifications: { ...state.briefClarifications },
     search_tuning: { ...preservedSearchTuning },
     search_profile: savedMeta.search_profile || savedBrief.brief_search_profile || "",
-    scope_first_enabled: savedMeta.scope_first_enabled ?? savedBrief.scope_first_enabled ?? null,
-    in_scope_target: savedMeta.in_scope_target ?? savedBrief.in_scope_target ?? null,
-    verification_scope_target: savedMeta.verification_scope_target ?? savedBrief.verification_scope_target ?? null,
   };
 }
 
@@ -993,7 +1140,7 @@ function buildBriefPayload(options = {}) {
   collectSettingsFromInputs();
   const roleTitle = document.getElementById("role-title").value.trim();
   const uiMeta = buildUiMeta(options);
-  const candidateLimit = Math.max(1, safeNumber(uiMeta.candidate_limit, state.settings.limit || 20));
+  const candidateLimit = Math.max(1, safeNumber(uiMeta.candidate_limit, state.settings.limit || 1000));
   return {
     role_title: roleTitle,
     titles: uiMeta.titles,
@@ -1023,12 +1170,8 @@ function buildBriefPayload(options = {}) {
     search_profile: uiMeta.search_profile,
     anchors: uiMeta.anchors,
     brief_clarifications: uiMeta.brief_clarifications,
-    scope_first_enabled: uiMeta.scope_first_enabled,
-    in_scope_target: uiMeta.in_scope_target,
-    verification_scope_target: uiMeta.verification_scope_target,
     providers: state.settings.providers,
     limit: candidateLimit,
-    csv_export_limit: candidateLimit,
     feedback_db: state.settings.feedback_db,
     model_dir: state.settings.model_dir,
     output_dir: state.settings.output_dir,
@@ -1038,6 +1181,7 @@ function buildBriefPayload(options = {}) {
     include_discovery_slices: state.settings.include_discovery_slices,
     registry_memory_enabled: state.settings.registry_memory_enabled,
     reranker_model_name: state.settings.reranker_model_name,
+    search_backend: state.settings.search_backend,
     ui_meta: uiMeta,
   };
 }
@@ -1368,7 +1512,7 @@ function formValuesFromProject(project) {
     minYears: meta.minimum_years_experience ?? brief.minimum_years_experience ?? "",
     maxYears: meta.maximum_years_experience ?? brief.maximum_years_experience ?? "",
     radiusMiles: meta.radius_miles ?? geography.radius_miles ?? state.config?.defaults?.radius_miles ?? 25,
-    candidateLimit: meta.candidate_limit ?? brief.max_profiles ?? state.settings.limit ?? state.config?.defaults?.limit ?? 20,
+    candidateLimit: meta.candidate_limit ?? brief.max_profiles ?? state.settings.limit ?? state.config?.defaults?.limit ?? 1000,
     companyMatchMode: meta.company_match_mode || brief.company_match_mode || "both",
     employmentStatusMode: meta.employment_status_mode || brief.employment_status_mode || "any",
     jobDescription: meta.job_description || brief.job_description_source?.typed_text || "",
@@ -1622,7 +1766,7 @@ function jobRequestedLimit(job) {
   return Math.max(
     1,
     safeNumber(
-      job?.payload?.limit || job?.payload?.csv_export_limit || reportRequestedCandidateLimit() || fallbackLimit,
+      job?.payload?.limit || reportRequestedCandidateLimit() || fallbackLimit,
       fallbackLimit,
     ),
   );
@@ -1682,7 +1826,9 @@ function finalizingEtaReady(finalizedCount, requested, stageElapsedSeconds) {
 
 function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds = 0) {
   const requested = jobRequestedLimit(job);
+  const transformerMode = String(job?.payload?.search_backend || "").toLowerCase() === "transformer";
   const stage = String(backendProgress.stage || job?.status || "").toLowerCase();
+  const retrievalStage = stage === "retrieval_running" || stage === "retrieval";
   if (job?.job_type === "train_ranker") {
     return Math.max(90, 45 + requested);
   }
@@ -1696,15 +1842,18 @@ function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds =
   const explicitPercent = safeNumber(backendProgress.percent, NaN);
   const stageElapsedSeconds = Math.max(0, safeNumber(backendProgress.stage_elapsed_seconds, 0));
   const backendEstimatedTotal = safeNumber(backendProgress.estimated_total_seconds, 0);
-  const stableRerankEta = stage !== "rerank" || rerankEtaReady(rerankedCount, rerankTarget, stageElapsedSeconds);
+  const stableRerankEta = !["rerank", "scoring"].includes(stage) || rerankEtaReady(rerankedCount, rerankTarget, stageElapsedSeconds);
   const stableFinalizingEta = stage !== "finalizing" || finalizingEtaReady(finalizedCount, requested, stageElapsedSeconds);
+  if (transformerMode && retrievalStage && queriesTotal <= 0 && rawFound <= 0 && uniqueAfterDedupe <= 0) {
+    return 0;
+  }
   if (backendEstimatedTotal > 0 && stableRerankEta && stableFinalizingEta) {
     return Math.max(elapsedSeconds + (stage === "completed" ? 0 : 1), Math.round(backendEstimatedTotal));
   }
   if (stage === "completed") {
     return Math.max(1, Math.round(elapsedSeconds));
   }
-  if (stage === "rerank") {
+  if (stage === "rerank" || stage === "scoring") {
     if (rerankEtaReady(rerankedCount, rerankTarget, stageElapsedSeconds)) {
       const rerankCoverage = Math.max(0.01, Math.min(0.995, rerankedCount / Math.max(1, rerankTarget)));
       const projectedTotal = elapsedSeconds / rerankCoverage;
@@ -1725,7 +1874,7 @@ function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds =
     const projectedTotal = elapsedSeconds / finalCoverage;
     return Math.max(elapsedSeconds + 8, Math.min(4 * 3600, Math.round(projectedTotal)));
   }
-  if (stage === "retrieval" && requested > 0 && elapsedSeconds > 5) {
+  if (retrievalStage && requested > 0 && elapsedSeconds > 5) {
     const queryCoverage = queriesTotal > 0 ? queriesCompleted / Math.max(1, queriesTotal) : 0;
     const uniqueCoverage = uniqueAfterDedupe > 0 ? uniqueAfterDedupe / Math.max(1, requested) : 0;
     const rawCoverage = rawFound > 0 ? rawFound / Math.max(1, requested * 1.2) : 0;
@@ -1736,7 +1885,7 @@ function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds =
       return Math.max(elapsedSeconds + 10, Math.min(4 * 3600, Math.round(projectedRetrievalTotal + retrievalTail)));
     }
   }
-  if (stage === "retrieval" && queriesTotal > 0 && queriesCompleted >= 4 && elapsedSeconds > 3) {
+  if (retrievalStage && queriesTotal > 0 && queriesCompleted >= 4 && elapsedSeconds > 3) {
     const remainingQueries = Math.max(0, queriesTotal - queriesCompleted);
     const perQuerySeconds = Math.max(0.1, elapsedSeconds / Math.max(1, queriesCompleted));
     const stageOverhead = Math.max(25, Math.min(220, requested * 0.4));
@@ -1782,6 +1931,7 @@ function formatCounterValue(value) {
 
 function runningJobProgress(job) {
   const backendProgress = jobProgressPayload(job);
+  const transformerMode = String(job?.payload?.search_backend || "").toLowerCase() === "transformer";
   const backendElapsed = safeNumber(backendProgress.elapsed_seconds, 0);
   const completedElapsed = durationSecondsBetween(
     job?.started_at || job?.created_at,
@@ -1794,6 +1944,7 @@ function runningJobProgress(job) {
     ? Math.max(completedElapsed, backendElapsed)
     : Math.max(0, backendElapsed);
   const stage = String(backendProgress.stage || status || "queued").toLowerCase();
+  const retrievalStage = stage === "retrieval_running" || stage === "retrieval";
   const lastProgressAt = parseTimestamp(backendProgress.updated_at || job?.heartbeat_at || job?.started_at || job?.created_at);
   const stalledForSeconds = lastProgressAt ? Math.max(0, (Date.now() - lastProgressAt.getTime()) / 1000) : 0;
   const rerankedCount = safeNumber(backendProgress.reranked_count, 0);
@@ -1840,7 +1991,7 @@ function runningJobProgress(job) {
       Math.round(stageElapsedRaw > 0 ? stageElapsedRaw : stageElapsedFallback),
     ),
   );
-  const stageLabel = String(backendProgress.stage_label || titleCaseWords(stage || "queued"));
+  const stageLabel = humanizeStageLabel(backendProgress.stage_label || stage || "queued");
   const message = String(backendProgress.message || "")
     .replace(/\(\s*\d+\s*s\s*elapsed\s*\)\.?/gi, "")
     .replace(/\s{2,}/g, " ")
@@ -1853,7 +2004,13 @@ function runningJobProgress(job) {
     || Number.isFinite(backendEta)
     || backendEstimatedTotal > 0
     || displayedEstimatedSeconds > elapsedSeconds;
-  const etaKnown = stableRerankEta && stableFinalizingEta && baseEtaKnown;
+  const etaSuppressedForTransformer =
+    transformerMode
+    && (
+      (retrievalStage && queriesTotal <= 0 && rawFound <= 0 && uniqueAfterDedupe <= 0)
+      || (retrievalStage && queriesTotal > 0 && queriesCompleted >= queriesTotal && uniqueAfterDedupe <= 0 && finalizedCount <= 0)
+    );
+  const etaKnown = !etaSuppressedForTransformer && stableRerankEta && stableFinalizingEta && baseEtaKnown;
   const stableEstimatedSeconds = etaKnown ? displayedEstimatedSeconds : 0;
   const remainingSeconds = etaKnown
     ? (
@@ -2113,7 +2270,7 @@ function syncLiveJobStatus() {
     ? running.message
     : `${running.stageLabel}: ${formatCounterValue(running.queriesCompleted)} / ${formatCounterValue(running.queriesTotal)} queries, ${formatCounterValue(running.uniqueAfterDedupe)} unique.`;
   setStatus(
-    `Search ${String(activeJob.status || "").toLowerCase() === "queued" ? "queued" : "running"}.`,
+    `Search ${String(activeJob.status || "").toLowerCase() === "queued" ? "Queued" : "Running"}.`,
     tone,
     `${running.statusLabel} for up to ${running.requested} candidates. ${liveLine} Elapsed ${formatDuration(running.elapsedSeconds)}.`,
   );
@@ -2186,9 +2343,9 @@ function filteredCandidates() {
       return true;
     }
     const haystack = [
-      candidate.full_name,
+      candidateDisplayName(candidate),
       candidate.current_title,
-      candidate.current_company,
+      candidateDisplayCompany(candidate),
       candidate.location_name,
       candidate.summary,
     ]
@@ -2203,8 +2360,103 @@ function bucketCountFor(statusKey) {
   return currentCandidates().filter((candidate) => statusFromCandidate(candidate).key === statusKey).length;
 }
 
+function sanitizeCandidateName(value) {
+  let text = String(value || "")
+    .replace(/[\u200e\u200f\u202a-\u202e]/g, "")
+    .replace(/\([^)]*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  const tokens = text.split(/\s+/);
+  while (tokens.length > 2) {
+    const tail = tokens[tokens.length - 1];
+    if (/^(mba|cscp|cppm|cscm|pmp|phd)$/i.test(tail)) {
+      tokens.pop();
+      continue;
+    }
+    if ((/\d/.test(tail) || /^[a-f0-9]{6,}$/i.test(tail)) && /^[A-Za-z0-9-]+$/.test(tail)) {
+      tokens.pop();
+      continue;
+    }
+    break;
+  }
+  return tokens.join(" ").trim();
+}
+
+function looksLikeBadCompany(value, currentTitle = "") {
+  const text = String(value || "").trim();
+  if (!text) return true;
+  const normalized = text
+    .toLowerCase()
+    .replace(/[|,;:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return true;
+  if (/^(at|@|company|current|present|view|experience|educational|dr|profile)$/i.test(normalized)) {
+    return true;
+  }
+  if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[-\s]\d{2,4}$/i.test(normalized)) {
+    return true;
+  }
+  if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{2,4}$/i.test(normalized)) {
+    return true;
+  }
+  if (/^from\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)/i.test(normalized)) {
+    return true;
+  }
+  if (/view org chart|view manager|view profile|org chart/.test(normalized)) {
+    return true;
+  }
+  if (currentTitle && normalized === String(currentTitle).toLowerCase().trim()) {
+    return true;
+  }
+  if (/is a /.test(normalized)) {
+    return true;
+  }
+  if (/(manager|engineer|planner|specialist|lead|director)\s+at\b/.test(normalized)) {
+    return true;
+  }
+  if (/\b(supply chain manager|procurement manager|supply planning manager|demand planning manager|planning engineer)\b/.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
+function sanitizeCandidateCompany(value, currentTitle = "") {
+  let text = String(value || "")
+    .replace(/[\u200e\u200f\u202a-\u202e]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  const atMatch = text.match(/\bat\s+(.+)$/i);
+  if (atMatch && atMatch[1]) {
+    text = atMatch[1].trim();
+  }
+  if (text.includes("·")) {
+    text = text.split("·").pop().trim() || text;
+  }
+  if (text.includes(".")) {
+    const tail = text.split(".").pop()?.trim();
+    if (tail && tail.length >= 3 && tail.split(/\s+/).length <= 5) {
+      text = tail;
+    }
+  }
+  if (looksLikeBadCompany(text, currentTitle)) {
+    return "";
+  }
+  return text;
+}
+
+function candidateDisplayName(candidate) {
+  return sanitizeCandidateName(candidate?.full_name) || "Unnamed Candidate";
+}
+
+function candidateDisplayCompany(candidate) {
+  return sanitizeCandidateCompany(candidate?.current_company, candidate?.current_title) || "No company";
+}
+
 function candidateIdentityRef(candidate) {
-  return candidate.linkedin_url || candidate.source_url || candidate.full_name || "";
+  return candidate.linkedin_url || candidate.source_url || sanitizeCandidateName(candidate.full_name) || "";
 }
 
 function candidateSignalEntries(candidate) {
@@ -2441,8 +2693,7 @@ function renderCsvSummary() {
   }
   const csvFileName = String(reportPaths.csv).split(/[\\/]/).pop() || reportPaths.csv;
   root.innerHTML = `
-      <p><a class="inline-link" href="${artifactHref(reportPaths.csv)}">Download CSV</a></p>
-      <p class="muted">Requested CSV rows: ${escapeHtml(String(currentRequestedCandidateLimit()))}</p>
+      <p>${downloadLinkMarkup(reportPaths.csv, "Download CSV")}</p>
       <small class="muted">${escapeHtml(csvFileName)}</small>
     `;
 }
@@ -2468,6 +2719,8 @@ function candidateCardMarkup(candidate) {
   const status = statusFromCandidate(candidate);
   const signals = compactFeatureSummary(candidate);
   const insights = candidateInsightBuckets(candidate);
+  const displayName = candidateDisplayName(candidate);
+  const displayCompany = candidateDisplayCompany(candidate);
   const links = [];
   if (candidate.linkedin_url) links.push(`<a class="inline-link" href="${escapeHtml(candidate.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>`);
   if (candidate.source_url) links.push(`<a class="inline-link" href="${escapeHtml(candidate.source_url)}" target="_blank" rel="noreferrer">Source</a>`);
@@ -2477,10 +2730,10 @@ function candidateCardMarkup(candidate) {
       <div class="candidate-top">
         <div>
           <div class="candidate-name-row">
-            <h4>${escapeHtml(candidate.full_name || "Unnamed Candidate")}</h4>
+            <h4>${escapeHtml(displayName)}</h4>
             <span class="status-pill status-${escapeHtml(status.key)}">${escapeHtml(status.label)}</span>
           </div>
-          <p class="candidate-subtitle">${escapeHtml(candidate.current_title || "No title")} | ${escapeHtml(candidate.current_company || "No company")} | ${escapeHtml(candidate.location_name || "No location")}</p>
+          <p class="candidate-subtitle">${escapeHtml(candidate.current_title || "No title")} | ${escapeHtml(displayCompany)} | ${escapeHtml(candidate.location_name || "No location")}</p>
           <div class="candidate-meta">
             ${links.join("<span class=\"divider\">|</span>")}
             ${registrySeen > 1 ? `<span class="muted">Seen in ${registrySeen} runs</span>` : `<span class="muted">New to the registry</span>`}
@@ -2501,6 +2754,8 @@ function candidateCardMarkup(candidate) {
 function candidateTableRowMarkup(candidate, selectedRef) {
   const status = statusFromCandidate(candidate);
   const candidateRef = candidateIdentityRef(candidate);
+  const displayName = candidateDisplayName(candidate);
+  const displayCompany = candidateDisplayCompany(candidate);
   const links = [];
   if (candidate.linkedin_url) {
     links.push(`<a class="inline-link" href="${escapeHtml(candidate.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>`);
@@ -2512,12 +2767,12 @@ function candidateTableRowMarkup(candidate, selectedRef) {
     <tr class="candidate-table-row ${candidateRef === selectedRef ? "selected" : ""}" data-candidate-row="${escapeHtml(candidateRef)}">
       <td>
         <div class="candidate-primary">
-          <strong>${escapeHtml(candidate.full_name || "Unnamed Candidate")}</strong>
+          <strong>${escapeHtml(displayName)}</strong>
           <span class="candidate-secondary">${escapeHtml(candidate.location_name || "No location")}</span>
         </div>
       </td>
       <td>${escapeHtml(candidate.current_title || "No title")}</td>
-      <td>${escapeHtml(candidate.current_company || "No company")}</td>
+      <td>${escapeHtml(displayCompany)}</td>
       <td class="candidate-score-cell">${escapeHtml(formatScore(candidate.score))}</td>
       <td><span class="status-pill status-${escapeHtml(status.key)}">${escapeHtml(status.label)}</span></td>
       <td>
@@ -2667,8 +2922,8 @@ function renderCandidateControls() {
   }
   const csvPath = state.currentReport?.report_paths?.csv || "";
   if (csvPath) {
-    exportRoot.innerHTML = `<a class="button button-secondary" href="${artifactHref(csvPath)}">Export CSV</a>`;
-    exportNote.textContent = `The latest export is set to include up to ${currentRequestedCandidateLimit()} rows.`;
+    exportRoot.innerHTML = downloadLinkMarkup(csvPath, "Export CSV", "button button-secondary");
+    exportNote.textContent = `The latest export follows the candidate count for this run.`;
   } else {
     exportRoot.innerHTML = `<span class="muted">No CSV available yet.</span>`;
     exportNote.textContent = "Run a search to generate the latest project CSV.";
@@ -2916,7 +3171,7 @@ function renderResults() {
     <div class="results-snapshot-actions">
       <button type="button" class="button button-secondary" id="results-open-candidates">Open Candidates</button>
       <button type="button" class="button button-secondary" id="results-open-history">Open History</button>
-      ${state.currentReport?.report_paths?.csv ? `<a class="button button-secondary" href="${artifactHref(state.currentReport.report_paths.csv)}">Download CSV</a>` : ""}
+      ${state.currentReport?.report_paths?.csv ? downloadLinkMarkup(state.currentReport.report_paths.csv, "Download CSV", "button button-secondary") : ""}
     </div>
     ${activeJob ? `<p class="muted snapshot-note">A newer search is still ${escapeHtml(titleCaseWords(activeJob.status))}. This snapshot shows the latest completed run until that new one finishes.</p>` : ""}
   `;
@@ -2952,7 +3207,7 @@ function renderFeedback() {
       root.innerHTML = `
         <div class="empty-state compact-empty">
           <h4>No Feedback Yet</h4>
-          <p>Save recruiter feedback from the Results or Candidates tab to start building project history.</p>
+          <p>Use the Results or Candidates tab to mark strong profiles, weak fits, or profiles that need review. Those saved actions build project history and improve future ranking.</p>
         </div>
       `;
   } else {
@@ -3761,7 +4016,7 @@ async function handleCompletedJob(job) {
     return;
   }
   if (job.job_type === "train_ranker") {
-    setStatus("Feedback-trained model ready.", "success", "The latest trained model from recruiter feedback has been saved.");
+    setStatus("Ranking model refreshed.", "success", "The latest model from recruiter feedback has been saved and will be used for future searches.");
     return;
   }
   setStatus("Background job completed.", "success");
@@ -4125,7 +4380,7 @@ function loadDemoBrief() {
   document.getElementById("years-value").value = preset.years_value ?? "";
   document.getElementById("years-tolerance").value = preset.years_tolerance ?? "";
   document.getElementById("radius-miles").value = state.config?.defaults?.radius_miles || 25;
-  document.getElementById("candidate-limit").value = preset.max_profiles || state.settings.limit || state.config?.defaults?.limit || 20;
+  document.getElementById("candidate-limit").value = preset.max_profiles || state.settings.limit || state.config?.defaults?.limit || 1000;
   document.getElementById("company-match-mode").value = preset.company_match_mode || "both";
   document.getElementById("employment-status-mode").value = preset.employment_status_mode || "any";
   document.getElementById("job-description").value = preset.job_description || "";
@@ -4169,7 +4424,7 @@ async function trainRanker() {
     });
     state.activeJob = job;
     renderOwnerJobs();
-    setStatus("Ranker training queued.", "default", "The learned ranker is training in the background.");
+    setStatus("Ranking refresh queued.", "default", "The feedback-based ranking model is training in the background.");
     startJobPolling(job.job_id);
   } catch (error) {
     setStatus("Could not queue ranker training.", "danger", error.message);
@@ -4217,7 +4472,13 @@ function saveSettings() {
   applyTheme(state.settings.theme);
   populateSettingsFields();
   persistStoredState();
-  setStatus("Settings saved.", "success", "Theme, ranking preferences, and workspace paths have been updated for this browser.");
+  setStatus(
+    "Settings saved.",
+    "success",
+    state.settings.search_backend === "transformer"
+      ? "Transformer mode is active for this browser. Hunt tabs stay the same, but searches now route through HR Hunter Transformer V2."
+      : "Classic HR Hunter mode is active for this browser.",
+  );
 }
 
 function resetSettings() {
@@ -4338,6 +4599,10 @@ function bindEvents() {
   });
   document.getElementById("settings-save-button").addEventListener("click", saveSettings);
   document.getElementById("settings-reset-button").addEventListener("click", resetSettings);
+  document.getElementById("settings-transformer-enabled").addEventListener("change", () => {
+    collectSettingsFromInputs();
+    populateSettingsFields();
+  });
   document.getElementById("support-form").addEventListener("submit", submitSupport);
   document.getElementById("feature-form").addEventListener("submit", submitFeature);
   document.getElementById("owner-fab").addEventListener("click", openOwnerDrawer);

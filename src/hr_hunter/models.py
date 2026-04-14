@@ -55,9 +55,6 @@ class SearchBrief:
     allow_adjacent_titles: bool = True
     exact_company_scope: bool = False
     strict_market_scope: bool = False
-    scope_first_enabled: bool = False
-    in_scope_target: int = 0
-    verification_scope_target: int = 0
 
 
 @dataclass

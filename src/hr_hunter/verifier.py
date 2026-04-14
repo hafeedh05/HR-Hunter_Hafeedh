@@ -43,6 +43,14 @@ CURRENT_EMPLOYMENT_BLOCKERS = (
 )
 PROFILE_PATH_HINTS = (
     "/in/",
+    "github.com/",
+    "gitlab.com/",
+    "huggingface.co/",
+    "kaggle.com/",
+    "stackoverflow.com/users/",
+    "medium.com/@",
+    "dev.to/",
+    "substack.com/",
     "/bio",
     "/speaker/",
     "/speakers/",
@@ -67,6 +75,19 @@ TRUSTED_PROFILE_DOMAINS = {
     "qa.linkedin.com",
     "sa.linkedin.com",
     "theorg.com",
+    "github.com",
+    "www.github.com",
+    "huggingface.co",
+    "www.huggingface.co",
+    "kaggle.com",
+    "www.kaggle.com",
+    "stackoverflow.com",
+    "www.stackoverflow.com",
+    "gitlab.com",
+    "www.gitlab.com",
+    "dev.to",
+    "medium.com",
+    "substack.com",
 }
 LOCATION_PROBE_PHRASES = (
     '"based in"',
@@ -142,6 +163,39 @@ EXECUTIVE_SOURCE_TERMS = (
     "appointed",
     "appointment",
 )
+TECHNICAL_ROLE_HINTS = (
+    "ai",
+    "artificial intelligence",
+    "machine learning",
+    "ml",
+    "llm",
+    "nlp",
+    "engineer",
+    "developer",
+    "mlops",
+    "data platform",
+)
+TECHNICAL_SOURCE_TERMS = (
+    "github",
+    "hugging face",
+    "kaggle",
+    "stack overflow",
+    "open source",
+    "repositories",
+    "projects",
+    "model serving",
+    "rag",
+    "llm",
+)
+TECHNICAL_SITE_TERMS = (
+    "site:github.com",
+    "site:huggingface.co",
+    "site:kaggle.com",
+    "site:stackoverflow.com",
+    "site:gitlab.com",
+    "site:dev.to",
+    "site:medium.com",
+)
 
 
 def parse_year(value: str) -> int | None:
@@ -198,6 +252,22 @@ def _is_executive_brief(brief: SearchBrief) -> bool:
         if normalize_text(str(value))
     )
     return any(hint in normalized_role_scope for hint in EXECUTIVE_TITLE_HINTS)
+
+
+def _is_technical_engineering_brief(brief: SearchBrief) -> bool:
+    normalized_role_scope = " ".join(
+        normalize_text(str(value))
+        for value in [
+            brief.role_title,
+            *brief.titles,
+            *brief.title_keywords,
+            *brief.required_keywords,
+            *brief.preferred_keywords,
+            *brief.industry_keywords,
+        ]
+        if normalize_text(str(value))
+    )
+    return any(hint in normalized_role_scope for hint in TECHNICAL_ROLE_HINTS)
 
 
 class PublicEvidenceVerifier:
@@ -347,6 +417,15 @@ class PublicEvidenceVerifier:
             or (record.profile_signal and record.confidence >= 0.75)
         )
 
+    def _supports_technical_role_signal(self, record: EvidenceRecord, current_year: int) -> bool:
+        if not (record.name_match and record.title_matches and record.profile_signal):
+            return False
+        if self._looks_like_past_role(self._record_text(record)):
+            return False
+        if self._is_stale(record, current_year):
+            return False
+        return record.confidence >= 0.45
+
     def _supports_location_confirmation(
         self,
         record: EvidenceRecord,
@@ -419,6 +498,7 @@ class PublicEvidenceVerifier:
         )
         executive_source_terms = self._format_query_terms(EXECUTIVE_SOURCE_TERMS)
         executive_brief = _is_executive_brief(brief)
+        technical_brief = _is_technical_engineering_brief(brief)
 
         queries = [
             " ".join(
@@ -472,8 +552,30 @@ class PublicEvidenceVerifier:
                     if part
                 ),
             )
-
-        queries = unique_preserving_order([query for query in queries if query])[: self.queries_per_candidate]
+        if technical_brief:
+            technical_source_terms = self._format_query_terms(TECHNICAL_SOURCE_TERMS)
+            technical_site_filters = self._site_filters(
+                [*TECHNICAL_SITE_TERMS, "-site:linkedin.com", "-site:ie.linkedin.com"]
+            )
+            queries.insert(
+                1,
+                " ".join(
+                    part
+                    for part in [
+                        name_term,
+                        f"({title_terms})" if title_terms else "",
+                        f"({company_terms})" if company_terms else "",
+                        f"({technical_source_terms})" if technical_source_terms else "",
+                        technical_site_filters,
+                    ]
+                    if part
+                ),
+            )
+        effective_query_limit = max(
+            self.queries_per_candidate,
+            3 if technical_brief or executive_brief else self.queries_per_candidate,
+        )
+        queries = unique_preserving_order([query for query in queries if query])[:effective_query_limit]
 
         if self.location_probe_queries > 0 and self._location_is_imprecise(candidate, brief):
             precise_hints = [
@@ -828,6 +930,7 @@ class PublicEvidenceVerifier:
             return candidate
 
         current_year = datetime.now(timezone.utc).year
+        technical_brief = _is_technical_engineering_brief(brief)
         strong_records = [record for record in evidence_records if record.confidence >= 0.65]
         non_linkedin_domains = {
             record.source_domain for record in evidence_records if record.source_domain and "linkedin.com" not in record.source_domain
@@ -841,6 +944,11 @@ class PublicEvidenceVerifier:
             record
             for record in evidence_records
             if self._supports_current_role(record)
+        ]
+        technical_soft_role_records = [
+            record
+            for record in evidence_records
+            if technical_brief and self._supports_technical_role_signal(record, current_year)
         ]
         fresh_current_role_records = [
             record for record in current_role_records if not self._is_stale(record, current_year)
@@ -901,6 +1009,8 @@ class PublicEvidenceVerifier:
             and record.confidence >= 0.55
             for record in evidence_records
         )
+        if technical_soft_role_records:
+            candidate.current_title_confirmed = True
         candidate.current_location_confirmed = candidate.location_aligned or any(
             self._supports_location_confirmation(
                 record,
@@ -925,6 +1035,7 @@ class PublicEvidenceVerifier:
         setattr(candidate, "source_quality_score", source_quality_score)
         setattr(candidate, "evidence_freshness_year", latest_year or None)
         setattr(candidate, "current_role_proof_count", len(fresh_current_role_records))
+        setattr(candidate, "technical_role_signal_count", len(technical_soft_role_records))
 
         precise_location_records = [
             record
@@ -1021,6 +1132,10 @@ class PublicEvidenceVerifier:
             candidate.verification_notes.append(
                 f"{len(company_location_records)} company office/contact sources support target-market locality"
             )
+        if technical_soft_role_records and not fresh_current_role_records:
+            candidate.verification_notes.append(
+                f"{len(technical_soft_role_records)} technical profile sources corroborate the current title even though current-company proof is still incomplete"
+            )
 
         if stale_data_risk:
             candidate.verification_notes.append(
@@ -1050,14 +1165,30 @@ class PublicEvidenceVerifier:
             candidate.verification_notes.append("location signal corroborated")
         if candidate.precise_location_confirmed:
             candidate.verification_notes.append("precise location corroborated")
+        technical_review_ready = (
+            technical_brief
+            and candidate.current_title_match
+            and candidate.current_location_confirmed
+            and candidate.current_function_fit >= 0.85
+            and candidate.parser_confidence >= 0.65
+            and (
+                candidate.current_employment_confirmed
+                or bool(technical_soft_role_records)
+            )
+        )
         if not candidate.current_employment_confirmed:
             if stale_data_risk:
                 candidate.verification_notes.append("current role proof is stale and cannot verify current employment")
             elif historical_only_records:
                 candidate.verification_notes.append("current role proof appears historical rather than current")
+            elif technical_review_ready:
+                candidate.verification_notes.append(
+                    "current title is well supported, but current-company proof is still incomplete"
+                )
             else:
                 candidate.verification_notes.append("current role not yet publicly confirmed")
-            candidate.score = round(max(0.0, candidate.score - 10.0), 2)
+            penalty = 3.0 if technical_review_ready else 10.0
+            candidate.score = round(max(0.0, candidate.score - penalty), 2)
         if historical_only_records and not fresh_current_role_records:
             candidate.verification_notes.append("public evidence appears historical rather than current")
 
@@ -1092,6 +1223,16 @@ class PublicEvidenceVerifier:
                 candidate.verification_notes.append(
                     "industry fit treated as supportive rather than mandatory because title, market, and current-role evidence are strong"
                 )
+        elif technical_review_ready:
+            technical_review_floor = 55.0 if (
+                candidate.current_company_confirmed
+                or getattr(candidate, "current_role_proof_count", 0) >= 1
+            ) else 50.0
+            if candidate.score < technical_review_floor:
+                candidate.score = round(technical_review_floor, 2)
+                candidate.verification_notes.append(
+                    "technical role evidence is strong enough for review despite incomplete employer confirmation"
+                )
 
         cap_reasons = []
         if stale_data_risk:
@@ -1099,7 +1240,9 @@ class PublicEvidenceVerifier:
         if historical_only_records and not fresh_current_role_records:
             cap_reasons.append("historical_only_public_evidence")
         if not candidate.current_employment_confirmed:
-            cap_reasons.append("missing_current_role_proof")
+            cap_reasons.append(
+                "missing_current_company_confirmation" if technical_review_ready else "missing_current_role_proof"
+            )
 
         candidate.verification_status = status_from_score(candidate.score)
         if candidate.verification_status == "verified":
@@ -1130,7 +1273,12 @@ class PublicEvidenceVerifier:
                     f"status capped pending {'/'.join(missing)}"
                 )
                 cap_reasons.extend(missing)
-        elif candidate.verification_status == "review" and not candidate.current_employment_confirmed and candidate.score < 60.0:
+        elif (
+            candidate.verification_status == "review"
+            and not candidate.current_employment_confirmed
+            and candidate.score < 60.0
+            and not technical_review_ready
+        ):
             candidate.verification_status = "reject"
 
         setattr(candidate, "cap_reasons", unique_preserving_order([str(reason) for reason in cap_reasons]))
