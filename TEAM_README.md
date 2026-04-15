@@ -1,6 +1,7 @@
 # HR Hunter Team README
 
 Canonical deploy handoff: [docs/codex-production-handoff.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/docs/codex-production-handoff.md)
+Local validation note: [docs/local-transformer-validation-20260415.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/docs/local-transformer-validation-20260415.md)
 
 ## Current Team Reality
 
@@ -36,13 +37,17 @@ This is the working team position:
 
 ## Current Verification Baseline
 
-Use these local transformer benchmark numbers as the current reference when validating another environment:
+Use these current local app-project baselines as the reference when validating another environment:
 
-- Supply Chain Manager: `282 returned / 105 verified / 164 review / 13 reject` in `32.26s`
-- AI Engineer: `300 returned / 11 verified / 289 review / 0 reject` in `146.38s`
-- Chief Executive Officer (CEO): `300 returned / 10 verified / 290 review / 0 reject` in `165.69s`
+- Supply Chain Manager: `300 returned / 182 verified / 118 review / 0 reject`
+- AI Engineer: `300 returned / 78 verified / 222 review / 0 reject`
+- Chief Executive Officer (CEO): `300 returned / 36 verified / 264 review / 0 reject`
+- Project Architect: `300 returned / 136 verified / 164 review / 0 reject`
+- Senior Accountant: `300 returned / 182 verified / 118 review / 0 reject`
 
-If another environment performs materially worse than these on the same brief, treat it as a deployment/config/runtime issue until proven otherwise.
+If another environment performs materially worse than these on the same briefs, treat it as a deployment/config/runtime issue until proven otherwise.
+
+Use `docs/local-transformer-validation-20260415.md` for the exact hunt briefs, run IDs, and comparison notes.
 
 ## What Was Wrong In The Previous Deploy Cycle
 
@@ -62,20 +67,22 @@ If another environment performs materially worse than these on the same brief, t
 
 ### Pilot-only families
 
-- Finance / Accounting
 - HR / Talent Acquisition
 - Legal / Compliance
 - Sustainability / ESG
 - General Operations
+- Data / BI / Analytics
+- Product / Program / Government / Research
 
 ### Weak families not to oversell
 
-- AI / Data / Software for strict verified-yield promises
 - Executive / CEO
 - Healthcare / Doctors
 - Pharma / Clinical
 - Government / Public Sector
 - Aviation / Maritime
+
+Accounting and architecture improved locally in this quality pass, but they should still be validated from saved runs instead of being sold as universal strengths.
 
 ## Storage Reality
 
@@ -118,6 +125,18 @@ Before deploy, the minimum checks are:
 - old saved project runs still open
 - CSV export downloads correctly
 - Candidates tab shows clean names and companies
+
+## Latest Local Quality Pass
+
+The latest local-only transformer quality pass added:
+
+- family-history-aware query expansion
+- family-history-aware verifier thresholds
+- stricter extraction/company sanitation
+- app-level retrieval widening for large requests like `300`
+- a local family sweep across all `31` families to identify weak families
+
+The app project list was then reduced to the five validation projects used for deployment comparison.
 
 ## Reference
 

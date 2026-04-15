@@ -84,6 +84,38 @@ LINKEDIN_HOSTS = {"linkedin.com", "ae.linkedin.com", "sa.linkedin.com", "in.link
 BIDI_CONTROL_RE = re.compile(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 MONTH_YEAR_RE = re.compile(r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\d{2}$", re.IGNORECASE)
 MONTH_YEAR_TEXT_RE = re.compile(r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{2,4}$", re.IGNORECASE)
+BAD_COMPANY_LITERALS = {
+    "at",
+    "@",
+    "&",
+    "+",
+    "company",
+    "current",
+    "present",
+    "educational",
+    "dr",
+    "mr",
+    "mrs",
+    "ms",
+    "he",
+    "she",
+    "we",
+    "they",
+    "profile",
+    "experience",
+    "ceo",
+    "(ceo)",
+    "dubai",
+    "abu dhabi",
+    "riyadh",
+    "jeddah",
+    "saudi arabia",
+    "united arab emirates",
+    "uae",
+    "mea",
+    "mena",
+    "gcc",
+}
 
 
 class ProfileExtractor:
@@ -103,6 +135,8 @@ class ProfileExtractor:
         cleaned = re.sub(r"\s+", " ", cleaned)
         if not cleaned:
             return ""
+        cleaned = re.sub(r"^[@+&]+\s*", "", cleaned).strip(" -|,.;:")
+        cleaned = re.sub(r"^\(([^)]+)\)$", r"\1", cleaned).strip(" -|,.;:")
         if re.search(r"\bat\s+(.+)$", cleaned, flags=re.IGNORECASE):
             cleaned = re.search(r"\bat\s+(.+)$", cleaned, flags=re.IGNORECASE).group(1).strip(" -|,.;:")
         if ". " in cleaned and not re.search(r"\b(group|company|corp|co|llc|ltd|inc)\b", cleaned, flags=re.IGNORECASE):
@@ -119,17 +153,25 @@ class ProfileExtractor:
         lowered = cleaned.lower()
         if not cleaned:
             return True
-        if lowered in {"at", "@", "company", "current", "present", "educational"}:
+        if lowered in BAD_COMPANY_LITERALS:
+            return True
+        if len(cleaned) <= 2:
             return True
         if MONTH_YEAR_RE.fullmatch(lowered):
             return True
         if MONTH_YEAR_TEXT_RE.fullmatch(lowered):
+            return True
+        if re.fullmatch(r"[()@&+\\-]+", cleaned):
+            return True
+        if lowered.startswith("i ") or lowered.startswith("we "):
             return True
         if lowered.startswith(("view org chart", "org ...", "view manager", "view profile")):
             return True
         if " is a " in lowered or lowered.startswith("at "):
             return True
         if current_title and normalize_text(cleaned) == normalize_text(current_title):
+            return True
+        if any(phrase in lowered for phrase in ("chief executive officer", "machine learning engineer", "ai engineer", "llm engineer")):
             return True
         role_patterns = (
             "supply chain manager",
@@ -144,9 +186,11 @@ class ProfileExtractor:
             return True
         if any(phrase in lowered for phrase in ("org chart", "view manager", "regional senior", "senior supply chain manager")):
             return True
-        if lowered in {"dr", "experience", "profile"}:
-            return True
         if "manager at" in lowered or "engineer at" in lowered or "planner at" in lowered:
+            return True
+        if re.search(r"\b(manager|engineer|planner|director|officer|executive|specialist|lead)\b", lowered):
+            return True
+        if "teach machines" in lowered or "how to learn" in lowered:
             return True
         return False
 
@@ -265,6 +309,12 @@ class ProfileExtractor:
         cleaned = re.split(r"\s+[|·]\s+|\s+-\s+|;\s*", cleaned)[0].strip()
         cleaned = re.split(
             r"\.\s+(?:Dubai|Abu Dhabi|Riyadh|Jeddah|Khobar|Saudi Arabia|United Arab Emirates|UAE)\b",
+            cleaned,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
+        cleaned = re.split(
+            r"\s+\bin\b\s+(?:Dubai|Abu Dhabi|Riyadh|Jeddah|Khobar|Saudi Arabia|United Arab Emirates|UAE)\b",
             cleaned,
             maxsplit=1,
             flags=re.IGNORECASE,

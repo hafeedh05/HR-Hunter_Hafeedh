@@ -57,6 +57,8 @@ hr_talent:
 technical_ai:
   ai_ml:
     - ai engineer
+    - ai governance lead
+    - responsible ai lead
     - machine learning engineer
     - ml engineer
     - llm engineer
@@ -64,6 +66,9 @@ technical_ai:
     - generative ai engineer
     - nlp engineer
     - mlops engineer
+    - prompt engineer
+    - prompt strategist
+    - chief prompt strategist
 data:
   analytics:
     - data analyst
@@ -93,6 +98,8 @@ supply_chain:
     - supply planning manager
     - logistics manager
     - warehouse manager
+    - logistics optimization lead
+    - quantum logistics planner
 procurement_sourcing:
   procurement:
     - procurement manager

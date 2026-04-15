@@ -4,6 +4,7 @@ HR Hunter is a recruiter-facing sourcing app with a familiar project workflow an
 
 - Repo: [https://github.com/hafeedh05/HR-Hunter_Hafeedh.git](https://github.com/hafeedh05/HR-Hunter_Hafeedh.git)
 - Deploy handoff: [docs/codex-production-handoff.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/docs/codex-production-handoff.md)
+- Local validation note: [docs/local-transformer-validation-20260415.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/docs/local-transformer-validation-20260415.md)
 
 ## Current Release Reality
 
@@ -148,13 +149,27 @@ This release includes the following practical changes:
 
 ## Current Laptop Benchmark Baseline
 
-These are the latest local transformer-first benchmark numbers that should be treated as the working baseline to match or improve:
+The current app-level local validation projects and baselines are:
 
-- Supply Chain Manager: `282 returned / 105 verified / 164 review / 13 reject` in `32.26s`
-- AI Engineer: `300 returned / 11 verified / 289 review / 0 reject` in `146.38s`
-- Chief Executive Officer (CEO): `300 returned / 10 verified / 290 review / 0 reject` in `165.69s`
+- Supply Chain Manager: `300 returned / 182 verified / 118 review / 0 reject`
+- AI Engineer: `300 returned / 78 verified / 222 review / 0 reject`
+- Chief Executive Officer (CEO): `300 returned / 36 verified / 264 review / 0 reject`
+- Project Architect: `300 returned / 136 verified / 164 review / 0 reject`
+- Senior Accountant: `300 returned / 182 verified / 118 review / 0 reject`
 
-These numbers are not universal guarantees. They are the current reference points for teammate verification and production smoke comparison.
+These are the local app baselines the deployment verifier should try to match approximately, not necessarily exactly.
+
+For the exact hunt briefs and saved run IDs, use:
+
+- `docs/local-transformer-validation-20260415.md`
+
+## Current Family Coverage
+
+The transformer taxonomy currently has:
+
+- `31` top-level families
+
+Coverage is broad at the family-mapping level, but quality is still uneven family by family.
 
 ## Known Production Gotchas
 
@@ -168,3 +183,8 @@ These numbers are not universal guarantees. They are the current reference point
 - Do not present this release as universal coverage for every role family.
 - Keep classic fallback internal.
 - Use the safe families above for demos and early client positioning.
+- Current local quality work also includes:
+  - family-history-aware query expansion
+  - family-history-aware verifier thresholds
+  - stricter company/name sanitation
+  - app-level retrieval widening so large requests like `300` over-retrieve upstream and fill more often

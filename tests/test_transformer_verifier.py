@@ -104,3 +104,60 @@ def test_transformer_verifier_keeps_dense_role_candidate_in_review_without_compa
     verified = verify_candidate(candidate, brief)
     assert verified.verification_status == "review"
     assert "missing_current_company_confirmation" in verified.diagnostics
+
+
+def test_transformer_verifier_keeps_executive_candidate_in_review_without_company_proof() -> None:
+    brief = SearchBrief(
+        role_title="Chief Executive Officer (CEO)",
+        titles=["Chief Executive Officer (CEO)", "CEO"],
+        countries=["United Arab Emirates"],
+        cities=["Dubai"],
+    )
+    candidate = CandidateEntity(
+        full_name="Ahmad Al Mohdar",
+        canonical_key="ahmad-al-mohdar",
+        current_title="Chief Executive Officer",
+        current_company="",
+        current_location="Dubai",
+        role_family="executive",
+        title_match=True,
+        company_match=False,
+        location_match=True,
+        current_role_proof_count=2,
+        current_company_confirmed=False,
+        current_title_confirmed=True,
+        current_location_confirmed=True,
+        title_match_score=0.95,
+        company_match_score=0.2,
+        location_match_score=0.84,
+        currentness_score=0.9,
+        source_trust_score=0.92,
+        score=74.5,
+        evidence=[
+            EvidenceRecord(
+                source_url="https://www.linkedin.com/in/ahmad-al-mohdar",
+                source_domain="linkedin.com",
+                source_type="scrapingbee_google",
+                page_title="Ahmad Al Mohdar | Chief Executive Officer",
+                page_snippet="Chief Executive Officer in Dubai",
+                full_name="Ahmad Al Mohdar",
+                current_title="Chief Executive Officer",
+                current_company="",
+                current_location="Dubai",
+                role_family="executive",
+                title_match=True,
+                company_match=False,
+                location_match=True,
+                current_role_signal=True,
+                confidence=0.92,
+                title_confidence=0.94,
+                company_confidence=0.18,
+                location_confidence=0.84,
+                currentness_confidence=0.88,
+                freshness_confidence=0.7,
+            )
+        ],
+    )
+    verified = verify_candidate(candidate, brief)
+    assert verified.verification_status == "review"
+    assert "missing_current_company_confirmation" in verified.diagnostics

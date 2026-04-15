@@ -33,15 +33,21 @@ This document is the deploy handoff for the current release cut from:
 - startup compatibility fix for workspace state loading
 - legacy saved-run compatibility fix so older project runs still load
 
-## Current Transformer Benchmark Baseline
+## Current Transformer App Baseline
 
-Use these local transformer-first benchmark numbers as the reference baseline for deployment verification and post-deploy comparisons:
+Use these saved local app-project results as the reference baseline for deployment verification and post-deploy comparisons:
 
-- Supply Chain Manager: `282 returned / 105 verified / 164 review / 13 reject` in `32.26s`
-- AI Engineer: `300 returned / 11 verified / 289 review / 0 reject` in `146.38s`
-- Chief Executive Officer (CEO): `300 returned / 10 verified / 290 review / 0 reject` in `165.69s`
+- Supply Chain Manager: `300 returned / 182 verified / 118 review / 0 reject`
+- AI Engineer: `300 returned / 78 verified / 222 review / 0 reject`
+- Chief Executive Officer (CEO): `300 returned / 36 verified / 264 review / 0 reject`
+- Project Architect: `300 returned / 136 verified / 164 review / 0 reject`
+- Senior Accountant: `300 returned / 182 verified / 118 review / 0 reject`
 
-Post-deploy validation should try to match or improve these numbers on equivalent briefs. If production is materially worse, treat it as a runtime/config/dependency issue before assuming model quality changed.
+Post-deploy validation should try to land in the same general band on equivalent briefs. Exact matching is not required.
+
+Use the exact local brief definitions here:
+
+- `docs/local-transformer-validation-20260415.md`
 
 ## What This Release Does Not Claim
 
@@ -210,19 +216,30 @@ In browser:
 If asked to do a deeper validation sweep after deploy:
 
 1. back up the current production DB/state first
-2. delete old project records only after backup is confirmed
-3. create fresh transformer-mode test projects for:
+2. verify the current live project list and only delete old project records if explicitly instructed after backup is confirmed
+3. create or refresh these transformer-mode test projects:
    - Supply Chain Manager
    - AI Engineer
    - Chief Executive Officer (CEO)
-4. run all three and record:
+   - Project Architect
+   - Senior Accountant
+4. use the exact briefs from `docs/local-transformer-validation-20260415.md`
+5. run all five and record:
    - runtime
    - returned
    - verified
    - needs review
    - rejected
    - execution backend
-5. compare those numbers against the benchmark baseline above
+6. compare those numbers against the local app baseline above
+
+### Important Comparison Rule
+
+- similar results are acceptable
+- exact numerical matching is not required
+- backend must be `transformer_v2`
+- candidate target should still land at `300`
+- verified/review mix should be in the same general range
 
 ## Rollback
 

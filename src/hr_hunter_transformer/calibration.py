@@ -143,6 +143,8 @@ def _iter_bootstrap_training_rows(report_dir: Path | None = None) -> list[tuple[
             payload = json.loads(report_path.read_text(encoding="utf-8"))
         except Exception:
             continue
+        if not isinstance(payload, dict):
+            continue
         candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
         if len(candidates) < 20:
             continue

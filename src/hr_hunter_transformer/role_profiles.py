@@ -42,12 +42,42 @@ def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9+/#&.-]+", " ", str(value or "").lower())).strip()
 
 
-def infer_role_family(*values: str) -> str:
+def infer_role_family_with_confidence(*values: str) -> tuple[str, float]:
     haystack = " ".join(normalize_text(value) for value in values if str(value).strip())
+    if not haystack:
+        return "other", 0.0
+    haystack_tokens = set(token for token in haystack.split(" ") if token)
+    best_family = "other"
+    best_score = 0.0
     for family, hints in ROLE_FAMILIES.items():
-        if any(normalize_text(hint) in haystack for hint in hints):
-            return family
-    return "other"
+        family_score = 0.0
+        for hint in hints:
+            normalized_hint = normalize_text(hint)
+            if not normalized_hint:
+                continue
+            if normalized_hint in haystack:
+                family_score = max(family_score, 1.0 if normalized_hint == haystack else 0.92)
+                continue
+            hint_tokens = set(token for token in normalized_hint.split(" ") if token)
+            if not hint_tokens:
+                continue
+            overlap = len(haystack_tokens & hint_tokens)
+            if overlap <= 0:
+                continue
+            family_score = max(
+                family_score,
+                min(0.88, 0.34 + 0.54 * (overlap / max(1, len(hint_tokens)))),
+            )
+        if family_score > best_score:
+            best_family = family
+            best_score = family_score
+    if best_score < 0.34:
+        return "other", round(best_score, 4)
+    return best_family, round(best_score, 4)
+
+
+def infer_role_family(*values: str) -> str:
+    return infer_role_family_with_confidence(*values)[0]
 
 
 def role_family_hints(role_family: str) -> tuple[str, ...]:

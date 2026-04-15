@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 
 from hr_hunter_transformer.models import CandidateEntity, EvidenceRecord
@@ -26,7 +27,43 @@ def _looks_like_bad_company(value: str, current_title: str = "") -> bool:
     lowered = cleaned.lower()
     if not cleaned:
         return True
-    if lowered in {"at", "dr", "experience", "educational", "profile"}:
+    if lowered in {
+        "at",
+        "@",
+        "&",
+        "+",
+        "dr",
+        "mr",
+        "mrs",
+        "ms",
+        "he",
+        "she",
+        "we",
+        "experience",
+        "educational",
+        "profile",
+        "company",
+        "present",
+        "current",
+        "ceo",
+        "(ceo)",
+        "dubai",
+        "abu dhabi",
+        "riyadh",
+        "jeddah",
+        "united arab emirates",
+        "uae",
+        "saudi arabia",
+        "mea",
+        "mena",
+        "gcc",
+    }:
+        return True
+    if len(cleaned) <= 2:
+        return True
+    if re.fullmatch(r"[()@&+\-]+", cleaned):
+        return True
+    if lowered.startswith("i ") or lowered.startswith("we "):
         return True
     if any(month in lowered for month in ("jan ", "feb ", "mar ", "apr ", "may ", "jun ", "jul ", "aug ", "sep ", "oct ", "nov ", "dec ")):
         return True
@@ -36,7 +73,13 @@ def _looks_like_bad_company(value: str, current_title: str = "") -> bool:
         return True
     if current_title and normalize_text(cleaned) == normalize_text(current_title):
         return True
+    if any(phrase in lowered for phrase in ("chief executive officer", "machine learning engineer", "ai engineer", "llm engineer")):
+        return True
     if " is a " in lowered or "manager at" in lowered or "engineer at" in lowered or "planner at" in lowered:
+        return True
+    if re.search(r"\b(manager|engineer|planner|director|officer|executive|specialist|lead)\b", lowered):
+        return True
+    if "teach machines" in lowered or "how to learn" in lowered:
         return True
     return False
 

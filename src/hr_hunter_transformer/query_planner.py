@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from hr_hunter_transformer.models import QueryPlan, QueryTask, RoleUnderstanding, SearchBrief
 from hr_hunter_transformer.query_profiles import resolve_query_profile
-from hr_hunter_transformer.role_profiles import infer_role_family, normalize_text, role_subfamily, title_variants
+from hr_hunter_transformer.role_profiles import (
+    infer_role_family_with_confidence,
+    normalize_text,
+    role_subfamily,
+    title_variants,
+)
 
 
 SOURCE_PACK_QUERIES: dict[str, tuple[str, ...]] = {
@@ -15,12 +20,24 @@ SOURCE_PACK_QUERIES: dict[str, tuple[str, ...]] = {
     "marketing": ("site:linkedin.com/in", "site:people.bayt.com"),
     "design": ("site:linkedin.com/in", "site:behance.net", "site:archinect.com", "site:architizer.com"),
     "hr": ("site:linkedin.com/in", "site:people.bayt.com"),
+    "sales": ("site:linkedin.com/in", "site:people.bayt.com", "site:apollo.io"),
+    "customer": ("site:linkedin.com/in", "site:people.bayt.com", "site:theorg.com"),
+    "healthcare": ("site:linkedin.com/in", "site:doximity.com", "site:healthgrades.com", "site:apollo.io"),
+    "legal": ("site:linkedin.com/in", "site:martindale.com", "site:theorg.com"),
+    "education": ("site:linkedin.com/in", "site:scholar.google.com", "site:researchgate.net"),
+    "research": ("site:researchgate.net", "site:scholar.google.com", "site:linkedin.com/in"),
     "general": ("site:linkedin.com/in", "site:people.bayt.com", "site:theorg.com"),
 }
 
 
 def understand_role(brief: SearchBrief) -> RoleUnderstanding:
-    family = infer_role_family(brief.role_title, *brief.titles, *brief.required_keywords, *brief.preferred_keywords)
+    family, family_confidence = infer_role_family_with_confidence(
+        brief.role_title,
+        *brief.titles,
+        *brief.required_keywords,
+        *brief.preferred_keywords,
+        *brief.industry_keywords,
+    )
     subfamily = role_subfamily(family, brief.role_title)
     variants = title_variants(family, brief.role_title, brief.titles)
     adjacent = variants[1:6]
@@ -31,7 +48,7 @@ def understand_role(brief: SearchBrief) -> RoleUnderstanding:
         normalized_title=normalized_title,
         role_family=family,
         role_subfamily=subfamily,
-        family_confidence=0.92 if family != "other" else 0.55,
+        family_confidence=family_confidence,
         title_variants=variants[:12],
         adjacent_titles=adjacent,
         inferred_skills=inferred_skills,
@@ -42,7 +59,11 @@ def understand_role(brief: SearchBrief) -> RoleUnderstanding:
 
 def build_query_plan(brief: SearchBrief) -> QueryPlan:
     understanding = understand_role(brief)
-    profile = resolve_query_profile(understanding.role_family, brief.target_count)
+    profile = resolve_query_profile(
+        understanding.role_family,
+        brief.target_count,
+        family_confidence=understanding.family_confidence,
+    )
     geographies = [value for value in [*brief.cities[:6], *brief.countries[:6]] if str(value).strip()] or [""]
     companies = [value for value in brief.company_targets[:8] if str(value).strip()]
     skills = [value for value in understanding.inferred_skills[:6] if str(value).strip()]
@@ -74,15 +95,23 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
 
     for title in exact_titles:
         for geography in geographies[:4]:
-            query = " ".join(part for part in [f'"{title}"', f'"{geography}"' if geography else "", *profile.family_terms[:1]] if part)
+            query = " ".join(
+                part
+                for part in [f'"{title}"', f'"{geography}"' if geography else "", *profile.family_terms[: profile.family_term_budget]]
+                if part
+            )
             add(query, "exact_title_geo", "general")
-            for site in source_sites[:4]:
+            for site in source_sites[: profile.source_site_budget]:
                 add(f'{site} "{title}" "{geography}"' if geography else f'{site} "{title}"', "exact_title_source", site)
 
     for title in adjacent_titles:
         for geography in geographies[:3]:
             add(
-                " ".join(part for part in [f'"{title}"', f'"{geography}"' if geography else "", *profile.family_terms[:1]] if part),
+                " ".join(
+                    part
+                    for part in [f'"{title}"', f'"{geography}"' if geography else "", *profile.family_terms[: profile.family_term_budget]]
+                    if part
+                ),
                 "adjacent_title_geo",
                 "general",
             )
