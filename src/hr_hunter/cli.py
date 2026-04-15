@@ -19,6 +19,7 @@ from hr_hunter.output import (
     write_report,
 )
 from hr_hunter.ranker import train_learned_ranker
+from hr_hunter.runtime_maintenance import RuntimeMaintenanceConfig, run_runtime_maintenance
 from hr_hunter.sheets import append_report_to_sheet
 from hr_hunter.state import persist_search_run
 from hr_hunter.verifier import PublicEvidenceVerifier, refresh_report_summary
@@ -199,6 +200,31 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser = subparsers.add_parser("serve", help="Serve the optional FastAPI app.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
+
+    maintenance_parser = subparsers.add_parser(
+        "runtime-maintenance",
+        help="Prune old releases, backups, and orphaned artifacts safely.",
+    )
+    maintenance_parser.add_argument(
+        "--workspace-root",
+        default=".",
+        help="Workspace root containing current/, releases/, backups/, and shared/.",
+    )
+    maintenance_parser.add_argument("--keep-releases", type=int, default=8, help="Number of release directories to keep, including the active release.")
+    maintenance_parser.add_argument("--keep-backups", type=int, default=30, help="Number of backup directories to keep regardless of age.")
+    maintenance_parser.add_argument(
+        "--backup-min-age-days",
+        type=int,
+        default=14,
+        help="Only prune backup directories older than this many days.",
+    )
+    maintenance_parser.add_argument(
+        "--artifact-max-age-days",
+        type=int,
+        default=45,
+        help="Only prune orphaned JSON/CSV artifacts older than this many days.",
+    )
+    maintenance_parser.add_argument("--dry-run", action="store_true", help="Report what would be deleted without deleting it.")
 
     return parser
 
@@ -436,6 +462,22 @@ def run_server(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_runtime_maintenance_command(args: argparse.Namespace) -> int:
+    load_env_file(Path(".env"))
+    result = run_runtime_maintenance(
+        RuntimeMaintenanceConfig(
+            workspace_root=Path(args.workspace_root).expanduser().resolve(),
+            keep_releases=args.keep_releases,
+            keep_backups=args.keep_backups,
+            backup_min_age_days=args.backup_min_age_days,
+            artifact_max_age_days=args.artifact_max_age_days,
+            dry_run=bool(args.dry_run),
+        )
+    )
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -455,6 +497,8 @@ def main() -> int:
         return run_train_ranker(args)
     if args.command == "serve":
         return run_server(args)
+    if args.command == "runtime-maintenance":
+        return run_runtime_maintenance_command(args)
     raise RuntimeError(f"Unsupported command: {args.command}")
 
 

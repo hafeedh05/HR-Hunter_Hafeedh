@@ -1,0 +1,17 @@
+[Unit]
+Description=HR Hunter recruiter app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/srv/hr-hunter/current
+EnvironmentFile=/srv/hr-hunter/shared/env/hr-hunter.env
+Environment=PYTHONPATH=/srv/hr-hunter/current/src
+ExecStart=/srv/hr-hunter/.venv/bin/python -m hr_hunter.cli serve --host 127.0.0.1 --port 8765
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -153,6 +153,20 @@ On the VM:
 5. Point the service to the new release
 6. Restart the service
 
+Recommended stable runtime layout:
+
+- service `WorkingDirectory` should be `/srv/hr-hunter/current`
+- service `PYTHONPATH` should be `/srv/hr-hunter/current/src`
+- service `ExecStart` should use a shared venv at `/srv/hr-hunter/.venv`
+- deploy should only repoint `/srv/hr-hunter/current` and restart the service
+- old releases should be pruned automatically after deploy confidence is high
+
+The repo includes systemd templates for this under:
+
+- `ops/systemd/hr-hunter.service`
+- `ops/systemd/hr-hunter-maintenance.service`
+- `ops/systemd/hr-hunter-maintenance.timer`
+
 Example service commands:
 
 ```bash
@@ -209,6 +223,21 @@ If deploy is bad:
 4. keep the failed release on disk for inspection
 
 Do not delete the previous release until rollback confidence is high.
+
+## Runtime Retention
+
+The VM should not grow forever. Use `hr-hunter runtime-maintenance` with a daily timer.
+
+Recommended defaults:
+
+- keep `8` releases including the active release
+- keep `30` backup directories
+- only prune backups older than `14` days
+- prune orphaned JSON or CSV artifacts older than `45` days
+- vacuum systemd journals to `14` days
+- clean apt cache after maintenance
+
+This is designed to keep rollback headroom while preventing release and artifact sprawl.
 
 ## Do Not Change In This Release
 

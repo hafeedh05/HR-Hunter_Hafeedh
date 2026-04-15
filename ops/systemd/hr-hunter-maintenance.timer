@@ -1,0 +1,11 @@
+[Unit]
+Description=Run HR Hunter runtime maintenance daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=15m
+Persistent=true
+Unit=hr-hunter-maintenance.service
+
+[Install]
+WantedBy=timers.target
