@@ -115,14 +115,7 @@ class ScrapingBeeSearchConfig:
 class ScrapingBeeTransformerRetriever:
     def __init__(self, config: ScrapingBeeSearchConfig | None = None) -> None:
         self.config = config or ScrapingBeeSearchConfig(api_key=resolve_secret("SCRAPINGBEE_API_KEY"))
-        self._usage: dict[str, int] = {
-            "queries_total": 0,
-            "queries_completed": 0,
-            "request_pages_attempted": 0,
-            "request_pages_succeeded": 0,
-            "retry_count": 0,
-            "raw_found": 0,
-        }
+        self._usage: dict[str, Any] = self._base_usage(total_queries=0, raw_target=0)
 
     def is_configured(self) -> bool:
         return bool(self.config.api_key)
@@ -141,6 +134,167 @@ class ScrapingBeeTransformerRetriever:
             if normalize_text(task.query_text) == normalized:
                 return max(1, int(task.page_budget or query_plan.pages_per_query))
         return max(1, int(query_plan.pages_per_query))
+
+    def _base_usage(self, *, total_queries: int, raw_target: int) -> dict[str, Any]:
+        return {
+            "queries_total": int(total_queries),
+            "queries_completed": 0,
+            "request_pages_attempted": 0,
+            "request_pages_succeeded": 0,
+            "retry_count": 0,
+            "raw_found": 0,
+            "unique_hits": 0,
+            "raw_target": int(raw_target),
+            "batches_run": 0,
+            "last_growth_query": 0,
+            "recent_batch_unique_hits": [],
+            "early_stop_triggered": False,
+            "stop_reason": "",
+        }
+
+    def _adaptive_raw_target(self, brief: SearchBrief, plan: QueryPlan) -> int:
+        target = max(brief.target_count, 1)
+        complexity = plan.role_understanding.search_complexity
+        if complexity == "dense":
+            multiplier = 2.6
+            floor = 180
+        elif complexity == "hard":
+            multiplier = 1.8
+            floor = 120
+        else:
+            multiplier = 2.2
+            floor = 150
+        return max(floor, int(round(target * multiplier)))
+
+    def _minimum_queries_before_stop(self, plan: QueryPlan) -> int:
+        parallel = max(1, int(plan.parallel_requests or self.config.parallel_requests))
+        complexity = plan.role_understanding.search_complexity
+        if complexity == "hard":
+            return max(12, parallel * 3)
+        if complexity == "dense":
+            return max(10, parallel * 2)
+        return max(12, parallel * 2)
+
+    def _stagnation_window(self, plan: QueryPlan) -> int:
+        parallel = max(1, int(plan.parallel_requests or self.config.parallel_requests))
+        complexity = plan.role_understanding.search_complexity
+        if complexity == "hard":
+            return max(10, parallel * 2)
+        if complexity == "dense":
+            return max(6, parallel)
+        return max(8, parallel)
+
+    def _batch_size(self, plan: QueryPlan) -> int:
+        parallel = max(1, int(plan.parallel_requests or self.config.parallel_requests))
+        complexity = plan.role_understanding.search_complexity
+        if complexity == "hard":
+            return max(parallel, min(12, parallel + 2))
+        if complexity == "dense":
+            return max(parallel, min(24, parallel * 2))
+        return max(parallel, min(18, parallel * 2))
+
+    def _query_priority(self, task: QueryTask, plan: QueryPlan) -> int:
+        base_priorities = {
+            "exact_title_source": 120,
+            "exact_title_geo": 112,
+            "skill_geo": 98,
+            "industry_exact": 90,
+            "company_geo": 82,
+            "company_exact": 78,
+            "adjacent_title_geo": 40,
+        }
+        score = int(base_priorities.get(task.query_type, 50))
+        query_text = normalize_text(task.query_text)
+        role_family = plan.role_understanding.role_family
+        complexity = plan.role_understanding.search_complexity
+
+        if "site:linkedin.com/in" in query_text or "site:ae.linkedin.com/in" in query_text or "site:sa.linkedin.com/in" in query_text:
+            score += 10
+        if "site:people.bayt.com" in query_text:
+            score += 6
+        if "site:theorg.com" in query_text:
+            score += 4 if role_family == "executive" else 1
+        if any(site in query_text for site in ("site:github.com", "site:huggingface.co", "site:kaggle.com", "site:stackoverflow.com/users")):
+            score += 8 if role_family == "technical_ai" else 2
+
+        if complexity == "hard":
+            if task.query_type.startswith("exact_title"):
+                score += 10
+            if task.query_type.startswith("company_"):
+                score -= 8
+            if task.query_type.startswith("adjacent_"):
+                score -= 12
+        elif complexity == "dense":
+            if task.query_type.startswith("company_"):
+                score += 4
+            if task.query_type.startswith("adjacent_"):
+                score -= 8
+        else:
+            if task.query_type.startswith("adjacent_"):
+                score -= 6
+
+        score += min(4, max(0, int(task.page_budget or 1) - 1) * 2)
+        return score
+
+    def _prioritize_tasks(self, plan: QueryPlan) -> list[QueryTask]:
+        return sorted(
+            plan.queries,
+            key=lambda task: (-self._query_priority(task, plan), normalize_text(task.query_text)),
+        )
+
+    def _effective_page_budget(self, task: QueryTask, brief: SearchBrief, plan: QueryPlan) -> int:
+        page_budget = max(1, int(task.page_budget or plan.pages_per_query))
+        queries_completed = int(self._usage.get("queries_completed", 0) or 0)
+        unique_hits = int(self._usage.get("unique_hits", 0) or 0)
+        complexity = plan.role_understanding.search_complexity
+
+        if complexity == "hard":
+            if (
+                queries_completed >= max(4, int(plan.parallel_requests or 1))
+                and unique_hits < max(40, int(brief.target_count * 0.25))
+                and task.query_type in {"exact_title_source", "exact_title_geo", "skill_geo", "industry_exact"}
+            ):
+                return min(3, page_budget + 1)
+        elif complexity == "balanced":
+            if (
+                queries_completed >= max(6, int(plan.parallel_requests or 1))
+                and unique_hits < max(60, int(brief.target_count * 0.35))
+                and task.query_type in {"exact_title_source", "skill_geo"}
+            ):
+                return min(2, page_budget + 1)
+        return page_budget
+
+    def _record_unique_hits(self, query_hits: list[RawSearchHit], unique_urls: set[str]) -> int:
+        fresh = 0
+        for hit in query_hits:
+            normalized_url = normalize_text(hit.url)
+            if not normalized_url or normalized_url in unique_urls:
+                continue
+            unique_urls.add(normalized_url)
+            fresh += 1
+        self._usage["unique_hits"] = int(len(unique_urls))
+        return fresh
+
+    def _should_stop_early(self, plan: QueryPlan) -> str:
+        total_queries = int(self._usage.get("queries_total", 0) or 0)
+        queries_completed = int(self._usage.get("queries_completed", 0) or 0)
+        unique_hits = int(self._usage.get("unique_hits", 0) or 0)
+        raw_target = int(self._usage.get("raw_target", 0) or 0)
+        if queries_completed >= total_queries or unique_hits < raw_target:
+            return ""
+
+        minimum_queries = min(total_queries, self._minimum_queries_before_stop(plan))
+        if queries_completed < minimum_queries:
+            return ""
+
+        stale_queries = max(0, queries_completed - int(self._usage.get("last_growth_query", 0) or 0))
+        if stale_queries >= self._stagnation_window(plan):
+            return f"plateau_after_{queries_completed}_queries"
+
+        recent_batches = [int(value) for value in list(self._usage.get("recent_batch_unique_hits", []))[-2:]]
+        if len(recent_batches) >= 2 and sum(recent_batches) <= max(2, int(plan.parallel_requests or 1) // 2):
+            return f"low_yield_after_{queries_completed}_queries"
+        return ""
 
     def _legacy_build_queries(self, brief: SearchBrief) -> list[str]:
         titles = brief.titles or [brief.role_title]
@@ -340,62 +494,82 @@ class ScrapingBeeTransformerRetriever:
         if not self.is_configured():
             raise RuntimeError("Missing SCRAPINGBEE_API_KEY for transformer retriever.")
         plan = self._resolve_plan(brief, query_plan)
-        queries = [task.query_text for task in plan.queries]
-        self._usage = {
-            "queries_total": len(queries),
-            "queries_completed": 0,
-            "request_pages_attempted": 0,
-            "request_pages_succeeded": 0,
-            "retry_count": 0,
-            "raw_found": 0,
-        }
+        ordered_tasks = self._prioritize_tasks(plan)
+        raw_target = self._adaptive_raw_target(brief, plan)
+        self._usage = self._base_usage(total_queries=len(ordered_tasks), raw_target=raw_target)
         timeout = httpx.Timeout(self.config.timeout_seconds)
         semaphore = asyncio.Semaphore(plan.parallel_requests)
         hits: list[RawSearchHit] = []
+        unique_urls: set[str] = set()
+        executed_queries: list[str] = []
+        batch_size = min(len(ordered_tasks), self._batch_size(plan)) or 1
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            async def run_query(task: QueryTask) -> tuple[str, list[RawSearchHit]]:
+            async def run_query(task: QueryTask) -> tuple[QueryTask, int, list[RawSearchHit]]:
                 async with semaphore:
-                    return task.query_text, await self._fetch_query(
-                        client,
-                        task.query_text,
-                        page_budget=max(1, int(task.page_budget or plan.pages_per_query)),
-                    )
+                    page_budget = self._effective_page_budget(task, brief, plan)
+                    try:
+                        query_hits = await self._fetch_query(
+                            client,
+                            task.query_text,
+                            page_budget=page_budget,
+                        )
+                    except Exception:
+                        query_hits = []
+                    return task, page_budget, query_hits
 
-            tasks = [asyncio.create_task(run_query(task)) for task in plan.queries]
-            for completed_task in asyncio.as_completed(tasks):
-                try:
-                    query, query_hits = await completed_task
-                except Exception:
-                    query = ""
-                    query_hits = []
-                self._usage["queries_completed"] += 1
-                hits.extend(query_hits)
-                if progress_callback:
-                    progress_callback(
-                        {
-                            "stage": "retrieval_running",
-                            "message": (
-                                f"Running transformer retrieval. "
-                                f"{self._usage['queries_completed']}/{self._usage['queries_total']} queries complete."
-                            ),
-                            "queries_total": self._usage["queries_total"],
-                            "queries_completed": self._usage["queries_completed"],
-                            "queries_in_flight": max(0, self._usage["queries_total"] - self._usage["queries_completed"]),
-                            "raw_found": self._usage["raw_found"],
-                            "percent": max(
-                                8,
-                                min(
-                                    72,
-                                    8 + int(round((self._usage["queries_completed"] / max(1, self._usage["queries_total"])) * 64)),
+            for start in range(0, len(ordered_tasks), batch_size):
+                batch_tasks = ordered_tasks[start : start + batch_size]
+                self._usage["batches_run"] = int(self._usage.get("batches_run", 0) or 0) + 1
+                batch_new_unique_hits = 0
+                tasks = [asyncio.create_task(run_query(task)) for task in batch_tasks]
+                for completed_task in asyncio.as_completed(tasks):
+                    task, _page_budget, query_hits = await completed_task
+                    executed_queries.append(task.query_text)
+                    self._usage["queries_completed"] = int(self._usage.get("queries_completed", 0) or 0) + 1
+                    hits.extend(query_hits)
+                    fresh_unique_hits = self._record_unique_hits(query_hits, unique_urls)
+                    if fresh_unique_hits > 0:
+                        self._usage["last_growth_query"] = int(self._usage["queries_completed"])
+                    batch_new_unique_hits += fresh_unique_hits
+                    if progress_callback:
+                        progress_callback(
+                            {
+                                "stage": "retrieval_running",
+                                "message": (
+                                    f"Running transformer retrieval. "
+                                    f"{self._usage['queries_completed']}/{self._usage['queries_total']} planned queries complete."
                                 ),
-                            ),
-                            "current_query": query,
-                        }
-                    )
-        return queries, hits
+                                "queries_total": self._usage["queries_total"],
+                                "queries_completed": self._usage["queries_completed"],
+                                "queries_in_flight": max(0, self._usage["queries_total"] - self._usage["queries_completed"]),
+                                "raw_found": self._usage["raw_found"],
+                                "unique_hits": self._usage["unique_hits"],
+                                "percent": max(
+                                    8,
+                                    min(
+                                        72,
+                                        8 + int(round((self._usage["queries_completed"] / max(1, self._usage["queries_total"])) * 64)),
+                                    ),
+                                ),
+                                "current_query": task.query_text,
+                            }
+                        )
 
-    def usage_summary(self) -> dict[str, int]:
+                recent_batches = list(self._usage.get("recent_batch_unique_hits", []))
+                recent_batches.append(int(batch_new_unique_hits))
+                self._usage["recent_batch_unique_hits"] = recent_batches[-4:]
+                stop_reason = self._should_stop_early(plan)
+                if stop_reason:
+                    self._usage["early_stop_triggered"] = True
+                    self._usage["stop_reason"] = stop_reason
+                    break
+
+        if not self._usage.get("stop_reason"):
+            self._usage["stop_reason"] = "planned_queries_exhausted"
+        return executed_queries, hits
+
+    def usage_summary(self) -> dict[str, Any]:
         return dict(self._usage)
 
     def search(self, brief: SearchBrief) -> tuple[list[str], list[RawSearchHit]]:

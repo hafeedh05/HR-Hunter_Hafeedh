@@ -124,4 +124,4 @@ def test_append_report_to_sheet_filters_history_and_existing_sheet_rows(tmp_path
     assert result["appended_candidate_count"] == 1
     assert append_csv_path.exists()
     assert len(worksheet.values) == 3
-    assert worksheet.values[-1][CSV_FIELDNAMES.index("full_name")] == "New Ireland FMCG"
+    assert worksheet.values[-1][CSV_FIELDNAMES.index("Candidate Name")] == "New Ireland FMCG"

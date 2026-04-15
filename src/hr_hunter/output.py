@@ -7,7 +7,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Set, Tuple
 
-from hr_hunter.candidate_order import candidate_priority_sort_tuple
+from hr_hunter.candidate_order import (
+    candidate_is_verification_ready,
+    candidate_priority_sort_tuple,
+)
 from hr_hunter.features import looks_like_non_company_fragment
 from hr_hunter.identity import candidate_identity_keys, candidate_primary_key
 from hr_hunter.models import (
@@ -77,6 +80,7 @@ SANITIZED_BRIEF_KEYS = {
     "search_profile",
     "anchors",
     "brief_clarifications",
+    "provider_settings",
     "ui_meta",
     "limit",
 }
@@ -88,12 +92,22 @@ SANITIZED_SUMMARY_KEYS = {
     "verified_count",
     "review_count",
     "reject_count",
+    "role_title",
+    "titles",
+    "company_match_mode",
     "role_family",
     "role_subfamily",
     "execution_backend",
     "query_count",
     "raw_found",
     "unique_after_dedupe",
+    "target_range",
+    "provider_order",
+    "strategy_runs",
+    "strategy_count",
+    "primary_brief_id",
+    "excluded_seen_count",
+    "verification",
     "quality_diagnostics",
     "top_locations",
     "pipeline_metrics",
@@ -104,6 +118,27 @@ SANITIZED_SUMMARY_KEYS = {
     "ranking_model_versions",
     "generated_at",
 }
+
+LEGACY_SCOPE_FIELDS = {
+    "in_scope_target",
+    "verification_scope_target",
+    "scope_first_enabled",
+    "scope_first_in_scope_target",
+    "scope_first_in_scope_achieved",
+    "verification_shortlist_scope_count",
+    "verification_shortlist_precise_scope_count",
+    "in_scope_count",
+    "precise_in_scope_count",
+    "scope_counts",
+}
+
+
+def _strip_legacy_scope_fields(payload: Dict[str, object]) -> Dict[str, object]:
+    return {
+        str(key): value
+        for key, value in payload.items()
+        if str(key) not in LEGACY_SCOPE_FIELDS and str(key) != "scope_target"
+    }
 
 
 def sanitize_brief_payload(payload: Dict[str, object] | None) -> Dict[str, object]:
@@ -120,7 +155,14 @@ def sanitize_brief_payload(payload: Dict[str, object] | None) -> Dict[str, objec
         elif isinstance(value, list):
             cleaned[key] = [item for item in value if str(item).strip()]
         elif isinstance(value, dict):
-            cleaned[key] = value
+            nested = _strip_legacy_scope_fields(dict(value))
+            if key == "provider_settings":
+                verification = nested.get("verification", {})
+                if isinstance(verification, dict):
+                    nested["verification"] = _strip_legacy_scope_fields(dict(verification))
+                cleaned[key] = nested
+            else:
+                cleaned[key] = nested
         elif value is not None:
             cleaned[key] = value
     return cleaned
@@ -133,7 +175,10 @@ def sanitize_report_summary(summary: Dict[str, object] | None) -> Dict[str, obje
     for key, value in summary.items():
         if key not in SANITIZED_SUMMARY_KEYS:
             continue
-        cleaned[key] = value
+        if isinstance(value, dict):
+            cleaned[key] = _strip_legacy_scope_fields(dict(value))
+        else:
+            cleaned[key] = value
     candidate_count = cleaned.get("candidate_count")
     if candidate_count is None and cleaned.get("returned_candidate_count") is not None:
         cleaned["candidate_count"] = cleaned.get("returned_candidate_count")
@@ -762,12 +807,10 @@ def build_reporting_summary(
         ),
         "weak": len([candidate for candidate in hydrated_candidates if candidate.qualification_tier == "weak"]),
     }
-    summary = dict(base_summary or {})
+    summary = sanitize_report_summary(dict(base_summary or {}))
     summary.update(
         {
             "candidate_count": len(hydrated_candidates),
-            "in_scope_count": scope_counts["in_scope"],
-            "precise_in_scope_count": scope_counts["precise_in_scope"],
             "title_match_count": scope_counts["title_match"],
             "market_match_count": scope_counts["market_match"],
             "verified_count": verification_counts["verified"],
@@ -778,7 +821,6 @@ def build_reporting_summary(
             "weak_count": qualification_counts["weak"],
             "verification_status_counts": verification_counts,
             "qualification_tier_counts": qualification_counts,
-            "scope_counts": scope_counts,
             "ranking_model_versions": sorted(
                 {
                     candidate.ranking_model_version
@@ -802,6 +844,12 @@ def build_scope_progress_counts(
         "title_match_count": len([candidate for candidate in hydrated_candidates if candidate.current_title_match]),
         "market_match_count": len([candidate for candidate in hydrated_candidates if _candidate_market_match(candidate)]),
     }
+
+
+def build_progress_counts(
+    candidates: Iterable[CandidateProfile],
+) -> Dict[str, int]:
+    return build_scope_progress_counts(candidates)
 
 
 def prioritize_verification_candidates(
@@ -857,6 +905,23 @@ def prepare_verification_candidate_order(
     )
 
 
+def prepare_verification_shortlist(
+    candidates: Iterable[CandidateProfile],
+    *,
+    brief: SearchBrief | None = None,
+    company_required: bool,
+    verification_limit: int,
+    scope_target: int = 0,
+) -> List[CandidateProfile]:
+    return prepare_verification_candidate_order(
+        candidates,
+        brief=brief,
+        company_required=company_required,
+        verification_limit=verification_limit,
+        scope_target=scope_target,
+    )
+
+
 def _diagnostic_issue(
     *,
     key: str,
@@ -901,6 +966,9 @@ def build_quality_diagnostics(
     verified_count = len([candidate for candidate in hydrated_candidates if candidate.verification_status == "verified"])
     review_count = len([candidate for candidate in hydrated_candidates if candidate.verification_status == "review"])
     reject_count = len([candidate for candidate in hydrated_candidates if candidate.verification_status == "reject"])
+    verification_ready_count = len(
+        [candidate for candidate in hydrated_candidates if candidate_is_verification_ready(candidate)]
+    )
     verified_rate = verified_count / max(1, total)
     review_rate = review_count / max(1, total)
     reject_rate = reject_count / max(1, total)
@@ -1237,6 +1305,7 @@ def build_quality_diagnostics(
         "headline": headline,
         "verified_rate": round(verified_rate, 3),
         "verified_count": verified_count,
+        "verification_ready_count": verification_ready_count,
         "review_count": review_count,
         "reject_count": reject_count,
         "raw_found": raw_found,
@@ -1257,7 +1326,7 @@ def filter_new_candidates(candidates: Iterable[CandidateProfile], seen_keys: Set
     return net_new
 
 
-def candidate_to_row(candidate: CandidateProfile, ordinal: int) -> Dict[str, object]:
+def candidate_to_row(candidate: CandidateProfile, ordinal: int = 1) -> Dict[str, object]:
     hydrated = hydrate_candidate_reporting(candidate)
     current_company = _best_display_company(hydrated)
     matched_companies = _clean_matched_companies(hydrated)

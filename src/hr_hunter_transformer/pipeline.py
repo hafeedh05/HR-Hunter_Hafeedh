@@ -112,7 +112,7 @@ class CandidateIntelligencePipeline:
         metrics = PipelineMetrics(
             raw_found=len(hits),
             extracted_records=len(records),
-            unique_candidates=len(candidates),
+            unique_candidates=len(entities),
             queries_planned=len(plan.queries),
             queries_completed=len(plan.queries),
             verified_count=verified_count,

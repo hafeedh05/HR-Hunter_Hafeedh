@@ -355,46 +355,48 @@ def _candidate_priority_bucket(
             return 0
         if current_company_match and title_match and market_match:
             return 1
-        if title_match and precise_market_match and anchor_supported:
+        if current_company_match and precise_market_match and (anchor_supported or strong_function_fit or strong_evidence):
             return 2
-        if title_match and market_match and anchor_supported:
+        if current_company_match and market_match:
             return 3
-        if current_company_match and precise_market_match:
+        if title_match and precise_market_match and anchor_supported:
             return 4
-        if title_match and precise_market_match:
+        if title_match and market_match and anchor_supported:
             return 5
-        if title_match and market_match:
+        if title_match and precise_market_match:
             return 6
-        if current_company_match and title_match:
+        if title_match and market_match:
             return 7
-        if history_company_match and title_match and market_match:
+        if current_company_match and title_match:
             return 8
-        if title_match and strong_function_fit and anchor_supported:
+        if history_company_match and title_match and market_match:
             return 9
-        if precise_market_match and strong_function_fit and strong_evidence:
+        if title_match and strong_function_fit and anchor_supported:
             return 10
-        if market_match and strong_function_fit and strong_evidence:
+        if precise_market_match and strong_function_fit and strong_evidence:
             return 11
-        if title_match:
+        if market_match and strong_function_fit and strong_evidence:
             return 12
-        if market_match and strong_function_fit:
+        if title_match:
             return 13
-        return 14
+        if market_match and strong_function_fit:
+            return 14
+        return 15
 
     if title_market_priority:
         if title_match and precise_market_match and anchor_supported:
             return 0
-        if title_match and market_match and anchor_supported:
-            return 1
-        if title_match and precise_market_match:
-            return 2
-        if title_match and market_match:
-            return 3
-        if title_match:
-            return 4
         if precise_market_match and strong_function_fit and strong_skill_fit:
-            return 5
+            return 1
+        if title_match and market_match and anchor_supported:
+            return 2
         if market_match and strong_function_fit:
+            return 3
+        if title_match and precise_market_match:
+            return 4
+        if title_match and market_match:
+            return 5
+        if title_match:
             return 6
         return 14
 
@@ -508,7 +510,11 @@ def candidate_priority_sort_tuple(
             name_key,
         )
     if phase_name == "verification":
+        title_priority = 0
+        if title_market_priority:
+            title_priority = 0 if bool(getattr(candidate, "current_title_match", False)) else 1
         return (
+            title_priority,
             bucket,
             -verification_likelihood_score,
             -industry_fit_score,
@@ -532,7 +538,6 @@ def candidate_priority_sort_tuple(
         )
     return (
         bucket,
-        status_rank,
         -industry_fit_score,
         -company_match_score,
         -current_function_fit,
@@ -546,6 +551,7 @@ def candidate_priority_sort_tuple(
         current_title_confirmed,
         -current_role_proof_count,
         market_rank,
+        status_rank,
         -location_match_score,
         -evidence_quality_score,
         -parser_confidence,

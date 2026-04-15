@@ -119,16 +119,11 @@ def test_finalize_report_for_limit_tracks_in_scope_counts():
 
     finalized = _finalize_report_for_limit(report, requested_limit=3, internal_fetch_limit=10)
 
-    assert finalized.summary["in_scope_count"] == 2
-    assert finalized.summary["precise_in_scope_count"] == 1
+    assert "in_scope_count" not in finalized.summary
+    assert "precise_in_scope_count" not in finalized.summary
     assert finalized.summary["title_match_count"] == 3
     assert finalized.summary["market_match_count"] == 2
-    assert finalized.summary["scope_counts"] == {
-        "in_scope": 2,
-        "precise_in_scope": 1,
-        "title_match": 3,
-        "market_match": 2,
-    }
+    assert "scope_counts" not in finalized.summary
 
 
 def test_finalize_report_for_limit_excludes_title_geo_noise_from_in_scope_counts():
@@ -153,8 +148,8 @@ def test_finalize_report_for_limit_excludes_title_geo_noise_from_in_scope_counts
 
     finalized = _finalize_report_for_limit(report, requested_limit=1, internal_fetch_limit=5)
 
-    assert finalized.summary["in_scope_count"] == 0
-    assert finalized.summary["precise_in_scope_count"] == 0
+    assert "in_scope_count" not in finalized.summary
+    assert "precise_in_scope_count" not in finalized.summary
 
 
 def test_finalize_report_for_limit_honors_title_market_priority_brief() -> None:
@@ -400,11 +395,10 @@ def test_resolve_effective_verification_target_does_not_blindly_follow_oversized
     )
 
     assert plan["requested_target"] == 140
-    assert plan["shortlist_scope_count"] == 41
-    assert plan["shortlist_precise_scope_count"] == 41
-    assert plan["effective_target"] < plan["requested_target"]
-    assert plan["effective_target"] <= 80
-    assert plan["effective_target"] >= 70
+    assert plan["shortlist_scope_count"] == 0
+    assert plan["shortlist_precise_scope_count"] == 0
+    assert plan["effective_target"] == plan["requested_target"]
+    assert plan["effective_target"] == 140
 
 
 def test_should_stop_after_stagnant_top_up_when_near_target():

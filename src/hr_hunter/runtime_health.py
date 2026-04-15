@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import urllib.error
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from hr_hunter.config import resolve_feedback_db_path, resolve_output_dir
+from hr_hunter.config import env_flag
 from hr_hunter.db import describe_database_target, resolve_database_target
 from hr_hunter.runtime_maintenance import resolve_current_release_path
 
@@ -79,8 +81,103 @@ def _fetch_health(url: str) -> dict[str, Any]:
         }
 
 
+def _load_previous_snapshot(snapshot_dir: Path | None) -> dict[str, Any]:
+    if snapshot_dir is None:
+        return {}
+    latest_path = snapshot_dir.expanduser().resolve() / "latest.json"
+    if not latest_path.exists():
+        return {}
+    try:
+        return json.loads(latest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _alert_webhook_url() -> str:
+    return str(os.getenv("HR_HUNTER_ALERT_WEBHOOK_URL", "") or "").strip()
+
+
+def _alert_headers() -> dict[str, str]:
+    raw = str(os.getenv("HR_HUNTER_ALERT_WEBHOOK_HEADERS_JSON", "") or "").strip()
+    if not raw:
+        return {"Content-Type": "application/json"}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"Content-Type": "application/json"}
+    if not isinstance(payload, dict):
+        return {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json"}
+    for key, value in payload.items():
+        if str(key).strip():
+            headers[str(key).strip()] = str(value)
+    return headers
+
+
+def _post_alert(url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        response_body = response.read().decode("utf-8", errors="replace")
+        return {
+            "status_code": int(response.status),
+            "body": response_body[:2000],
+        }
+
+
+def _maybe_send_alert(result: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
+    webhook_url = _alert_webhook_url()
+    alert: dict[str, Any] = {
+        "configured": bool(webhook_url),
+        "attempted": False,
+        "delivered": False,
+        "event_type": "",
+        "reason": "",
+    }
+    previously_healthy = bool(previous.get("healthy", True)) if previous else True
+    currently_healthy = bool(result.get("healthy", False))
+    send_recovery = env_flag("HR_HUNTER_ALERT_ON_HEALTHY_RECOVERY", default=True)
+    if currently_healthy and (previously_healthy or not send_recovery):
+        alert["reason"] = "healthy_no_alert"
+        return alert
+    if currently_healthy and not previously_healthy:
+        alert["event_type"] = "runtime_recovered"
+    elif not currently_healthy:
+        alert["event_type"] = "runtime_unhealthy"
+    else:
+        alert["reason"] = "no_state_change"
+        return alert
+    if not webhook_url:
+        alert["reason"] = "webhook_not_configured"
+        return alert
+    payload = {
+        "event_type": alert["event_type"],
+        "service": result.get("service", {}),
+        "health": result.get("health", {}),
+        "disk": result.get("disk", {}),
+        "warnings": list(result.get("warnings", [])),
+        "current_release": result.get("current_release", ""),
+        "generated_at": result.get("generated_at", ""),
+    }
+    alert["attempted"] = True
+    try:
+        response = _post_alert(webhook_url, payload, _alert_headers())
+    except Exception as exc:
+        alert["reason"] = str(exc)
+        return alert
+    alert["delivered"] = True
+    alert["status_code"] = int(response.get("status_code", 0) or 0)
+    alert["reason"] = "sent"
+    return alert
+
+
 def run_runtime_healthcheck(config: RuntimeHealthcheckConfig) -> dict[str, Any]:
     workspace_root = config.workspace_root.expanduser().resolve()
+    previous_snapshot = _load_previous_snapshot(config.snapshot_dir)
     usage = shutil.disk_usage(workspace_root)
     used_percent = round((usage.used / usage.total) * 100, 2) if usage.total else 0.0
     current_release = resolve_current_release_path(workspace_root)
@@ -119,6 +216,13 @@ def run_runtime_healthcheck(config: RuntimeHealthcheckConfig) -> dict[str, Any]:
         "warnings": warnings,
         "healthy": len(warnings) == 0,
         "dry_run": bool(config.dry_run),
+    }
+    result["alert"] = _maybe_send_alert(result, previous_snapshot) if not config.dry_run else {
+        "configured": bool(_alert_webhook_url()),
+        "attempted": False,
+        "delivered": False,
+        "event_type": "",
+        "reason": "dry_run",
     }
     if config.snapshot_dir is not None and not config.dry_run:
         snapshot_dir = config.snapshot_dir.expanduser().resolve()

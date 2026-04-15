@@ -170,6 +170,8 @@ The repo includes systemd templates for this under:
 - `ops/systemd/hr-hunter-backup.timer`
 - `ops/systemd/hr-hunter-healthcheck.service`
 - `ops/systemd/hr-hunter-healthcheck.timer`
+- `ops/systemd/hr-hunter-restore-drill.service`
+- `ops/systemd/hr-hunter-restore-drill.timer`
 
 The repo also includes operator scripts for safer cutovers:
 
@@ -254,13 +256,17 @@ The repo now includes two more operator commands:
 
 - `hr-hunter runtime-backup`
 - `hr-hunter runtime-healthcheck`
+- `hr-hunter runtime-restore-drill`
 
 Recommended production setup:
 
 - run `runtime-backup` daily
 - upload the resulting archive to a private GCS bucket with `HR_HUNTER_BACKUP_GCS_URI`
 - run `runtime-healthcheck` every `15` minutes and persist JSON snapshots under `/srv/hr-hunter/shared/monitoring/health`
-- treat non-zero `runtime-healthcheck` exits as an alertable failure in your chosen monitoring layer
+- set `HR_HUNTER_ALERT_WEBHOOK_URL` to a real webhook destination so unhealthy or recovered runtime states are pushed automatically
+- optional custom headers can be passed with `HR_HUNTER_ALERT_WEBHOOK_HEADERS_JSON`
+- run `runtime-restore-drill` weekly and keep extracted validation output under `/srv/hr-hunter/shared/monitoring/restore-drills`
+- treat non-zero `runtime-healthcheck` or `runtime-restore-drill` exits as an operator-grade failure, not a cosmetic warning
 
 The backup command currently captures:
 
@@ -271,6 +277,15 @@ The backup command currently captures:
 - the feedback DB when present
 - a manifest of referenced run artifacts
 
+The restore drill validates:
+
+- latest local or `gs://` backup archive selection
+- archive extraction into an isolated drill folder
+- workspace DB readability:
+  - `pg_restore -l` for Postgres backups
+  - `PRAGMA integrity_check` for SQLite backups
+- feedback SQLite integrity when a feedback snapshot exists
+
 ## Transformer Warm Start
 
 Transformer scoring should not cold-load on every search. The app now warms the transformer runtime in the background at startup and exposes runtime cache status in:
@@ -279,6 +294,21 @@ Transformer scoring should not cold-load on every search. The app now warms the 
 - `/app/ops`
 
 This reduces the worst cold-start penalty and makes it obvious whether the live process actually has a warmed transformer pipeline cached.
+
+## Adaptive Transformer Retrieval
+
+The ScrapingBee transformer retriever now behaves more like an optimizer loop instead of a fixed firehose:
+
+- it prioritizes exact-title and strongest person-profile queries before weaker adjacent-title leakage
+- it runs retrieval in batches instead of launching the entire query plan at once
+- dense families can stop early once the raw evidence pool is already strong and recent batches have plateaued
+- hard families can automatically spend extra page budget on the strongest exact-title probes when early yield is weak
+
+This keeps retrieval more honest and more scalable:
+
+- reports preserve planned query count versus executed query count
+- dense roles waste fewer requests on low-yield tail queries
+- hard roles widen more intentionally instead of stalling in a brittle first pass
 
 ## Do Not Change In This Release
 

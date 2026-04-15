@@ -22,6 +22,7 @@ from hr_hunter.ranker import train_learned_ranker
 from hr_hunter.runtime_backup import RuntimeBackupConfig, run_runtime_backup
 from hr_hunter.runtime_health import RuntimeHealthcheckConfig, run_runtime_healthcheck
 from hr_hunter.runtime_maintenance import RuntimeMaintenanceConfig, run_runtime_maintenance
+from hr_hunter.runtime_restore import RuntimeRestoreDrillConfig, run_runtime_restore_drill
 from hr_hunter.sheets import append_report_to_sheet
 from hr_hunter.state import persist_search_run
 from hr_hunter.verifier import PublicEvidenceVerifier, refresh_report_summary
@@ -256,6 +257,26 @@ def build_parser() -> argparse.ArgumentParser:
     healthcheck_parser.add_argument("--max-disk-percent", type=int, default=90, help="Fail when root usage is at or above this percentage.")
     healthcheck_parser.add_argument("--snapshot-dir", help="Optional directory to persist latest and timestamped JSON snapshots.")
     healthcheck_parser.add_argument("--dry-run", action="store_true", help="Collect status without writing snapshot files.")
+
+    restore_parser = subparsers.add_parser(
+        "runtime-restore-drill",
+        help="Validate that the latest runtime backup can be restored and its DB snapshots are readable.",
+    )
+    restore_parser.add_argument(
+        "--workspace-root",
+        default=".",
+        help="Workspace root containing current/, releases/, backups/, and shared/.",
+    )
+    restore_parser.add_argument(
+        "--archive-uri",
+        default="",
+        help="Optional local path or gs:// archive URI to validate. Defaults to the newest local backup archive.",
+    )
+    restore_parser.add_argument(
+        "--temp-root",
+        help="Optional directory for extracted restore-drill artifacts and validation output.",
+    )
+    restore_parser.add_argument("--dry-run", action="store_true", help="Report what would be restored without extracting anything.")
 
     return parser
 
@@ -540,6 +561,20 @@ def run_runtime_healthcheck_command(args: argparse.Namespace) -> int:
     return 0 if result.get("healthy") else 1
 
 
+def run_runtime_restore_drill_command(args: argparse.Namespace) -> int:
+    load_env_file(Path(".env"))
+    result = run_runtime_restore_drill(
+        RuntimeRestoreDrillConfig(
+            workspace_root=Path(args.workspace_root).expanduser().resolve(),
+            archive_uri=str(args.archive_uri or "").strip(),
+            temp_root=Path(args.temp_root).expanduser().resolve() if args.temp_root else None,
+            dry_run=bool(args.dry_run),
+        )
+    )
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("ok") else 1
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -565,6 +600,8 @@ def main() -> int:
         return run_runtime_backup_command(args)
     if args.command == "runtime-healthcheck":
         return run_runtime_healthcheck_command(args)
+    if args.command == "runtime-restore-drill":
+        return run_runtime_restore_drill_command(args)
     raise RuntimeError(f"Unsupported command: {args.command}")
 
 

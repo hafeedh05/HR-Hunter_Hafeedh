@@ -452,6 +452,9 @@ async def run_transformer_search(
         progress_callback=progress_callback,
     )
     result = pipeline.run(transformer_brief, hits, query_plan=query_plan, progress_callback=progress_callback)
+    retriever_usage = retriever.usage_summary()
+    result.metrics.queries_planned = int(retriever_usage.get("queries_total", len(query_plan.queries)) or len(query_plan.queries))
+    result.metrics.queries_completed = int(retriever_usage.get("queries_completed", len(queries)) or len(queries))
     candidates = [_candidate_from_transformer_entity(entity, brief) for entity in result.candidates[:requested_limit]]
     run_id = f"{brief.role_title.lower().replace(' ', '-')}-{uuid4().hex[:8]}"
     report = SearchRunReport(
@@ -467,14 +470,13 @@ async def run_transformer_search(
                 request_count=len(queries),
                 candidate_count=len(candidates),
                 candidates=[],
-                diagnostics={},
+                diagnostics={"retrieval": dict(retriever_usage)},
                 errors=[],
             )
         ],
         candidates=candidates,
         summary=build_run_summary(transformer_brief, query_plan, result),
     )
-    retriever_usage = retriever.usage_summary()
     pipeline_usage = pipeline.usage_summary()
     _append_private_usage_log(
         {

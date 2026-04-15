@@ -56,7 +56,7 @@ def provider_candidate_limit(
     brief: SearchBrief,
     requested_limit: int,
     current_pool_size: int,
-    in_scope_count: int,
+    in_scope_count: int = 0,
 ) -> int:
     requested = max(1, int(requested_limit or 1))
     current = max(0, int(current_pool_size or 0))

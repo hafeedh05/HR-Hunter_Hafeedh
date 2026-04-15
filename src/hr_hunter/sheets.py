@@ -39,6 +39,19 @@ def _load_gspread_client(credentials_file: str | None = None):
     )
 
 
+def _row_identity_key(row: Dict[str, Any]) -> str:
+    identity_key = str(row.get("identity_key", "")).strip()
+    if identity_key:
+        return identity_key
+    profile_url = str(row.get("Profile URL", "")).strip().lower()
+    if profile_url:
+        return profile_url
+    name = str(row.get("Candidate Name", "")).strip().lower()
+    company = str(row.get("Current Company", "")).strip().lower()
+    title = str(row.get("Current Title", "")).strip().lower()
+    return "|".join(part for part in (name, company, title) if part)
+
+
 def _find_or_create_worksheet(spreadsheet: Any, worksheet_name: str):
     try:
         worksheet = spreadsheet.worksheet(worksheet_name)
@@ -53,12 +66,30 @@ def _find_or_create_worksheet(spreadsheet: Any, worksheet_name: str):
         return worksheet, list(CSV_FIELDNAMES), set()
 
     headers = [str(value).strip() for value in values[0]]
-    identity_index = headers.index("identity_key") if "identity_key" in headers else -1
     existing_keys = set()
-    if identity_index >= 0:
-        for row in values[1:]:
-            if len(row) > identity_index and str(row[identity_index]).strip():
-                existing_keys.add(str(row[identity_index]).strip())
+    identity_index = headers.index("identity_key") if "identity_key" in headers else -1
+    profile_url_index = headers.index("Profile URL") if "Profile URL" in headers else -1
+    name_index = headers.index("Candidate Name") if "Candidate Name" in headers else -1
+    company_index = headers.index("Current Company") if "Current Company" in headers else -1
+    title_index = headers.index("Current Title") if "Current Title" in headers else -1
+    for row in values[1:]:
+        if identity_index >= 0 and len(row) > identity_index and str(row[identity_index]).strip():
+            existing_keys.add(str(row[identity_index]).strip())
+            continue
+        profile_url = str(row[profile_url_index]).strip().lower() if profile_url_index >= 0 and len(row) > profile_url_index else ""
+        if profile_url:
+            existing_keys.add(profile_url)
+            continue
+        parts = []
+        if name_index >= 0 and len(row) > name_index:
+            parts.append(str(row[name_index]).strip().lower())
+        if company_index >= 0 and len(row) > company_index:
+            parts.append(str(row[company_index]).strip().lower())
+        if title_index >= 0 and len(row) > title_index:
+            parts.append(str(row[title_index]).strip().lower())
+        compound_key = "|".join(part for part in parts if part)
+        if compound_key:
+            existing_keys.add(compound_key)
     return worksheet, headers, existing_keys
 
 
@@ -86,7 +117,7 @@ def append_report_to_sheet(
     appended_candidates = 0
     for candidate in net_new_candidates:
         row = candidate_to_row(candidate)
-        identity_key = str(row.get("identity_key", "")).strip()
+        identity_key = _row_identity_key(row)
         if identity_key and identity_key in observed_keys:
             continue
         observed_keys.add(identity_key)

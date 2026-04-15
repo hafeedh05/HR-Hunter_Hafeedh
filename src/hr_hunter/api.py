@@ -20,6 +20,7 @@ from hr_hunter.config import (
     resolve_ranker_model_dir,
     resolve_state_db_path,
 )
+from hr_hunter.candidate_order import STATUS_RANK, candidate_priority_sort_tuple
 from hr_hunter.db import describe_database_target, resolve_database_target
 from hr_hunter.engine import SearchEngine, dedupe_candidates
 from hr_hunter.feedback import export_training_rows, init_feedback_db, load_ranker_training_rows, log_feedback
@@ -318,7 +319,14 @@ def _runtime_storage_snapshot() -> Dict[str, Dict[str, Any]]:
 def _finalize_report_for_limit(report, *, requested_limit: int, internal_fetch_limit: int, brief=None):
     requested = max(1, int(requested_limit or 1))
     retrieval = max(requested, int(internal_fetch_limit or requested))
-    report.candidates = list(report.candidates[:requested])
+    ordered_candidates = sorted(
+        list(report.candidates),
+        key=lambda candidate: (
+            STATUS_RANK.get(str(getattr(candidate, "verification_status", "") or "").lower(), 9),
+            *candidate_priority_sort_tuple(candidate, brief, phase="final"),
+        ),
+    )
+    report.candidates = ordered_candidates[:requested]
     summary = dict(report.summary or {})
     summary["requested_candidate_limit"] = requested
     summary["retrieval_candidate_limit"] = retrieval

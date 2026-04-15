@@ -1,0 +1,10 @@
+[Unit]
+Description=Run HR Hunter backup restore drill weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 04:30:00 UTC
+Persistent=true
+Unit=hr-hunter-restore-drill.service
+
+[Install]
+WantedBy=timers.target
