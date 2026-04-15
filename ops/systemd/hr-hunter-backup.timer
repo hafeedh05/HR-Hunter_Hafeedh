@@ -1,0 +1,10 @@
+[Unit]
+Description=Run HR Hunter runtime backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=true
+Unit=hr-hunter-backup.service
+
+[Install]
+WantedBy=timers.target

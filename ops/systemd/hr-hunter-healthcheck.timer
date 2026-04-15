@@ -1,0 +1,11 @@
+[Unit]
+Description=Run HR Hunter runtime health snapshot every 15 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=hr-hunter-healthcheck.service
+
+[Install]
+WantedBy=timers.target

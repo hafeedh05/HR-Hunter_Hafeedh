@@ -1,7 +1,15 @@
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 from hr_hunter.briefing import build_search_brief
-from hr_hunter.transformer_bridge import _candidate_from_transformer_entity
+from hr_hunter.transformer_bridge import (
+    _TRANSFORMER_PIPELINE_CACHE,
+    _TRANSFORMER_RUNTIME_META,
+    _candidate_from_transformer_entity,
+    get_transformer_pipeline,
+    transformer_runtime_status,
+    warm_transformer_runtime,
+)
 
 
 def test_candidate_from_transformer_entity_matches_current_candidate_profile_shape() -> None:
@@ -64,3 +72,43 @@ def test_candidate_from_transformer_entity_matches_current_candidate_profile_sha
     assert candidate.current_company == "ExampleCo"
     assert candidate.location_precision_bucket == "named_target_location"
     assert candidate.verification_status == "verified"
+
+
+def test_transformer_pipeline_cache_reuses_pipeline_instance(monkeypatch) -> None:
+    _TRANSFORMER_PIPELINE_CACHE.clear()
+    _TRANSFORMER_RUNTIME_META.update(
+        {
+            "warm_requested": False,
+            "warm_completed": False,
+            "last_error": "",
+            "last_model_name": "",
+            "initialization_seconds": 0.0,
+        }
+    )
+
+    pipeline_module = ModuleType("hr_hunter_transformer.pipeline")
+
+    class FakePipeline:
+        created = 0
+
+        def __init__(self, *, use_transformer: bool, transformer_model_name: str = "") -> None:
+            FakePipeline.created += 1
+            self.use_transformer = use_transformer
+            self.transformer_model_name = transformer_model_name
+
+        def usage_summary(self) -> dict[str, int | str | bool]:
+            return {"encoder_type": "fake", "model_name": self.transformer_model_name}
+
+    pipeline_module.CandidateIntelligencePipeline = FakePipeline
+    monkeypatch.setattr("hr_hunter.transformer_bridge._ensure_transformer_import_path", lambda: None)
+    monkeypatch.setitem(sys.modules, "hr_hunter_transformer.pipeline", pipeline_module)
+
+    first = get_transformer_pipeline(use_transformer=True, transformer_model_name="mini-model")
+    second = get_transformer_pipeline(use_transformer=True, transformer_model_name="mini-model")
+    status = warm_transformer_runtime(use_transformer=True, transformer_model_name="mini-model")
+
+    assert first is second
+    assert FakePipeline.created == 1
+    assert status["warm_completed"] is True
+    assert status["cached_pipeline_count"] == 1
+    assert transformer_runtime_status()["cache_keys"][0]["model_name"] == "mini-model"

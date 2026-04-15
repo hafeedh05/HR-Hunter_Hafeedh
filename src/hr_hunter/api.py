@@ -64,7 +64,12 @@ from hr_hunter.state import (
     summarize_system_state,
     update_job_progress,
 )
-from hr_hunter.transformer_bridge import run_transformer_search, transformer_available
+from hr_hunter.transformer_bridge import (
+    run_transformer_search,
+    transformer_available,
+    transformer_runtime_status,
+    warm_transformer_runtime_background,
+)
 from hr_hunter.verifier import PublicEvidenceVerifier, refresh_report_summary
 from hr_hunter.workspace import (
     PROJECT_STATUS_OPTIONS,
@@ -1731,6 +1736,7 @@ def create_app() -> "FastAPI":
     @app.on_event("startup")
     async def _app_startup_resume_jobs() -> None:
         await _resume_pending_jobs()
+        warm_transformer_runtime_background(use_transformer=True)
 
     @app.get("/")
     async def home() -> FileResponse:
@@ -1756,6 +1762,7 @@ def create_app() -> "FastAPI":
         bootstrap["transformer"] = {
             "available": transformer_available(),
             "label": "HR Hunter Transformer V2",
+            "runtime": transformer_runtime_status(),
         }
         bootstrap["project_statuses"] = PROJECT_STATUS_OPTIONS
         storage = _runtime_storage_snapshot()
@@ -2354,6 +2361,7 @@ def create_app() -> "FastAPI":
             "base_url": remote_client.base_url if remote_client.is_configured() else "",
         }
         summary["private_api_auth"] = {"enabled": _private_api_auth_configured()}
+        summary["transformer_runtime"] = transformer_runtime_status()
         return summary
 
     @app.get("/app/reviews")

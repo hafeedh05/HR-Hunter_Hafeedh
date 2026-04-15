@@ -166,6 +166,15 @@ The repo includes systemd templates for this under:
 - `ops/systemd/hr-hunter.service`
 - `ops/systemd/hr-hunter-maintenance.service`
 - `ops/systemd/hr-hunter-maintenance.timer`
+- `ops/systemd/hr-hunter-backup.service`
+- `ops/systemd/hr-hunter-backup.timer`
+- `ops/systemd/hr-hunter-healthcheck.service`
+- `ops/systemd/hr-hunter-healthcheck.timer`
+
+The repo also includes operator scripts for safer cutovers:
+
+- `ops/deploy/deploy_release.sh`
+- `ops/deploy/rollback_release.sh`
 
 Example service commands:
 
@@ -238,6 +247,38 @@ Recommended defaults:
 - clean apt cache after maintenance
 
 This is designed to keep rollback headroom while preventing release and artifact sprawl.
+
+## Backup And Monitoring
+
+The repo now includes two more operator commands:
+
+- `hr-hunter runtime-backup`
+- `hr-hunter runtime-healthcheck`
+
+Recommended production setup:
+
+- run `runtime-backup` daily
+- upload the resulting archive to a private GCS bucket with `HR_HUNTER_BACKUP_GCS_URI`
+- run `runtime-healthcheck` every `15` minutes and persist JSON snapshots under `/srv/hr-hunter/shared/monitoring/health`
+- treat non-zero `runtime-healthcheck` exits as an alertable failure in your chosen monitoring layer
+
+The backup command currently captures:
+
+- current release metadata
+- systemd and Caddy config snapshots
+- a redacted env snapshot
+- the authoritative workspace DB snapshot
+- the feedback DB when present
+- a manifest of referenced run artifacts
+
+## Transformer Warm Start
+
+Transformer scoring should not cold-load on every search. The app now warms the transformer runtime in the background at startup and exposes runtime cache status in:
+
+- `/app-config`
+- `/app/ops`
+
+This reduces the worst cold-start penalty and makes it obvious whether the live process actually has a warmed transformer pipeline cached.
 
 ## Do Not Change In This Release
 

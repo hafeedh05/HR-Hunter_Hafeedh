@@ -19,6 +19,8 @@ from hr_hunter.output import (
     write_report,
 )
 from hr_hunter.ranker import train_learned_ranker
+from hr_hunter.runtime_backup import RuntimeBackupConfig, run_runtime_backup
+from hr_hunter.runtime_health import RuntimeHealthcheckConfig, run_runtime_healthcheck
 from hr_hunter.runtime_maintenance import RuntimeMaintenanceConfig, run_runtime_maintenance
 from hr_hunter.sheets import append_report_to_sheet
 from hr_hunter.state import persist_search_run
@@ -225,6 +227,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only prune orphaned JSON/CSV artifacts older than this many days.",
     )
     maintenance_parser.add_argument("--dry-run", action="store_true", help="Report what would be deleted without deleting it.")
+
+    backup_parser = subparsers.add_parser(
+        "runtime-backup",
+        help="Create a production-safe runtime backup and optionally upload it to GCS.",
+    )
+    backup_parser.add_argument(
+        "--workspace-root",
+        default=".",
+        help="Workspace root containing current/, releases/, backups/, and shared/.",
+    )
+    backup_parser.add_argument("--label", default="runtimebackup", help="Short label appended to the backup id.")
+    backup_parser.add_argument("--backup-root", help="Optional directory to write backup folders into.")
+    backup_parser.add_argument("--bucket-uri", default="", help="Optional gs:// bucket/prefix for archive upload via gcloud storage cp.")
+    backup_parser.add_argument("--dry-run", action="store_true", help="Report what would be backed up without writing files.")
+
+    healthcheck_parser = subparsers.add_parser(
+        "runtime-healthcheck",
+        help="Capture a runtime health snapshot and fail fast when service or disk health is degraded.",
+    )
+    healthcheck_parser.add_argument(
+        "--workspace-root",
+        default=".",
+        help="Workspace root containing current/, releases/, backups/, and shared/.",
+    )
+    healthcheck_parser.add_argument("--service-name", default="hr-hunter", help="systemd unit name to inspect.")
+    healthcheck_parser.add_argument("--health-url", default="http://127.0.0.1:8765/healthz", help="Health endpoint to probe.")
+    healthcheck_parser.add_argument("--max-disk-percent", type=int, default=90, help="Fail when root usage is at or above this percentage.")
+    healthcheck_parser.add_argument("--snapshot-dir", help="Optional directory to persist latest and timestamped JSON snapshots.")
+    healthcheck_parser.add_argument("--dry-run", action="store_true", help="Collect status without writing snapshot files.")
 
     return parser
 
@@ -478,6 +509,37 @@ def run_runtime_maintenance_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_runtime_backup_command(args: argparse.Namespace) -> int:
+    load_env_file(Path(".env"))
+    result = run_runtime_backup(
+        RuntimeBackupConfig(
+            workspace_root=Path(args.workspace_root).expanduser().resolve(),
+            label=args.label,
+            backup_root=Path(args.backup_root).expanduser().resolve() if args.backup_root else None,
+            bucket_uri=str(args.bucket_uri or "").strip(),
+            dry_run=bool(args.dry_run),
+        )
+    )
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def run_runtime_healthcheck_command(args: argparse.Namespace) -> int:
+    load_env_file(Path(".env"))
+    result = run_runtime_healthcheck(
+        RuntimeHealthcheckConfig(
+            workspace_root=Path(args.workspace_root).expanduser().resolve(),
+            service_name=str(args.service_name or "hr-hunter").strip() or "hr-hunter",
+            health_url=str(args.health_url or "http://127.0.0.1:8765/healthz").strip() or "http://127.0.0.1:8765/healthz",
+            max_disk_percent=int(args.max_disk_percent or 90),
+            snapshot_dir=Path(args.snapshot_dir).expanduser().resolve() if args.snapshot_dir else None,
+            dry_run=bool(args.dry_run),
+        )
+    )
+    print(json.dumps(result, indent=2))
+    return 0 if result.get("healthy") else 1
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -499,6 +561,10 @@ def main() -> int:
         return run_server(args)
     if args.command == "runtime-maintenance":
         return run_runtime_maintenance_command(args)
+    if args.command == "runtime-backup":
+        return run_runtime_backup_command(args)
+    if args.command == "runtime-healthcheck":
+        return run_runtime_healthcheck_command(args)
     raise RuntimeError(f"Unsupported command: {args.command}")
 
 

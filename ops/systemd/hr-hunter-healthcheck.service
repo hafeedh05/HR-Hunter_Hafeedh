@@ -1,0 +1,14 @@
+[Unit]
+Description=HR Hunter runtime health snapshot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/hr-hunter/current
+EnvironmentFile=/srv/hr-hunter/shared/env/hr-hunter.env
+Environment=PYTHONPATH=/srv/hr-hunter/current/src
+ExecStart=/bin/bash -lc 'set -euo pipefail; /srv/hr-hunter/.venv/bin/python -m hr_hunter.cli runtime-healthcheck --workspace-root /srv/hr-hunter --snapshot-dir /srv/hr-hunter/shared/monitoring/health --max-disk-percent 90'
+
+[Install]
+WantedBy=multi-user.target

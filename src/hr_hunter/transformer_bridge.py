@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
@@ -34,6 +36,130 @@ def transformer_available() -> bool:
         return True
     transformer_src = _external_transformer_src_path()
     return transformer_src.exists()
+
+
+_TRANSFORMER_PIPELINE_CACHE: dict[tuple[bool, str], Any] = {}
+_TRANSFORMER_PIPELINE_LOCK = threading.Lock()
+_TRANSFORMER_RUNTIME_META: dict[str, Any] = {
+    "warm_requested": False,
+    "warm_completed": False,
+    "last_error": "",
+    "last_model_name": "",
+    "initialization_seconds": 0.0,
+}
+
+
+def _pipeline_cache_key(*, use_transformer: bool, transformer_model_name: str) -> tuple[bool, str]:
+    return (
+        bool(use_transformer),
+        str(transformer_model_name or "").strip() or "sentence-transformers/all-MiniLM-L6-v2",
+    )
+
+
+def get_transformer_pipeline(
+    *,
+    use_transformer: bool,
+    transformer_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+) -> Any:
+    key = _pipeline_cache_key(
+        use_transformer=use_transformer,
+        transformer_model_name=transformer_model_name,
+    )
+    cached = _TRANSFORMER_PIPELINE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    with _TRANSFORMER_PIPELINE_LOCK:
+        cached = _TRANSFORMER_PIPELINE_CACHE.get(key)
+        if cached is not None:
+            return cached
+        _ensure_transformer_import_path()
+        from hr_hunter_transformer.pipeline import CandidateIntelligencePipeline
+
+        started_at = time.perf_counter()
+        try:
+            pipeline = CandidateIntelligencePipeline(
+                use_transformer=bool(use_transformer),
+                transformer_model_name=key[1],
+            )
+        except Exception as exc:
+            _TRANSFORMER_RUNTIME_META["last_error"] = str(exc)
+            raise
+        _TRANSFORMER_PIPELINE_CACHE[key] = pipeline
+        _TRANSFORMER_RUNTIME_META["last_error"] = ""
+        _TRANSFORMER_RUNTIME_META["warm_completed"] = True
+        _TRANSFORMER_RUNTIME_META["last_model_name"] = key[1]
+        _TRANSFORMER_RUNTIME_META["initialization_seconds"] = round(time.perf_counter() - started_at, 3)
+        return pipeline
+
+
+def warm_transformer_runtime(
+    *,
+    use_transformer: bool = True,
+    transformer_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+) -> dict[str, Any]:
+    _TRANSFORMER_RUNTIME_META["warm_requested"] = True
+    if not transformer_available():
+        _TRANSFORMER_RUNTIME_META["last_error"] = "transformer_unavailable"
+        return transformer_runtime_status()
+    try:
+        get_transformer_pipeline(
+            use_transformer=use_transformer,
+            transformer_model_name=transformer_model_name,
+        )
+    except Exception as exc:
+        _TRANSFORMER_RUNTIME_META["last_error"] = str(exc)
+    return transformer_runtime_status()
+
+
+def warm_transformer_runtime_background(
+    *,
+    use_transformer: bool = True,
+    transformer_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+) -> threading.Thread | None:
+    if not transformer_available():
+        return None
+    worker = threading.Thread(
+        target=warm_transformer_runtime,
+        kwargs={
+            "use_transformer": use_transformer,
+            "transformer_model_name": transformer_model_name,
+        },
+        daemon=True,
+        name="hr-hunter-transformer-warmup",
+    )
+    worker.start()
+    return worker
+
+
+def transformer_runtime_status() -> dict[str, Any]:
+    keys = [
+        {
+            "use_transformer": key[0],
+            "model_name": key[1],
+        }
+        for key in sorted(_TRANSFORMER_PIPELINE_CACHE.keys())
+    ]
+    usage: list[dict[str, Any]] = []
+    for key in sorted(_TRANSFORMER_PIPELINE_CACHE.keys()):
+        pipeline = _TRANSFORMER_PIPELINE_CACHE[key]
+        usage.append(
+            {
+                "use_transformer": key[0],
+                "model_name": key[1],
+                **dict(pipeline.usage_summary()),
+            }
+        )
+    return {
+        "available": transformer_available(),
+        "warm_requested": bool(_TRANSFORMER_RUNTIME_META.get("warm_requested", False)),
+        "warm_completed": bool(_TRANSFORMER_RUNTIME_META.get("warm_completed", False)),
+        "last_error": str(_TRANSFORMER_RUNTIME_META.get("last_error", "") or ""),
+        "last_model_name": str(_TRANSFORMER_RUNTIME_META.get("last_model_name", "") or ""),
+        "initialization_seconds": float(_TRANSFORMER_RUNTIME_META.get("initialization_seconds", 0.0) or 0.0),
+        "cached_pipeline_count": int(len(_TRANSFORMER_PIPELINE_CACHE)),
+        "cache_keys": keys,
+        "pipelines": usage,
+    }
 
 
 def _normalize_locations(brief: SearchBrief, payload: Dict[str, Any] | None = None) -> tuple[list[str], list[str]]:
@@ -274,11 +400,10 @@ async def run_transformer_search(
 ) -> SearchRunReport:
     _ensure_transformer_import_path()
     from hr_hunter_transformer.export import build_run_summary
-    from hr_hunter_transformer.pipeline import CandidateIntelligencePipeline
     from hr_hunter_transformer.scrapingbee_adapter import ScrapingBeeSearchConfig, ScrapingBeeTransformerRetriever
 
     transformer_brief = _build_transformer_brief(brief, requested_limit=requested_limit, payload=payload)
-    pipeline = CandidateIntelligencePipeline(use_transformer=bool(reranker_enabled))
+    pipeline = get_transformer_pipeline(use_transformer=bool(reranker_enabled))
     query_plan = pipeline.build_query_plan(transformer_brief)
     retriever = ScrapingBeeTransformerRetriever(
         ScrapingBeeSearchConfig(

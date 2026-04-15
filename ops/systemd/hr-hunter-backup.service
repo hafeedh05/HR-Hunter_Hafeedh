@@ -1,0 +1,14 @@
+[Unit]
+Description=HR Hunter runtime backup and off-VM archive upload
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/hr-hunter/current
+EnvironmentFile=/srv/hr-hunter/shared/env/hr-hunter.env
+Environment=PYTHONPATH=/srv/hr-hunter/current/src
+ExecStart=/bin/bash -lc 'set -euo pipefail; /srv/hr-hunter/.venv/bin/python -m hr_hunter.cli runtime-backup --workspace-root /srv/hr-hunter --label scheduled-backup --bucket-uri "${HR_HUNTER_BACKUP_GCS_URI:-}"'
+
+[Install]
+WantedBy=multi-user.target
