@@ -88,6 +88,34 @@ def _validate_pg_dump(path: Path) -> dict[str, Any]:
     return {"path": str(path), "checked": True, "ok": True, "command": command}
 
 
+def _resolve_db_snapshot_path(metadata: dict[str, Any], backup_dir: Path) -> Path:
+    db_snapshot = metadata.get("db_snapshot") or {}
+    raw_path = str(db_snapshot.get("path", "") or "").strip()
+    if raw_path:
+        path = Path(raw_path)
+        return path if path.is_absolute() else backup_dir / path
+    backend = str((metadata.get("workspace_storage") or {}).get("backend", "") or "").strip().lower()
+    if backend == "postgres":
+        fallback = backup_dir / "state" / "workspace.pg.dump"
+        if fallback.exists():
+            return fallback
+    for candidate in sorted((backup_dir / "state").glob("*")):
+        if candidate.is_file() and candidate.suffix.lower() in {".db", ".sqlite", ".dump"}:
+            return candidate
+    return Path()
+
+
+def _resolve_feedback_snapshot_path(metadata: dict[str, Any], backup_dir: Path) -> Path:
+    raw_path = str(metadata.get("feedback_snapshot", "") or "").strip()
+    if raw_path:
+        path = Path(raw_path)
+        return path if path.is_absolute() else backup_dir / path
+    for candidate in sorted((backup_dir / "feedback").glob("*")):
+        if candidate.is_file() and candidate.suffix.lower() in {".db", ".sqlite"}:
+            return candidate
+    return Path()
+
+
 def run_runtime_restore_drill(config: RuntimeRestoreDrillConfig) -> dict[str, Any]:
     workspace_root = config.workspace_root.expanduser().resolve()
     backups_dir = workspace_root / "backups"
@@ -108,16 +136,12 @@ def run_runtime_restore_drill(config: RuntimeRestoreDrillConfig) -> dict[str, An
     if not config.dry_run:
         backup_dir = _find_backup_dir(extracted_root)
         metadata = json.loads((backup_dir / "metadata.json").read_text(encoding="utf-8"))
-        db_path = Path(str((metadata.get("db_snapshot") or {}).get("path", "")))
-        if not db_path.is_absolute():
-            db_path = backup_dir / db_path
+        db_path = _resolve_db_snapshot_path(metadata, backup_dir)
         if str((metadata.get("workspace_storage") or {}).get("backend", "")) == "postgres":
             db_check = _validate_pg_dump(db_path)
         else:
             db_check = _validate_feedback_sqlite(db_path)
-        feedback_snapshot = Path(str(metadata.get("feedback_snapshot", "")))
-        if not feedback_snapshot.is_absolute() and str(feedback_snapshot):
-            feedback_snapshot = backup_dir / feedback_snapshot
+        feedback_snapshot = _resolve_feedback_snapshot_path(metadata, backup_dir)
         feedback_check = _validate_feedback_sqlite(feedback_snapshot) if str(feedback_snapshot) else {
             "path": "",
             "checked": False,
