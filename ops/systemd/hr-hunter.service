@@ -9,7 +9,9 @@ User=root
 WorkingDirectory=/srv/hr-hunter/current
 EnvironmentFile=/srv/hr-hunter/shared/env/hr-hunter.env
 Environment=PYTHONPATH=/srv/hr-hunter/current/src
-ExecStart=/srv/hr-hunter/.venv/bin/python -m hr_hunter.cli serve --host 127.0.0.1 --port 8765
+Environment=HR_HUNTER_WEB_WORKERS=2
+Environment=HR_HUNTER_WARM_TRANSFORMER_ON_STARTUP=0
+ExecStart=/srv/hr-hunter/.venv/bin/python -m hr_hunter.cli serve --host 127.0.0.1 --port 8765 --workers 2
 Restart=always
 RestartSec=5
 

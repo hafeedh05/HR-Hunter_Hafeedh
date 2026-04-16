@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Set
 
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.config import (
+    env_flag,
     load_env_file,
     load_yaml_file,
     resolve_feedback_db_path,
@@ -1825,7 +1826,8 @@ def create_app() -> "FastAPI":
     @app.on_event("startup")
     async def _app_startup_resume_jobs() -> None:
         await _resume_pending_jobs()
-        warm_transformer_runtime_background(use_transformer=True)
+        if env_flag("HR_HUNTER_WARM_TRANSFORMER_ON_STARTUP", default=False):
+            warm_transformer_runtime_background(use_transformer=True)
 
     @app.get("/")
     async def home() -> FileResponse:

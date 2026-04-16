@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import List
 
@@ -203,6 +204,12 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser = subparsers.add_parser("serve", help="Serve the optional FastAPI app.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="Uvicorn worker count. Defaults to HR_HUNTER_WEB_WORKERS or 1.",
+    )
 
     maintenance_parser = subparsers.add_parser(
         "runtime-maintenance",
@@ -509,8 +516,22 @@ def run_server(args: argparse.Namespace) -> int:
         ) from exc
 
     load_env_file(Path(".env"))
-    app = create_app()
-    uvicorn.run(app, host=args.host, port=args.port)
+    try:
+        workers = int(args.workers or os.getenv("HR_HUNTER_WEB_WORKERS", "1") or 1)
+    except ValueError:
+        workers = 1
+    workers = max(1, workers)
+    if workers > 1:
+        uvicorn.run(
+            "hr_hunter.api:create_app",
+            factory=True,
+            host=args.host,
+            port=args.port,
+            workers=workers,
+        )
+    else:
+        app = create_app()
+        uvicorn.run(app, host=args.host, port=args.port)
     return 0
 
 
