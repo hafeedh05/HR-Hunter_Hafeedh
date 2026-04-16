@@ -9,10 +9,13 @@ This document is the deploy handoff for the current release cut from:
 ## Current Live Release
 
 - Live app: `https://hr-hunter.hyvelabs.tech`
-- Final release path: `/srv/hr-hunter/releases/20260416T053644Z-client-ready-v3`
-- Previous rollback release: `/srv/hr-hunter/releases/20260416T053015Z-client-ready-v2`
+- Final release path: `/srv/hr-hunter/releases/20260416T094357Z-c6c79d7-timeout-safe`
+- Previous rollback release: `/srv/hr-hunter/releases/20260416T092614Z-c654cce-ceo-order`
 - Health check: `https://hr-hunter.hyvelabs.tech/healthz` returns `{"status":"ok"}`
 - Frontend assets: `20260416clientready2`
+- Production serving: `HR_HUNTER_WEB_WORKERS=2`
+- Transformer startup warmup: `HR_HUNTER_WARM_TRANSFORMER_ON_STARTUP=0`
+- Latest pre-prune backup: `/srv/hr-hunter/backups/20260416T094559Z-pre-client-run-prune-live-env`
 
 ### Fresh Live Validation
 
@@ -39,6 +42,22 @@ Project Architect quality validation from the same quality path:
 - query count: `135`
 - raw / unique: `2242 / 1272`
 - job elapsed: `330s`
+
+CEO pilot validation after the executive search/order pass:
+
+- run id: `chief-executive-officer-(ceo)-9530e9dd`
+- backend: `transformer_v2`
+- returned: `300`
+- verified / review / reject: `34 / 266 / 0`
+- query count: `212`
+- raw / unique: `3737 / 505`
+- job elapsed: `554s`
+- ordering: all verified candidates appear before review candidates.
+
+Run-history cleanup after backup:
+
+- visible projects: `5`
+- saved runs per project: `1-2`
 
 CEO is still constrained and should not be used as the main client go/no-go demo family. The latest live saved CEO run returned `300 / 16 verified / 284 review / 0 reject`, with diagnostics pointing to weak company/industry signals for a narrow executive brief.
 
@@ -73,6 +92,10 @@ CEO is still constrained and should not be used as the main client go/no-go demo
 - product target runtime baseline restored (`300 candidates -> 900s`)
 - cache-busted frontend assets for the latest Results/Candidates runtime fixes
 - stricter malformed company-fragment filtering and regional profile-host location handling
+- CEO/executive peer-company query priority and fuzzy peer-company matching
+- verification-aware final ordering from a wider scored tranche
+- two-worker web serving to keep health/status/UI responsive during long transformer searches
+- run-prune operator utility under `scripts/prune_project_runs.py`
 
 ## Current Transformer App Baseline
 
@@ -105,6 +128,7 @@ Use the exact local brief definitions here:
 - Digital Marketing
 - Interior Design
 - Architecture / Project Architect
+- CEO / executive search when positioned as pilot/public-evidence constrained
 
 ### Pilot-Only Families
 
@@ -117,7 +141,6 @@ Use the exact local brief definitions here:
 ### Weak Families Not To Oversell
 
 - AI / Data / Software for strict verified promises
-- Executive / CEO
 - Healthcare / Doctors
 - Pharma / Clinical
 - Government / Public Sector
@@ -158,7 +181,7 @@ Do not describe production as “everything on Cloud SQL.”
 1. Commit and push changes from local repo into GitHub
 2. Merge into `main`
 3. Deploy merged `main` to GCP
-4. Smoke test on a safe family
+4. Smoke test on a safe family and confirm health remains responsive during/after long searches
 
 ## Pre-Deploy Verification
 

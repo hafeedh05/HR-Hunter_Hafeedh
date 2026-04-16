@@ -43,16 +43,18 @@ This is the working team position:
 
 Final live release path:
 
-- `/srv/hr-hunter/releases/20260416T053644Z-client-ready-v3`
+- `/srv/hr-hunter/releases/20260416T094357Z-c6c79d7-timeout-safe`
 
 Verified live on `https://hr-hunter.hyvelabs.tech`:
 
 - `/healthz` returns healthy
+- app is running with two Uvicorn workers to reduce timeout risk during long searches
 - admin session API works
 - five validation projects load
 - latest Supply Chain run attaches to the correct project
 - Results and report summary load with truthful runtime fields
 - CSV export returns a real candidate CSV
+- visible project run history is pruned to 1-2 runs per project after a Postgres-backed state backup
 
 Latest fresh Supply Chain run:
 
@@ -73,6 +75,16 @@ Latest Project Architect quality validation from the same quality code path:
 - verified/review/reject: `259 / 41 / 0`
 - raw/unique/query count: `2242 / 1272 / 135`
 - job elapsed: `330s`
+
+Latest CEO pilot validation:
+
+- run id: `chief-executive-officer-(ceo)-9530e9dd`
+- backend: `transformer_v2`
+- returned: `300`
+- verified/review/reject: `34 / 266 / 0`
+- raw/unique/query count: `3737 / 505 / 212`
+- job elapsed: `554s`
+- result ordering: verified candidates appear before review candidates
 
 ## Current Verification Baseline
 
@@ -112,10 +124,10 @@ Use `docs/local-transformer-validation-20260415.md` for the exact hunt briefs, r
 - General Operations
 - Data / BI / Analytics
 - Product / Program / Government / Research
+- Executive / CEO when demoed honestly as public-evidence constrained sourcing
 
 ### Weak families not to oversell
 
-- Executive / CEO
 - Healthcare / Doctors
 - Pharma / Clinical
 - Government / Public Sector

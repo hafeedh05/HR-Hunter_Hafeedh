@@ -5,12 +5,15 @@ This note records the production validation for the client-ready transformer-fir
 ## Live Deployment
 
 - Live app: `https://hr-hunter.hyvelabs.tech`
-- Final release path: `/srv/hr-hunter/releases/20260416T053644Z-client-ready-v3`
-- Previous release path: `/srv/hr-hunter/releases/20260416T053015Z-client-ready-v2`
+- Final release path: `/srv/hr-hunter/releases/20260416T094357Z-c6c79d7-timeout-safe`
+- Previous rollback release path: `/srv/hr-hunter/releases/20260416T092614Z-c654cce-ceo-order`
 - Health endpoint: `https://hr-hunter.hyvelabs.tech/healthz`
 - Health result: `{"status":"ok"}`
 - Frontend asset version: `20260416clientready2`
 - Active backend: `transformer_v2`
+- Web serving: two Uvicorn workers via `HR_HUNTER_WEB_WORKERS=2`
+- Startup transformer warmup: disabled in production via `HR_HUNTER_WARM_TRANSFORMER_ON_STARTUP=0`
+- Latest state backup before run pruning: `/srv/hr-hunter/backups/20260416T094559Z-pre-client-run-prune-live-env`
 
 ## What Changed In This Client-Ready Pass
 
@@ -32,6 +35,11 @@ This note records the production validation for the client-ready transformer-fir
   - `50 candidates -> 150s`
 - Updated Results UI fallback timing so saved reports still display truthful runtime when the completed job object is not present.
 - Bumped frontend asset cache keys so browsers fetch the latest JS/CSS.
+- Improved transformer finalization so a wider scored tranche is verified before the final 300 are selected.
+- Final candidate ordering now shows `Verified` before `Needs Review` before `Rejected`, while preserving honest labels.
+- Added CEO peer-company query priority and fuzzy peer-company matching for parenthetical/compound company names.
+- Added two-worker production serving so health/status/UI requests stay responsive while one worker is busy with a long transformer run.
+- Pruned saved run clutter after backup; each visible validation project now has 1-2 saved runs.
 
 ## Live Smoke Checks
 
@@ -42,6 +50,7 @@ This note records the production validation for the client-ready transformer-fir
 - Supply Chain latest run attaches to `project_6f9ec43faae9`.
 - Results report loads for the latest Supply Chain run.
 - CSV export returns a real CSV with candidate rows.
+- 20 concurrent external `/healthz` probes returned successfully with max latency under 1 second after the two-worker cutover.
 - Progress during the fresh Supply Chain run moved through:
   - `query_planning`
   - `queries_planned`
@@ -106,6 +115,37 @@ Top quality notes from the first page:
 
 This run was completed before the final runtime-target metadata polish. The quality path is the same; the final v3 release only changed the asset cache key after that.
 
+### CEO Test
+
+- project id: `project_7c51c5b5a240`
+- run id: `chief-executive-officer-(ceo)-9530e9dd`
+- backend: `transformer_v2`
+- requested: `300`
+- returned: `300`
+- verified: `34`
+- needs review: `266`
+- rejected: `0`
+- query count: `212`
+- raw found: `3737`
+- unique after dedupe: `505`
+- job elapsed: `554s`
+- target runtime: `900s`
+- CSV export: passed
+- result ordering: first 34 candidates are verified before any review candidates.
+
+Top verified CEO examples:
+
+- `Sameer Jain`, CEO, Landmark Group / Home Centre.
+- `Wassim Arabi`, CEO, Al-Futtaim.
+- `Avneesh Agarwal`, CEO, Home Centre.
+- `Elisa Bruno`, CEO, Level Shoes / Chalhoub Group.
+- `Ajay Antal`, CEO, Home Box / Landmark Retail Group.
+- `Michael Chalhoub`, CEO, Chalhoub Group.
+- `Jatin Kalra`, President, Apparel Group.
+- `Martin Dougan`, CEO, Alshaya Group.
+- `Mohammad A Baker`, CEO, GMG.
+- `Darine Sabbagh`, Managing Director, Chalhoub Group.
+
 ## Current Honest Product Position
 
 Safe to demo now:
@@ -115,37 +155,35 @@ Safe to demo now:
 - Interior Design
 - Digital Marketing
 - Senior Accountant / Accounting with validation caveat
+- CEO / executive search as a pilot/demo family, not as a guaranteed high-volume verified family
 
 Do not oversell yet:
 
-- CEO / executive search
 - AI / technical search when the client expects high strict-verified yield
 - Healthcare / clinical
 - Government / public sector
 - Aviation / maritime
 
-Latest saved CEO run is still weak:
+CEO is much better than the earlier weak run, but still public-evidence constrained:
 
-- returned: `300`
-- verified: `16`
-- needs review: `284`
-- rejected: `0`
-- main diagnostic: weak company / industry signals for a narrow executive brief.
+- earlier weak live run: `300 / 16 verified / 284 review / 0 reject`
+- current live run: `300 / 34 verified / 266 review / 0 reject`
+- main remaining diagnostic: weak company / industry signals for candidates outside the strongest peer-company tranche.
 
 ## Rollback
 
 If the current release misbehaves:
 
 ```bash
-sudo ln -sfn /srv/hr-hunter/releases/20260416T053015Z-client-ready-v2 /srv/hr-hunter/current
+sudo ln -sfn /srv/hr-hunter/releases/20260416T092614Z-c654cce-ceo-order /srv/hr-hunter/current
 sudo systemctl restart hr-hunter
 curl -fsS http://127.0.0.1:8765/healthz
 ```
 
-The older quality-pass release is also available:
+The older client-ready v3 release is also available:
 
 ```bash
-sudo ln -sfn /srv/hr-hunter/releases/20260416T051649Z-client-ready /srv/hr-hunter/current
+sudo ln -sfn /srv/hr-hunter/releases/20260416T053644Z-client-ready-v3 /srv/hr-hunter/current
 sudo systemctl restart hr-hunter
 curl -fsS http://127.0.0.1:8765/healthz
 ```

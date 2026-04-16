@@ -42,11 +42,11 @@ This release does not claim equal strength across every job family.
 - Legal / Compliance
 - Sustainability / ESG
 - General Operations
+- Executive / CEO when positioned as public-evidence constrained sourcing, not guaranteed high-volume verification
 
 ### Weak families not to oversell
 
 - AI / Data / Software for strict verified promises
-- Executive / CEO
 - Healthcare / Doctors
 - Pharma / Clinical
 - Government / Public Sector
@@ -116,6 +116,8 @@ Open:
 - `HR_HUNTER_FEEDBACK_DB`
 - `HR_HUNTER_RANKER_MODEL_DIR`
 - `HR_HUNTER_DATABASE_URL`
+- `HR_HUNTER_WEB_WORKERS`
+- `HR_HUNTER_WARM_TRANSFORMER_ON_STARTUP`
 - TOTP/login env vars if using fixed-login bootstrap
 
 ## Local Validation
@@ -151,13 +153,19 @@ This release includes the following practical changes:
 - frontend asset cache bump so browsers fetch the latest Results/Candidates runtime fixes
 - stronger transformer extraction/company quality filters for person-like results and malformed company fragments
 - better country/location interpretation for regional public profile hosts such as `ae.linkedin.com`
+- CEO/executive query priority, peer-company matching, and verification-aware final ordering
+- two-worker production serving so the UI and health/status endpoints stay responsive during long transformer searches
+- operator run-prune utility for keeping client-visible project history clean after state backup
 
 ## Current Live Validation
 
-Latest GCP release: `/srv/hr-hunter/releases/20260416T053644Z-client-ready-v3`
+Latest GCP release: `/srv/hr-hunter/releases/20260416T094357Z-c6c79d7-timeout-safe`
 
 - Health: `https://hr-hunter.hyvelabs.tech/healthz` returns `{"status":"ok"}`
 - Auth/session API works for the admin account
+- Production serves with `HR_HUNTER_WEB_WORKERS=2`
+- Latest state backup before run pruning: `/srv/hr-hunter/backups/20260416T094559Z-pre-client-run-prune-live-env`
+- Visible validation projects now have 1-2 saved runs each
 - Project list loads with the five validation projects
 - Fresh Supply Chain validation: `300 returned / 212 verified / 88 review / 0 reject` in `186s` job elapsed
 - Supply Chain saved report now stores `runtime_seconds=182`, `pipeline_elapsed_seconds=37`, and `target_runtime_seconds=900`
