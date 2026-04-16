@@ -213,6 +213,82 @@ def _resolve_transformer_tuning(payload: Dict[str, Any], requested_limit: int) -
         "parallel_requests": int(base["parallel_requests"]),
     }
 
+
+def _completed_telemetry_elapsed_seconds(summary: Dict[str, Any]) -> int:
+    telemetry_events = summary.get("telemetry_events", [])
+    if not isinstance(telemetry_events, list):
+        return 0
+    elapsed_values: List[int] = []
+    for event in telemetry_events:
+        if not isinstance(event, dict):
+            continue
+        try:
+            elapsed_values.append(max(0, int(event.get("elapsed_seconds", 0) or 0)))
+        except (TypeError, ValueError):
+            continue
+    return max(elapsed_values, default=0)
+
+
+def _attach_report_runtime_metadata(
+    report: SearchRunReport,
+    *,
+    elapsed_seconds: int,
+    runtime_target_seconds: int,
+    execution_backend: str,
+) -> SearchRunReport:
+    """Persist the same wall-clock runtime that the backend job progress uses."""
+
+    elapsed_seconds = max(0, int(elapsed_seconds or 0))
+    runtime_target_seconds = max(0, int(runtime_target_seconds or 0))
+    summary = dict(report.summary or {})
+    pipeline_elapsed_seconds = int(
+        summary.get("pipeline_elapsed_seconds")
+        or _completed_telemetry_elapsed_seconds(summary)
+        or 0
+    )
+
+    summary.update(
+        {
+            "execution_backend": execution_backend,
+            "runtime_seconds": elapsed_seconds,
+            "wall_clock_seconds": elapsed_seconds,
+            "job_elapsed_seconds": elapsed_seconds,
+            "pipeline_elapsed_seconds": pipeline_elapsed_seconds,
+            "target_runtime_seconds": runtime_target_seconds,
+            "runtime_display_source": "job_wall_clock",
+        }
+    )
+    pipeline_metrics = dict(summary.get("pipeline_metrics", {}) or {})
+    pipeline_metrics.update(
+        {
+            "runtime_seconds": elapsed_seconds,
+            "wall_clock_seconds": elapsed_seconds,
+            "job_elapsed_seconds": elapsed_seconds,
+            "pipeline_elapsed_seconds": pipeline_elapsed_seconds,
+            "target_runtime_seconds": runtime_target_seconds,
+        }
+    )
+    summary["pipeline_metrics"] = pipeline_metrics
+
+    telemetry_events = []
+    for event in summary.get("telemetry_events", []) or []:
+        if not isinstance(event, dict):
+            continue
+        event_copy = dict(event)
+        event_elapsed = max(0, int(event_copy.get("elapsed_seconds", 0) or 0))
+        event_copy.setdefault("pipeline_elapsed_seconds", event_elapsed)
+        if str(event_copy.get("stage", "")).strip().lower() == "completed":
+            event_copy["elapsed_seconds"] = elapsed_seconds
+            event_copy["job_elapsed_seconds"] = elapsed_seconds
+            event_copy["pipeline_elapsed_seconds"] = event_elapsed
+        telemetry_events.append(event_copy)
+    if telemetry_events:
+        summary["telemetry_events"] = telemetry_events
+
+    report.summary = summary
+    return report
+
+
 def _resolve_effective_verification_target(
     candidates: List[Any],
     *,
@@ -1053,17 +1129,16 @@ def create_app() -> "FastAPI":
             payload["transformer_pages_per_query"] = transformer_pages_per_query
             payload["transformer_parallel_requests"] = transformer_parallel_requests
             payload["transformer_role_family"] = str(transformer_tuning["role_family"])
+            candidate_runtime_target_seconds = max(60, int(round(max(1, requested_limit) * 3)))
             if requested_backend == "transformer":
-                runtime_target_seconds = max(
-                    90,
-                    int(
-                        round(
-                            ((transformer_max_queries * transformer_pages_per_query) / max(1, transformer_parallel_requests)) * 7
-                        )
-                    ),
+                query_runtime_target_seconds = int(
+                    round(
+                        ((transformer_max_queries * transformer_pages_per_query) / max(1, transformer_parallel_requests)) * 7
+                    )
                 )
+                runtime_target_seconds = max(candidate_runtime_target_seconds, query_runtime_target_seconds)
             else:
-                runtime_target_seconds = max(60, int(round(max(1, requested_limit) * 3)))
+                runtime_target_seconds = candidate_runtime_target_seconds
             latest_telemetry: Dict[str, Any] = {
                 "stage": "running",
                 "stage_label": "Running",
@@ -1400,8 +1475,8 @@ def create_app() -> "FastAPI":
 
             _push_progress(
                 {
-                    "stage": "retrieval",
-                    "stage_label": "Retrieval",
+                    "stage": "query_planning",
+                    "stage_label": "Planning",
                     "percent": 4,
                     "message": "Preparing search pipeline.",
                 },
@@ -1427,9 +1502,9 @@ def create_app() -> "FastAPI":
                 remote_error_message = ""
                 _push_progress(
                     {
-                        "stage": "retrieval",
-                        "stage_label": "Transformer",
-                        "message": "Running HR Hunter Transformer V2 retrieval and ranking.",
+                        "stage": "query_planning",
+                        "stage_label": "Transformer Planning",
+                        "message": "Preparing Transformer V2 query plan and retrieval workers.",
                         "percent": 8,
                     },
                     checkpoint_patch={"event": "transformer_request"},
@@ -1650,6 +1725,12 @@ def create_app() -> "FastAPI":
                 },
                 checkpoint_patch={"event": "finalizing"},
                 force=True,
+            )
+            report = _attach_report_runtime_metadata(
+                report,
+                elapsed_seconds=int(time.monotonic() - job_started_monotonic),
+                runtime_target_seconds=runtime_target_seconds,
+                execution_backend=execution_backend,
             )
             output_dir = Path(ui_payload["output_dir"])
             json_path, csv_path = write_report(

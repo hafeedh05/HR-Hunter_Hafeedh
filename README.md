@@ -3,8 +3,9 @@
 HR Hunter is a recruiter-facing sourcing app with a familiar project workflow and a transformer-first search engine.
 
 - Repo: [https://github.com/hafeedh05/HR-Hunter_Hafeedh.git](https://github.com/hafeedh05/HR-Hunter_Hafeedh.git)
-- Deploy handoff: [docs/codex-production-handoff.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/docs/codex-production-handoff.md)
-- Local validation note: [docs/local-transformer-validation-20260415.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/docs/local-transformer-validation-20260415.md)
+- Deploy handoff: [docs/codex-production-handoff.md](docs/codex-production-handoff.md)
+- Local validation note: [docs/local-transformer-validation-20260415.md](docs/local-transformer-validation-20260415.md)
+- Live client-ready validation: [docs/client-ready-live-validation-20260416.md](docs/client-ready-live-validation-20260416.md)
 
 ## Current Release Reality
 
@@ -146,6 +147,22 @@ This release includes the following practical changes:
 - deployment handoff updated for GitHub-to-GCP release flow
 - startup compatibility fix for workspace state loading
 - legacy report compatibility fix so older saved project runs still open in Results/Candidates
+- live runtime/progress truth fix: saved reports now retain job wall-clock runtime, transformer pipeline runtime, and the product runtime target
+- frontend asset cache bump so browsers fetch the latest Results/Candidates runtime fixes
+- stronger transformer extraction/company quality filters for person-like results and malformed company fragments
+- better country/location interpretation for regional public profile hosts such as `ae.linkedin.com`
+
+## Current Live Validation
+
+Latest GCP release: `/srv/hr-hunter/releases/20260416T053644Z-client-ready-v3`
+
+- Health: `https://hr-hunter.hyvelabs.tech/healthz` returns `{"status":"ok"}`
+- Auth/session API works for the admin account
+- Project list loads with the five validation projects
+- Fresh Supply Chain validation: `300 returned / 212 verified / 88 review / 0 reject` in `186s` job elapsed
+- Supply Chain saved report now stores `runtime_seconds=182`, `pipeline_elapsed_seconds=37`, and `target_runtime_seconds=900`
+- CSV export returned a real CSV with candidate rows
+- Project Architect quality validation from the same quality code path: `300 returned / 259 verified / 41 review / 0 reject`
 
 ## Current Laptop Benchmark Baseline
 

@@ -11,6 +11,7 @@ class SearchBrief:
     countries: list[str] = field(default_factory=list)
     cities: list[str] = field(default_factory=list)
     company_targets: list[str] = field(default_factory=list)
+    peer_company_targets: list[str] = field(default_factory=list)
     required_keywords: list[str] = field(default_factory=list)
     preferred_keywords: list[str] = field(default_factory=list)
     industry_keywords: list[str] = field(default_factory=list)
@@ -73,6 +74,7 @@ class EvidenceRecord:
     location_match: bool
     current_role_signal: bool
     confidence: float
+    peer_company_match: bool = False
     title_confidence: float = 0.0
     company_confidence: float = 0.0
     location_confidence: float = 0.0
@@ -92,22 +94,32 @@ class CandidateEntity:
     evidence: list[EvidenceRecord] = field(default_factory=list)
     title_match: bool = False
     company_match: bool = False
+    peer_company_match: bool = False
     location_match: bool = False
     current_role_proof_count: int = 0
     current_company_confirmed: bool = False
     current_title_confirmed: bool = False
     current_location_confirmed: bool = False
+    company_support_count: int = 0
+    title_support_count: int = 0
+    location_support_count: int = 0
     source_domains: list[str] = field(default_factory=list)
     semantic_fit: float = 0.0
     title_match_score: float = 0.0
     skill_match_score: float = 0.0
     company_match_score: float = 0.0
+    company_quality_score: float = 0.0
+    company_consensus_score: float = 0.0
     location_match_score: float = 0.0
+    location_consensus_score: float = 0.0
+    title_consensus_score: float = 0.0
+    industry_match_score: float = 0.0
     seniority_match_score: float = 0.0
     currentness_score: float = 0.0
     source_trust_score: float = 0.0
     verification_confidence: float = 0.0
     semantic_similarity: float = 0.0
+    evidence_conflict_score: float = 0.0
     score: float = 0.0
     verification_status: str = "reject"
     notes: list[str] = field(default_factory=list)

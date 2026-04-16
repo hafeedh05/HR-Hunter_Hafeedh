@@ -3,7 +3,44 @@
 This document is the deploy handoff for the current release cut from:
 
 - Repo: `https://github.com/hafeedh05/HR-Hunter_Hafeedh.git`
-- Local source workspace: `C:\Users\abdul\Desktop\HR Hunter\HR Hunter Clone`
+- Current operator workspace: `/Users/rabiyashaikh/Downloads/HR_Hunter`
+- Live validation note: `docs/client-ready-live-validation-20260416.md`
+
+## Current Live Release
+
+- Live app: `https://hr-hunter.hyvelabs.tech`
+- Final release path: `/srv/hr-hunter/releases/20260416T053644Z-client-ready-v3`
+- Previous rollback release: `/srv/hr-hunter/releases/20260416T053015Z-client-ready-v2`
+- Health check: `https://hr-hunter.hyvelabs.tech/healthz` returns `{"status":"ok"}`
+- Frontend assets: `20260416clientready2`
+
+### Fresh Live Validation
+
+Supply Chain Manager is the latest fresh 300-candidate post-deploy validation run:
+
+- run id: `supply-chain-manager-e424bd18`
+- backend: `transformer_v2`
+- returned: `300`
+- verified / review / reject: `212 / 88 / 0`
+- query count: `73`
+- raw / unique: `889 / 434`
+- job elapsed: `186s`
+- saved report runtime: `182s`
+- transformer pipeline elapsed: `37s`
+- target runtime baseline: `900s`
+- CSV export: real CSV confirmed
+
+Project Architect quality validation from the same quality path:
+
+- run id: `project-architect-07ac2f33`
+- backend: `transformer_v2`
+- returned: `300`
+- verified / review / reject: `259 / 41 / 0`
+- query count: `135`
+- raw / unique: `2242 / 1272`
+- job elapsed: `330s`
+
+CEO is still constrained and should not be used as the main client go/no-go demo family. The latest live saved CEO run returned `300 / 16 verified / 284 review / 0 reject`, with diagnostics pointing to weak company/industry signals for a narrow executive brief.
 
 ## Release Decision For Today
 
@@ -32,6 +69,10 @@ This document is the deploy handoff for the current release cut from:
 - feedback page language cleaned up for client comprehension
 - startup compatibility fix for workspace state loading
 - legacy saved-run compatibility fix so older project runs still load
+- job-wall-clock runtime persisted into saved summaries and telemetry
+- product target runtime baseline restored (`300 candidates -> 900s`)
+- cache-busted frontend assets for the latest Results/Candidates runtime fixes
+- stricter malformed company-fragment filtering and regional profile-host location handling
 
 ## Current Transformer App Baseline
 

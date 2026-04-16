@@ -77,6 +77,18 @@ def resolve_query_profile(role_family: str, requested_limit: int, *, family_conf
             pages_per_query = max(pages_per_query, 2 if profile.adaptive_mode in {"hard", "fallback"} else pages_per_query)
         if stats.average_reject_rate > 0.22:
             family_term_budget = min(3, family_term_budget + 1)
+        if (
+            0.18 <= stats.average_verified_rate < 0.45
+            and stats.average_review_rate >= 0.45
+            and stats.average_reject_rate < 0.08
+            and stats.average_fill_rate >= 0.88
+            and profile.adaptive_mode in {"dense", "balanced", "strong"}
+        ):
+            max_queries = int(round(max_queries * 1.15))
+            source_site_budget = min(8, source_site_budget + 1)
+            if profile.adaptive_mode in {"dense", "strong"}:
+                pages_per_query = max(pages_per_query, 2)
+            adaptive_mode = f"{adaptive_mode}_verified_recall"
         if stats.positive_feedback_rate > 0.55 and stats.average_fill_rate > 0.92:
             max_queries = int(round(max_queries * 0.92))
 
@@ -107,4 +119,3 @@ def resolve_query_profile(role_family: str, requested_limit: int, *, family_conf
         family_term_budget=family_term_budget,
         adaptive_mode=adaptive_mode,
     )
-

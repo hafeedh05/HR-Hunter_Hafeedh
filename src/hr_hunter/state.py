@@ -529,44 +529,139 @@ def _mandate_id(org_id: str, brief: SearchBrief) -> str:
 
 
 def _candidate_registry_snapshot(candidate: CandidateProfile) -> Dict[str, Any]:
-    snapshot = asdict(candidate)
-    snapshot["raw"] = {}
-    snapshot["evidence_records"] = []
-    snapshot["experience"] = list(candidate.experience[:4])
-    snapshot["verification_notes"] = list(candidate.verification_notes[:12])
-    snapshot["search_strategies"] = list(candidate.search_strategies[:8])
-    return snapshot
+    return {
+        "full_name": candidate.full_name,
+        "current_title": candidate.current_title,
+        "current_company": candidate.current_company,
+        "location_name": candidate.location_name,
+        "location_geo": candidate.location_geo,
+        "linkedin_url": candidate.linkedin_url,
+        "source": candidate.source,
+        "source_url": candidate.source_url,
+        "summary": candidate.summary,
+        "years_experience": candidate.years_experience,
+        "industry": candidate.industry,
+        "experience": list(candidate.experience[:4]),
+        "matched_titles": list(candidate.matched_titles),
+        "matched_companies": list(candidate.matched_companies),
+        "distance_miles": candidate.distance_miles,
+        "current_target_company_match": bool(candidate.current_target_company_match),
+        "target_company_history_match": bool(candidate.target_company_history_match),
+        "current_title_match": bool(candidate.current_title_match),
+        "industry_aligned": bool(candidate.industry_aligned),
+        "location_aligned": bool(candidate.location_aligned),
+        "current_company_confirmed": bool(candidate.current_company_confirmed),
+        "current_title_confirmed": bool(candidate.current_title_confirmed),
+        "current_location_confirmed": bool(candidate.current_location_confirmed),
+        "precise_location_confirmed": bool(candidate.precise_location_confirmed),
+        "current_employment_confirmed": bool(candidate.current_employment_confirmed),
+        "verification_status": candidate.verification_status,
+        "qualification_tier": candidate.qualification_tier,
+        "cap_reasons": list(candidate.cap_reasons),
+        "disqualifier_reasons": list(candidate.disqualifier_reasons),
+        "matched_title_family": candidate.matched_title_family,
+        "location_precision_bucket": candidate.location_precision_bucket,
+        "current_role_proof_count": candidate.current_role_proof_count,
+        "source_quality_score": candidate.source_quality_score,
+        "evidence_freshness_year": candidate.evidence_freshness_year,
+        "current_function_fit": candidate.current_function_fit,
+        "current_fmcg_fit": candidate.current_fmcg_fit,
+        "parser_confidence": candidate.parser_confidence,
+        "evidence_quality_score": candidate.evidence_quality_score,
+        "title_similarity_score": candidate.title_similarity_score,
+        "company_match_score": candidate.company_match_score,
+        "location_match_score": candidate.location_match_score,
+        "skill_overlap_score": candidate.skill_overlap_score,
+        "industry_fit_score": candidate.industry_fit_score,
+        "years_fit_score": candidate.years_fit_score,
+        "years_experience_gap": candidate.years_experience_gap,
+        "semantic_similarity_score": candidate.semantic_similarity_score,
+        "reranker_score": candidate.reranker_score,
+        "ranking_model_version": candidate.ranking_model_version,
+        "feature_scores": dict(candidate.feature_scores),
+        "anchor_scores": dict(candidate.anchor_scores),
+        "verification_notes": list(candidate.verification_notes[:12]),
+        "search_strategies": list(candidate.search_strategies[:8]),
+        "evidence_confidence": candidate.evidence_confidence,
+        "evidence_verdict": candidate.evidence_verdict,
+        "stale_data_risk": bool(candidate.stale_data_risk),
+        "last_verified_at": candidate.last_verified_at,
+        "score": candidate.score,
+        "raw": {},
+        "evidence_records": [],
+    }
 
 
-def _candidate_registry_row(
+def _candidate_registry_rows(
     connection: Any,
     *,
     org_id: str,
-    candidate: CandidateProfile,
+    candidates: Sequence[CandidateProfile],
     run_id: str,
-) -> str:
-    candidate_id = candidate_primary_key(candidate)
-    if not candidate_id:
-        candidate_id = f"anon:{uuid.uuid4().hex}"
-    row_id = f"{org_id}:{candidate_id}"
-    current = connection.execute(
-        """
-        SELECT search_ids_json, search_count, first_seen_at
-        FROM candidate_registry
-        WHERE org_id = ? AND identity_key = ?
-        """,
-        (org_id, candidate_id),
-    ).fetchone()
-    search_ids: List[str] = []
-    if current:
-        try:
-            search_ids = list(json.loads(current["search_ids_json"] or "[]"))
-        except Exception:
-            search_ids = []
-    if run_id and run_id not in search_ids:
-        search_ids.append(run_id)
-    created_at = current["first_seen_at"] if current else _now()
-    connection.execute(
+) -> List[str]:
+    if not candidates:
+        return []
+
+    candidate_ids: List[str] = []
+    unique_candidate_ids: List[str] = []
+    seen_candidate_ids: set[str] = set()
+    for candidate in candidates:
+        candidate_id = candidate_primary_key(candidate)
+        if not candidate_id:
+            candidate_id = f"anon:{uuid.uuid4().hex}"
+        candidate_ids.append(candidate_id)
+        if candidate_id not in seen_candidate_ids:
+            seen_candidate_ids.add(candidate_id)
+            unique_candidate_ids.append(candidate_id)
+
+    existing_by_identity: Dict[str, Any] = {}
+    if unique_candidate_ids:
+        placeholders = ", ".join("?" for _ in unique_candidate_ids)
+        existing_rows = connection.execute(
+            f"""
+            SELECT identity_key, search_ids_json, first_seen_at
+            FROM candidate_registry
+            WHERE org_id = ? AND identity_key IN ({placeholders})
+            """,
+            (org_id, *unique_candidate_ids),
+        ).fetchall()
+        existing_by_identity = {str(row["identity_key"] or "").strip(): row for row in existing_rows}
+
+    rows: List[Sequence[Any]] = []
+    for candidate, candidate_id in zip(candidates, candidate_ids, strict=False):
+        current = existing_by_identity.get(candidate_id)
+        search_ids: List[str] = []
+        if current:
+            try:
+                search_ids = list(json.loads(current["search_ids_json"] or "[]"))
+            except Exception:
+                search_ids = []
+        if run_id and run_id not in search_ids:
+            search_ids.append(run_id)
+        created_at = current["first_seen_at"] if current else _now()
+        now = _now()
+        rows.append(
+            (
+                f"{org_id}:{candidate_id}",
+                org_id,
+                candidate_id,
+                candidate.full_name,
+                candidate.current_title,
+                candidate.current_company,
+                candidate.location_name,
+                candidate.linkedin_url or "",
+                candidate.source_url or "",
+                _json(_candidate_registry_snapshot(candidate)),
+                _json(search_ids),
+                len(search_ids),
+                created_at,
+                now,
+                created_at,
+                now,
+            )
+        )
+
+    connection.executemany(
         """
         INSERT INTO candidate_registry (
             id, org_id, identity_key, full_name, current_title, current_company,
@@ -586,26 +681,9 @@ def _candidate_registry_row(
             last_seen_at = excluded.last_seen_at,
             updated_at = excluded.updated_at
         """,
-        (
-            row_id,
-            org_id,
-            candidate_id,
-            candidate.full_name,
-            candidate.current_title,
-            candidate.current_company,
-            candidate.location_name,
-            candidate.linkedin_url or "",
-            candidate.source_url or "",
-            _json(_candidate_registry_snapshot(candidate)),
-            _json(search_ids),
-            len(search_ids),
-            created_at,
-            _now(),
-            created_at,
-            _now(),
-        ),
+        rows,
     )
-    return candidate_id
+    return candidate_ids
 
 
 def log_audit_event(
@@ -657,14 +735,10 @@ def persist_search_run(
         if not isinstance(query_plan, list):
             return
         connection.execute("DELETE FROM run_queries WHERE run_id = ?", (report.run_id,))
+        rows: List[Sequence[Any]] = []
         for index, item in enumerate(query_plan, start=1):
             payload = dict(item) if isinstance(item, dict) else {}
-            connection.execute(
-                """
-                INSERT INTO run_queries (
-                    run_id, ordinal, stage, query_text, source_pack, page_budget, completed, raw_hits, retries, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+            rows.append(
                 (
                     report.run_id,
                     int(payload.get("ordinal", index) or index),
@@ -676,11 +750,20 @@ def persist_search_run(
                     0,
                     0,
                     _now(),
-                ),
+                )
             )
+        connection.executemany(
+            """
+            INSERT INTO run_queries (
+                run_id, ordinal, stage, query_text, source_pack, page_budget, completed, raw_hits, retries, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
 
     def _persist_transformer_evidence_rows(connection: Any) -> None:
         connection.execute("DELETE FROM run_evidence WHERE run_id = ?", (report.run_id,))
+        rows: List[Sequence[Any]] = []
         for candidate in report.candidates:
             candidate_key = candidate_primary_key(candidate)
             for evidence in list(candidate.evidence_records or []):
@@ -697,15 +780,7 @@ def persist_search_run(
                     "current_employment_signal": bool(evidence.current_employment_signal),
                     "confidence": float(evidence.confidence or 0.0),
                 }
-                connection.execute(
-                    """
-                    INSERT INTO run_evidence (
-                        run_id, candidate_key, source_url, source_domain, source_type,
-                        extracted_title, extracted_company, extracted_location,
-                        title_confidence, company_confidence, location_confidence,
-                        freshness_confidence, currentness_confidence, raw_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                rows.append(
                     (
                         report.run_id,
                         candidate_key,
@@ -721,8 +796,19 @@ def persist_search_run(
                         float(getattr(evidence, "freshness_confidence", 0.0) or 0.0),
                         float(getattr(evidence, "currentness_confidence", 0.0) or 0.0),
                         _json(raw_payload),
-                    ),
+                    )
                 )
+        connection.executemany(
+            """
+            INSERT INTO run_evidence (
+                run_id, candidate_key, source_url, source_domain, source_type,
+                extracted_title, extracted_company, extracted_location,
+                title_confidence, company_confidence, location_confidence,
+                freshness_confidence, currentness_confidence, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
 
     with _connect(resolved) as connection:
         connection.execute(
@@ -792,25 +878,10 @@ def persist_search_run(
                 _now(),
             ),
         )
-        for index, candidate in enumerate(report.candidates, start=1):
-            candidate_id = _candidate_registry_row(connection, org_id=org_id, candidate=candidate, run_id=report.run_id)
-            connection.execute(
-                """
-                INSERT INTO run_candidates (
-                    run_id, mandate_id, candidate_id, rank_index, score, verification_status,
-                    qualification_tier, feature_json, anchor_json, source, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_id, candidate_id) DO UPDATE SET
-                    mandate_id = excluded.mandate_id,
-                    rank_index = excluded.rank_index,
-                    score = excluded.score,
-                    verification_status = excluded.verification_status,
-                    qualification_tier = excluded.qualification_tier,
-                    feature_json = excluded.feature_json,
-                    anchor_json = excluded.anchor_json,
-                    source = excluded.source,
-                    created_at = excluded.created_at
-                """,
+        candidate_ids = _candidate_registry_rows(connection, org_id=org_id, candidates=report.candidates, run_id=report.run_id)
+        run_candidate_rows: List[Sequence[Any]] = []
+        for index, (candidate, candidate_id) in enumerate(zip(report.candidates, candidate_ids, strict=False), start=1):
+            run_candidate_rows.append(
                 (
                     report.run_id,
                     mandate_id,
@@ -823,8 +894,27 @@ def persist_search_run(
                     _json(candidate.anchor_scores),
                     candidate.source,
                     _now(),
-                ),
+                )
             )
+        connection.executemany(
+            """
+            INSERT INTO run_candidates (
+                run_id, mandate_id, candidate_id, rank_index, score, verification_status,
+                qualification_tier, feature_json, anchor_json, source, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id, candidate_id) DO UPDATE SET
+                mandate_id = excluded.mandate_id,
+                rank_index = excluded.rank_index,
+                score = excluded.score,
+                verification_status = excluded.verification_status,
+                qualification_tier = excluded.qualification_tier,
+                feature_json = excluded.feature_json,
+                anchor_json = excluded.anchor_json,
+                source = excluded.source,
+                created_at = excluded.created_at
+            """,
+            run_candidate_rows,
+        )
         if str(report.summary.get("execution_backend", execution_backend) or execution_backend) == "transformer_v2":
             _persist_transformer_query_rows(connection)
             _persist_transformer_evidence_rows(connection)

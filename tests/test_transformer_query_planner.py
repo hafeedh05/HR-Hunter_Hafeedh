@@ -1,5 +1,7 @@
 from hr_hunter_transformer.models import SearchBrief
+from hr_hunter_transformer.family_learning import FamilyLearningStats
 from hr_hunter_transformer.query_planner import build_query_plan
+from hr_hunter_transformer.query_profiles import resolve_query_profile
 from hr_hunter_transformer.role_profiles import infer_role_family_with_confidence
 
 
@@ -44,3 +46,39 @@ def test_query_plan_uses_wider_profile_for_low_confidence_role() -> None:
     assert plan.pages_per_query >= 2
     assert plan.max_queries > 54
 
+
+def test_dense_family_learning_does_not_overexpand_high_fill_supply_chain(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "hr_hunter_transformer.query_profiles.family_learning_stats",
+        lambda family: FamilyLearningStats(
+            family=family,
+            run_count=4,
+            average_fill_rate=1.0,
+            average_verified_rate=0.08,
+            average_review_rate=0.82,
+            average_reject_rate=0.02,
+        ),
+    )
+
+    profile = resolve_query_profile("supply_chain", 300)
+
+    assert profile.max_queries == 81
+
+
+def test_dense_family_learning_widens_promising_low_verified_supply_chain(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "hr_hunter_transformer.query_profiles.family_learning_stats",
+        lambda family: FamilyLearningStats(
+            family=family,
+            run_count=6,
+            average_fill_rate=1.0,
+            average_verified_rate=0.4,
+            average_review_rate=0.57,
+            average_reject_rate=0.02,
+        ),
+    )
+
+    profile = resolve_query_profile("supply_chain", 300)
+
+    assert profile.max_queries == 84
+    assert profile.pages_per_query >= 2

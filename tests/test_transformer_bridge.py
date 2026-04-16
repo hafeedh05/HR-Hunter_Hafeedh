@@ -58,12 +58,15 @@ def test_candidate_from_transformer_entity_matches_current_candidate_profile_sha
         semantic_fit=0.82,
         title_match_score=0.94,
         skill_match_score=0.76,
+        company_consensus_score=0.72,
+        industry_match_score=0.58,
         company_match_score=0.71,
         location_match_score=0.92,
         seniority_match_score=0.67,
         currentness_score=0.9,
         source_trust_score=0.95,
         verification_confidence=0.89,
+        evidence_conflict_score=0.08,
     )
 
     candidate = _candidate_from_transformer_entity(entity, brief)
@@ -72,6 +75,77 @@ def test_candidate_from_transformer_entity_matches_current_candidate_profile_sha
     assert candidate.current_company == "ExampleCo"
     assert candidate.location_precision_bucket == "named_target_location"
     assert candidate.verification_status == "verified"
+    assert candidate.skill_overlap_score == 0.76
+    assert candidate.industry_fit_score == 0.58
+    assert candidate.feature_scores["company_consensus"] == 0.72
+
+
+def test_candidate_from_transformer_entity_keeps_country_only_location_non_precise() -> None:
+    brief = build_search_brief(
+        {
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager"],
+            "geography": {
+                "country": "United Arab Emirates",
+                "location_name": "Dubai",
+                "location_hints": ["Abu Dhabi", "Sharjah"],
+            },
+        }
+    )
+    evidence = SimpleNamespace(
+        source_url="https://ae.linkedin.com/in/jane-doe",
+        source_domain="ae.linkedin.com",
+        page_title="Jane Doe | Supply Chain Manager",
+        page_snippet="Supply Chain Manager at ExampleCo",
+        source_type="profile",
+        current_company="ExampleCo",
+        company_match=True,
+        current_title="Supply Chain Manager",
+        location_match=True,
+        current_location="United Arab Emirates",
+        current_role_signal=True,
+        confidence=0.84,
+        supporting_keywords=["s&op"],
+    )
+    entity = SimpleNamespace(
+        evidence=[evidence],
+        full_name="Jane Doe",
+        current_title="Supply Chain Manager",
+        current_company="ExampleCo",
+        current_location="United Arab Emirates",
+        notes=[],
+        diagnostics=[],
+        verification_status="review",
+        current_company_confirmed=True,
+        current_location_confirmed=True,
+        current_title_confirmed=True,
+        current_role_proof_count=2,
+        company_match=True,
+        title_match=True,
+        location_match=True,
+        role_family="operations",
+        source_domains=["ae.linkedin.com"],
+        semantic_similarity=0.8,
+        score=0.8,
+        semantic_fit=0.8,
+        title_match_score=0.92,
+        skill_match_score=0.74,
+        company_consensus_score=0.68,
+        industry_match_score=0.55,
+        company_match_score=0.7,
+        location_match_score=0.44,
+        seniority_match_score=0.65,
+        currentness_score=0.88,
+        source_trust_score=0.9,
+        verification_confidence=0.82,
+        evidence_conflict_score=0.05,
+    )
+
+    candidate = _candidate_from_transformer_entity(entity, brief)
+
+    assert candidate.location_precision_bucket == "country_only"
+    assert candidate.precise_location_confirmed is False
+    assert candidate.evidence_records[0].precise_location_match is False
 
 
 def test_transformer_pipeline_cache_reuses_pipeline_instance(monkeypatch) -> None:

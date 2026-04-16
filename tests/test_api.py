@@ -1,5 +1,6 @@
 from hr_hunter.briefing import build_search_brief
 from hr_hunter.api import (
+    _attach_report_runtime_metadata,
     _finalize_report_for_limit,
     _job_actor_from_payload,
     _resolve_effective_verification_target,
@@ -44,6 +45,42 @@ def test_resolve_pipeline_progress_percent_stays_monotonic_across_stages():
         queries_completed=13,
         queries_total=13,
     ) == 98
+
+
+def test_attach_report_runtime_metadata_prefers_job_wall_clock():
+    report = SearchRunReport(
+        run_id="run-runtime-test",
+        brief_id="brief-runtime-test",
+        dry_run=False,
+        generated_at="2026-04-16T00:00:00+00:00",
+        provider_results=[],
+        candidates=[],
+        summary={
+            "execution_backend": "transformer_v2",
+            "pipeline_metrics": {"queries_completed": 5},
+            "telemetry_events": [
+                {"stage": "finalizing", "elapsed_seconds": 41},
+                {"stage": "completed", "elapsed_seconds": 42},
+            ],
+        },
+    )
+
+    updated = _attach_report_runtime_metadata(
+        report,
+        elapsed_seconds=245,
+        runtime_target_seconds=900,
+        execution_backend="transformer_v2",
+    )
+
+    assert updated.summary["runtime_seconds"] == 245
+    assert updated.summary["job_elapsed_seconds"] == 245
+    assert updated.summary["pipeline_elapsed_seconds"] == 42
+    assert updated.summary["runtime_display_source"] == "job_wall_clock"
+    assert updated.summary["pipeline_metrics"]["runtime_seconds"] == 245
+    completed_event = updated.summary["telemetry_events"][-1]
+    assert completed_event["stage"] == "completed"
+    assert completed_event["elapsed_seconds"] == 245
+    assert completed_event["pipeline_elapsed_seconds"] == 42
 
 
 def test_finalize_report_for_limit_keeps_raw_found_above_unique_pool():

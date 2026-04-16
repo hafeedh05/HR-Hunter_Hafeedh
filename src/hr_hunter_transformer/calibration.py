@@ -7,13 +7,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from hr_hunter.config import resolve_output_dir
 from hr_hunter.feedback import load_ranker_training_rows
 from hr_hunter_transformer.models import CandidateEntity
 from hr_hunter_transformer.role_profiles import TECHNICAL_SOURCES
 
 
 def _default_report_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "output" / "search"
+    return resolve_output_dir()
 
 
 def _sigmoid(value: float) -> float:
@@ -58,6 +59,9 @@ def candidate_feature_map(entity: CandidateEntity) -> dict[str, float]:
         "technical_source": 1.0 if any(domain in TECHNICAL_SOURCES for domain in entity.source_domains) else 0.0,
         "max_evidence_confidence": float(max_confidence),
         "keyword_support": float(keyword_support),
+        "company_consensus": float(entity.company_consensus_score or 0.0),
+        "industry_match": float(entity.industry_match_score or 0.0),
+        "evidence_conflict": float(entity.evidence_conflict_score or 0.0),
     }
 
 
@@ -88,11 +92,18 @@ def _training_feature_map(row: dict[str, Any]) -> dict[str, float]:
         "technical_source": 1.0 if any(token in json.dumps(feature_json).lower() for token in ("github", "gitlab", "huggingface", "kaggle")) else 0.0,
         "max_evidence_confidence": _safe_float(feature_json.get("evidence_quality_score")),
         "keyword_support": min(6.0, _safe_float(feature_json.get("skill_overlap_score")) * 6.0),
+        "company_consensus": _safe_float(feature_json.get("company_consensus_score")),
+        "industry_match": max(
+            _safe_float(feature_json.get("industry_fit_score")),
+            _safe_float(feature_json.get("industry_match_score")),
+        ),
+        "evidence_conflict": _safe_float(feature_json.get("evidence_conflict_score")),
     }
 
 
 def _report_candidate_feature_map(candidate: dict[str, Any]) -> dict[str, float]:
     feature_scores = candidate.get("feature_scores") if isinstance(candidate.get("feature_scores"), dict) else {}
+    anchor_scores = candidate.get("anchor_scores") if isinstance(candidate.get("anchor_scores"), dict) else {}
     evidence_records = candidate.get("evidence_records") if isinstance(candidate.get("evidence_records"), list) else []
     max_confidence = max((_safe_float(record.get("confidence")) for record in evidence_records if isinstance(record, dict)), default=0.0)
     keyword_support = max((len(record.get("supporting_keywords") or []) for record in evidence_records if isinstance(record, dict)), default=0)
@@ -130,6 +141,16 @@ def _report_candidate_feature_map(candidate: dict[str, Any]) -> dict[str, float]
         "technical_source": 1.0 if any(domain in TECHNICAL_SOURCES for domain in source_domains) else 0.0,
         "max_evidence_confidence": max_confidence,
         "keyword_support": float(keyword_support) if keyword_support else min(6.0, _safe_float(feature_scores.get("skill_overlap")) * 6.0),
+        "company_consensus": _safe_float(anchor_scores.get("company_consensus")),
+        "industry_match": max(
+            _safe_float(candidate.get("industry_fit_score")),
+            _safe_float(feature_scores.get("industry_fit")),
+            _safe_float(anchor_scores.get("industry_match")),
+        ),
+        "evidence_conflict": max(
+            _safe_float(feature_scores.get("evidence_conflict")),
+            _safe_float(anchor_scores.get("evidence_conflict")),
+        ),
     }
 
 

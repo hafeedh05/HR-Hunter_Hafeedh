@@ -293,6 +293,32 @@ def test_build_reporting_summary_drops_legacy_scope_counts() -> None:
     assert "in_scope_count" not in summary
     assert "precise_in_scope_count" not in summary
     assert "scope_counts" not in summary
+
+
+def test_sanitize_report_summary_preserves_runtime_truth_fields() -> None:
+    summary = sanitize_report_summary(
+        {
+            "candidate_count": 300,
+            "runtime_seconds": 245,
+            "wall_clock_seconds": 245,
+            "job_elapsed_seconds": 245,
+            "pipeline_elapsed_seconds": 42,
+            "target_runtime_seconds": 900,
+            "runtime_display_source": "job_wall_clock",
+            "debug_only": "drop me",
+        }
+    )
+
+    assert summary == {
+        "candidate_count": 300,
+        "returned_candidate_count": 300,
+        "runtime_seconds": 245,
+        "wall_clock_seconds": 245,
+        "job_elapsed_seconds": 245,
+        "pipeline_elapsed_seconds": 42,
+        "target_runtime_seconds": 900,
+        "runtime_display_source": "job_wall_clock",
+    }
     assert "verification_scope_target" not in summary
     assert "verification_shortlist_scope_count" not in summary
 

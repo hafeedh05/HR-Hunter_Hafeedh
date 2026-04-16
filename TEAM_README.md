@@ -1,7 +1,8 @@
 # HR Hunter Team README
 
-Canonical deploy handoff: [docs/codex-production-handoff.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/docs/codex-production-handoff.md)
-Local validation note: [docs/local-transformer-validation-20260415.md](C:/Users/abdul/Desktop/HR%20Hunter/HR%20Hunter%20Clone/docs/local-transformer-validation-20260415.md)
+Canonical deploy handoff: [docs/codex-production-handoff.md](docs/codex-production-handoff.md)
+Local validation note: [docs/local-transformer-validation-20260415.md](docs/local-transformer-validation-20260415.md)
+Live validation note: [docs/client-ready-live-validation-20260416.md](docs/client-ready-live-validation-20260416.md)
 
 ## Current Team Reality
 
@@ -34,6 +35,44 @@ This is the working team position:
 - production deploy handoff updated for GitHub-to-GCP deployment
 - workspace-state startup compatibility fix
 - legacy saved-run compatibility fix for Results/Candidates loading
+- runtime/progress truth fix so report summaries preserve job wall-clock runtime, transformer pipeline runtime, and product target runtime
+- asset cache bump so live browsers pull the latest app bundle
+- extraction/company-quality pass for malformed company fragments and regional profile-host location evidence
+
+## Latest Live Client-Ready Validation
+
+Final live release path:
+
+- `/srv/hr-hunter/releases/20260416T053644Z-client-ready-v3`
+
+Verified live on `https://hr-hunter.hyvelabs.tech`:
+
+- `/healthz` returns healthy
+- admin session API works
+- five validation projects load
+- latest Supply Chain run attaches to the correct project
+- Results and report summary load with truthful runtime fields
+- CSV export returns a real candidate CSV
+
+Latest fresh Supply Chain run:
+
+- run id: `supply-chain-manager-e424bd18`
+- backend: `transformer_v2`
+- returned: `300`
+- verified/review/reject: `212 / 88 / 0`
+- raw/unique/query count: `889 / 434 / 73`
+- job elapsed: `186s`
+- saved report runtime: `182s`
+- target runtime baseline: `900s`
+
+Latest Project Architect quality validation from the same quality code path:
+
+- run id: `project-architect-07ac2f33`
+- backend: `transformer_v2`
+- returned: `300`
+- verified/review/reject: `259 / 41 / 0`
+- raw/unique/query count: `2242 / 1272 / 135`
+- job elapsed: `330s`
 
 ## Current Verification Baseline
 

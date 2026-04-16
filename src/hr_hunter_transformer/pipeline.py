@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from hr_hunter.config import resolve_feedback_db_path
+from hr_hunter.config import resolve_feedback_db_path, resolve_output_dir
 from hr_hunter_transformer.calibration import load_transformer_calibration_model
 from hr_hunter_transformer.evidence_graph import EvidenceGraphBuilder
 from hr_hunter_transformer.extraction import ProfileExtractor
@@ -27,7 +27,7 @@ class CandidateIntelligencePipeline:
         self.encoder_name = "none"
         self.calibration_model = load_transformer_calibration_model(
             str(resolve_feedback_db_path()),
-            str(Path(__file__).resolve().parents[2] / "output" / "search"),
+            str(resolve_output_dir()),
         )
         transformer_scorer = None
         if use_transformer:

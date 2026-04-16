@@ -1799,6 +1799,24 @@ function durationSecondsBetween(startValue, endValue) {
   return Math.max(0, (end.getTime() - start.getTime()) / 1000);
 }
 
+function reportRuntimeSeconds(report = state.currentReport) {
+  const summary = report?.summary || {};
+  const pipelineMetrics = summary.pipeline_metrics || {};
+  const telemetryEvents = Array.isArray(summary.telemetry_events) ? summary.telemetry_events : [];
+  const completedEvent = telemetryEvents.find((event) => String(event?.stage || "").toLowerCase() === "completed");
+  return Math.max(
+    0,
+    safeNumber(summary.job_elapsed_seconds, 0),
+    safeNumber(summary.wall_clock_seconds, 0),
+    safeNumber(summary.runtime_seconds, 0),
+    safeNumber(pipelineMetrics.job_elapsed_seconds, 0),
+    safeNumber(pipelineMetrics.wall_clock_seconds, 0),
+    safeNumber(pipelineMetrics.runtime_seconds, 0),
+    safeNumber(completedEvent?.job_elapsed_seconds, 0),
+    safeNumber(completedEvent?.elapsed_seconds, 0),
+  );
+}
+
 function formatDuration(seconds) {
   const totalSeconds = Math.max(0, Math.round(safeNumber(seconds, 0)));
   const hours = Math.floor(totalSeconds / 3600);
@@ -2184,6 +2202,14 @@ function resultsRunTiming() {
       source: "completed",
       runtimeSeconds,
       estimatedSeconds: Math.max(runtimeSeconds, estimatedSeconds),
+    };
+  }
+  const savedReportRuntime = reportRuntimeSeconds();
+  if (savedReportRuntime > 0) {
+    return {
+      source: "report",
+      runtimeSeconds: savedReportRuntime,
+      estimatedSeconds: savedReportRuntime,
     };
   }
   const activeJob = activeSearchJobForSelectedProject();
@@ -2696,7 +2722,9 @@ function renderResultsSummary() {
       ? "Timing from the latest completed run."
       : timing.source === "active"
         ? "Live timing from the active running search."
-        : "Timing will appear after search telemetry is available.";
+        : timing.source === "report"
+          ? "Timing from saved backend report telemetry."
+          : "Timing will appear after search telemetry is available.";
   const diagnosticsMarkup = qualityDiagnosticsMarkup(summary);
   root.innerHTML = `
         <div class="summary-cards">

@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 from uuid import uuid4
 
+from hr_hunter.briefing import normalize_text
+from hr_hunter_transformer.company_quality import looks_like_bad_company
 from hr_hunter.models import CandidateProfile, EvidenceRecord, ProviderRunResult, SearchBrief, SearchRunReport
 
 
@@ -198,12 +200,14 @@ def _build_transformer_brief(brief: SearchBrief, *, requested_limit: int, payloa
     from hr_hunter_transformer.models import SearchBrief as TransformerSearchBrief
 
     countries, cities = _normalize_locations(brief, payload)
+    peer_company_targets = list(brief.peer_company_targets or brief.sourcing_company_targets or [])
     return TransformerSearchBrief(
         role_title=brief.role_title,
         titles=list(brief.titles),
         countries=countries,
         cities=cities,
-        company_targets=list(brief.company_targets or brief.peer_company_targets),
+        company_targets=list(brief.company_targets),
+        peer_company_targets=[value for value in peer_company_targets if value not in set(brief.company_targets)],
         required_keywords=list(brief.required_keywords),
         preferred_keywords=list(brief.preferred_keywords),
         industry_keywords=list(brief.industry_keywords),
@@ -230,20 +234,23 @@ def _sanitize_transformer_name(value: str) -> str:
 
 
 def _looks_like_bad_company(value: str, current_title: str = "") -> bool:
-    lowered = " ".join(str(value or "").strip().lower().split())
-    if not lowered:
-        return True
-    if lowered in {"at", "@", "dr", "experience", "profile", "educational"}:
-        return True
-    if any(lowered.startswith(prefix) for prefix in ("jan ", "feb ", "mar ", "apr ", "may ", "jun ", "jul ", "aug ", "sep ", "oct ", "nov ", "dec ")):
-        return True
-    if any(fragment in lowered for fragment in ("view org chart", "view manager", " is a ", "manager at", "engineer at", "planner at", "from may ", "from jan ", "from feb ", "from mar ", "from apr ", "from jun ", "from jul ", "from aug ", "from sep ", "from oct ", "from nov ", "from dec ")):
-        return True
-    if current_title and lowered == " ".join(str(current_title).strip().lower().split()):
-        return True
-    if lowered.endswith((" manager", " engineer", " planner", " lead", " director", " analyst", " specialist")):
-        return True
-    return False
+    return looks_like_bad_company(value, current_title)
+
+
+def _is_country_only_transformer_location(value: str, brief: SearchBrief) -> bool:
+    normalized_value = normalize_text(str(value or ""))
+    if not normalized_value:
+        return False
+    country_values = {
+        normalize_text(str(item))
+        for item in [brief.geography.country, *brief.location_targets]
+        if normalize_text(str(item))
+    }
+    return normalized_value in country_values and not any(
+        normalize_text(str(item)) == normalized_value
+        for item in [brief.geography.location_name, *brief.geography.location_hints]
+        if normalize_text(str(item))
+    )
 
 
 def _sanitize_transformer_company(entity: Any, top_evidence: List[Any]) -> str:
@@ -293,7 +300,10 @@ def _candidate_from_transformer_entity(entity: Any, brief: SearchBrief) -> Candi
             title_matches=[evidence.current_title] if evidence.current_title else [],
             location_match=evidence.location_match,
             location_match_text=evidence.current_location,
-            precise_location_match=evidence.location_match,
+            precise_location_match=bool(
+                evidence.location_match
+                and not _is_country_only_transformer_location(evidence.current_location, brief)
+            ),
             profile_signal=True,
             current_employment_signal=evidence.current_role_signal,
             confidence=evidence.confidence,
@@ -301,12 +311,21 @@ def _candidate_from_transformer_entity(entity: Any, brief: SearchBrief) -> Candi
         )
         for evidence in top_evidence
     ]
-    if entity.current_location_confirmed:
+    precise_location_confirmed = bool(
+        entity.current_location_confirmed
+        and location_name
+        and not _is_country_only_transformer_location(location_name, brief)
+    )
+    if precise_location_confirmed:
         location_precision_bucket = "named_target_location"
-    elif entity.location_match:
+    elif entity.location_match or _is_country_only_transformer_location(location_name, brief):
         location_precision_bucket = "country_only"
     else:
         location_precision_bucket = "outside_target_area"
+    skill_overlap_score = float(entity.skill_match_score or 0.0)
+    industry_fit_score = float(entity.industry_match_score or 0.0)
+    company_consensus_score = float(entity.company_consensus_score or 0.0)
+    source_quality_score = float(max(entity.source_trust_score or 0.0, min(1.0, len(entity.source_domains) / 4.0)))
     return CandidateProfile(
         full_name=full_name,
         current_title=entity.current_title,
@@ -326,7 +345,7 @@ def _candidate_from_transformer_entity(entity: Any, brief: SearchBrief) -> Candi
         current_company_confirmed=bool(entity.current_company_confirmed),
         current_title_confirmed=bool(entity.current_title_confirmed),
         current_location_confirmed=bool(entity.current_location_confirmed),
-        precise_location_confirmed=bool(entity.current_location_confirmed),
+        precise_location_confirmed=precise_location_confirmed,
         current_employment_confirmed=bool(entity.current_role_proof_count > 0),
         verification_status=entity.verification_status,
         qualification_tier=_qualification_tier(entity.verification_status),
@@ -335,27 +354,37 @@ def _candidate_from_transformer_entity(entity: Any, brief: SearchBrief) -> Candi
         matched_title_family=entity.role_family,
         location_precision_bucket=location_precision_bucket,
         current_role_proof_count=int(entity.current_role_proof_count or 0),
-        source_quality_score=float(min(1.0, len(entity.source_domains) / 4.0)),
-        current_function_fit=1.0 if entity.title_match else 0.0,
+        source_quality_score=source_quality_score,
+        current_function_fit=float(max(entity.title_match_score or 0.0, entity.semantic_fit or 0.0)),
         parser_confidence=float(primary.confidence if primary else 0.0),
         evidence_quality_score=float(max((evidence.confidence for evidence in top_evidence), default=0.0)),
-        title_similarity_score=1.0 if entity.title_match else 0.0,
-        company_match_score=1.0 if entity.company_match else 0.0,
-        location_match_score=1.0 if entity.location_match else 0.0,
+        title_similarity_score=float(entity.title_match_score or 0.0),
+        company_match_score=float(entity.company_match_score or 0.0),
+        location_match_score=float(entity.location_match_score or 0.0),
+        skill_overlap_score=skill_overlap_score,
+        industry_fit_score=industry_fit_score,
         semantic_similarity_score=float(entity.semantic_similarity or 0.0),
         reranker_score=float(entity.score or 0.0),
         ranking_model_version="transformer_v2",
-        feature_scores={},
+        feature_scores={
+            "skill_overlap": skill_overlap_score,
+            "industry_fit": industry_fit_score,
+            "company_consensus": company_consensus_score,
+            "evidence_conflict": float(entity.evidence_conflict_score or 0.0),
+        },
         anchor_scores={
             "semantic_fit": float(entity.semantic_fit or 0.0),
             "title_match": float(entity.title_match_score or 0.0),
             "skill_match": float(entity.skill_match_score or 0.0),
             "company_match": float(entity.company_match_score or 0.0),
+            "company_consensus": company_consensus_score,
+            "industry_match": industry_fit_score,
             "location_match": float(entity.location_match_score or 0.0),
             "seniority_match": float(entity.seniority_match_score or 0.0),
             "currentness": float(entity.currentness_score or 0.0),
             "source_trust": float(entity.source_trust_score or 0.0),
             "verification_confidence": float(entity.verification_confidence or 0.0),
+            "evidence_conflict": float(entity.evidence_conflict_score or 0.0),
         },
         verification_notes=verification_notes,
         search_strategies=list(entity.source_domains),

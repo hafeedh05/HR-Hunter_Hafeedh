@@ -212,6 +212,27 @@ class ConnectionWrapper:
             raise
         return CursorWrapper(cursor, backend=self.backend)
 
+    def executemany(self, sql: str, param_sets: Iterable[Sequence[Any]]) -> None:
+        adapted_sql = translate_sql(sql, self.backend)
+        rows = list(param_sets)
+        if not rows:
+            return
+        try:
+            if self.backend == "sqlite":
+                cursor = self._connection.executemany(adapted_sql, rows)
+            else:
+                cursor = self._connection.cursor()
+                cursor.executemany(adapted_sql, rows)
+        except sqlite3.IntegrityError as exc:
+            raise DbIntegrityError(str(exc)) from exc
+        except Exception as exc:
+            if psycopg is not None and isinstance(exc, psycopg.IntegrityError):
+                raise DbIntegrityError(str(exc)) from exc
+            raise
+        close = getattr(cursor, "close", None)
+        if callable(close):
+            close()
+
     def executescript(self, script: str) -> None:
         if self.backend == "sqlite":
             self._connection.executescript(script)

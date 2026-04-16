@@ -89,6 +89,14 @@ TRUSTED_PROFILE_DOMAINS = {
     "medium.com",
     "substack.com",
 }
+COUNTRY_HOST_HINTS = {
+    "ae.linkedin.com": "United Arab Emirates",
+    "de.linkedin.com": "Germany",
+    "ie.linkedin.com": "Ireland",
+    "kw.linkedin.com": "Kuwait",
+    "qa.linkedin.com": "Qatar",
+    "sa.linkedin.com": "Saudi Arabia",
+}
 LOCATION_PROBE_PHRASES = (
     '"based in"',
     '"based out of"',
@@ -407,6 +415,34 @@ class PublicEvidenceVerifier:
             return True
         return self._is_country_only_location(candidate.location_name, brief.geography.country)
 
+    def _country_host_hint(self, source_domain: str, brief: SearchBrief) -> str:
+        normalized_domain = str(source_domain or "").lower().removeprefix("www.")
+        hinted_country = COUNTRY_HOST_HINTS.get(normalized_domain, "")
+        if not hinted_country:
+            return ""
+        normalized_targets = {
+            normalize_text(str(value))
+            for value in [brief.geography.country, *brief.location_targets]
+            if normalize_text(str(value))
+        }
+        return hinted_country if normalize_text(hinted_country) in normalized_targets else ""
+
+    def _precise_location_required(self, brief: SearchBrief) -> bool:
+        precise_targets = unique_preserving_order(
+            [
+                value
+                for value in [brief.geography.location_name, *brief.geography.location_hints, *brief.location_targets]
+                if value and not self._is_country_only_location(value, brief.geography.country)
+            ]
+        )
+        if not precise_targets:
+            return False
+        if brief.strict_market_scope:
+            return True
+        if brief.geography.radius_miles and brief.geography.radius_miles <= 150:
+            return True
+        return len(precise_targets) <= 1
+
     def _supports_current_role(self, record: EvidenceRecord) -> bool:
         if not (record.name_match and record.company_match and record.title_matches):
             return False
@@ -659,6 +695,7 @@ class PublicEvidenceVerifier:
         combined = " ".join([title, snippet, source_url])
         normalized = normalize_text(combined)
         normalized_name = normalize_text(candidate.full_name)
+        profile_signal = self._is_profile_like_source(candidate, source_url, source_domain, title, snippet)
 
         matched_company = ""
         for alias in company_aliases(candidate, brief):
@@ -696,7 +733,12 @@ class PublicEvidenceVerifier:
                 precise_location_match = not self._is_country_only_location(hint, brief.geography.country)
                 break
 
-        profile_signal = self._is_profile_like_source(candidate, source_url, source_domain, title, snippet)
+        if not location_match and profile_signal:
+            host_country_hint = self._country_host_hint(source_domain, brief)
+            if host_country_hint and not self._looks_like_past_role(combined):
+                location_match = True
+                location_match_text = host_country_hint
+                precise_location_match = False
         current_employment_signal = bool(
             matched_company
             and matched_titles
@@ -1199,15 +1241,16 @@ class PublicEvidenceVerifier:
             and candidate.current_title_confirmed
             and candidate.current_title_match
             and candidate.current_location_confirmed
-            and candidate.precise_location_confirmed
+            and (candidate.precise_location_confirmed or not self._precise_location_required(brief))
         )
+        precise_location_required = self._precise_location_required(brief)
 
         hard_verified = (
             candidate.current_employment_confirmed
             and candidate.current_company_confirmed
             and candidate.current_title_confirmed
             and candidate.current_location_confirmed
-            and candidate.precise_location_confirmed
+            and (candidate.precise_location_confirmed or not precise_location_required)
             and (not brief.company_targets or candidate.current_target_company_match)
             and (not (brief.titles or brief.title_keywords) or candidate.current_title_match)
             and (
@@ -1257,11 +1300,14 @@ class PublicEvidenceVerifier:
                 missing.append("current title")
             if (brief.geography.location_name or brief.geography.country) and not candidate.current_location_confirmed:
                 missing.append("current location")
-            if not candidate.precise_location_confirmed or getattr(candidate, "location_precision_bucket", "") in {
-                "country_only",
-                "unknown_location",
-                "outside_target_area",
-            }:
+            if precise_location_required and (
+                not candidate.precise_location_confirmed
+                or getattr(candidate, "location_precision_bucket", "") in {
+                    "country_only",
+                    "unknown_location",
+                    "outside_target_area",
+                }
+            ):
                 missing.append("precise location")
             if brief.industry_keywords and not candidate.industry_aligned:
                 missing.append("industry fit")

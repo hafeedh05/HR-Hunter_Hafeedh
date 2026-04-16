@@ -40,3 +40,64 @@ def test_extractor_normalizes_company_prefixed_with_at_symbol() -> None:
     record = extractor.extract(hit, brief)
     assert record is not None
     assert record.current_company == "Aldar"
+
+
+def test_extractor_infers_country_from_regional_linkedin_host() -> None:
+    extractor = ProfileExtractor()
+    brief = SearchBrief(
+        role_title="Supply Chain Manager",
+        titles=["Supply Chain Manager"],
+        countries=["United Arab Emirates"],
+        cities=["Dubai", "Abu Dhabi"],
+    )
+    hit = RawSearchHit(
+        title="Maya Khan | Supply Chain Manager | Amazon",
+        snippet="Supply Chain Manager at Amazon",
+        url="https://ae.linkedin.com/in/maya-khan",
+        source="scrapingbee_google",
+    )
+
+    record = extractor.extract(hit, brief)
+
+    assert record is not None
+    assert record.current_location == "United Arab Emirates"
+    assert record.location_match is True
+    assert record.location_confidence == 0.44
+
+
+def test_extractor_keeps_company_like_bayt_employers() -> None:
+    extractor = ProfileExtractor()
+    brief = SearchBrief(
+        role_title="Supply Chain Manager",
+        titles=["Supply Chain Manager"],
+        countries=["United Arab Emirates"],
+        cities=["Dubai"],
+    )
+    hits = [
+        RawSearchHit(
+            title="Sarvesh Poddar | Bayt.com",
+            snippet="Supply Chain Manager at Landmark Retail LLC,. United Arab Emirates - Dubai; My current job since November 2023.",
+            url="https://people.bayt.com/sarvesh-poddar-85860919/",
+            source="scrapingbee_google",
+        ),
+        RawSearchHit(
+            title="Jay Chandran | Bayt.com",
+            snippet="SUPPLY CHAIN MANAGER at AL FUTTAIM. United Arab Emirates - Dubai; My current job since April 2021.",
+            url="https://people.bayt.com/jay-chandran-89472658/",
+            source="scrapingbee_google",
+        ),
+        RawSearchHit(
+            title="Mohamed Khalil | Bayt.com",
+            snippet="Supply Chain Manager ME. at ASSA ABLOY Opening Solutions ME., Dubai, UAE",
+            url="https://people.bayt.com/mohamed-khalil-1898595/",
+            source="scrapingbee_google",
+        ),
+    ]
+
+    companies = [extractor.extract(hit, brief).current_company for hit in hits]
+
+    assert companies == [
+        "Landmark Retail LLC",
+        "AL FUTTAIM",
+        "ASSA ABLOY Opening Solutions ME",
+    ]

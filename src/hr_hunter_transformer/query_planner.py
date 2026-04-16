@@ -65,7 +65,11 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
         family_confidence=understanding.family_confidence,
     )
     geographies = [value for value in [*brief.cities[:6], *brief.countries[:6]] if str(value).strip()] or [""]
-    companies = [value for value in brief.company_targets[:8] if str(value).strip()]
+    companies = []
+    for value in [*brief.company_targets[:6], *brief.peer_company_targets[:8]]:
+        text = str(value or "").strip()
+        if text and text not in companies:
+            companies.append(text)
     skills = [value for value in understanding.inferred_skills[:6] if str(value).strip()]
     queries: list[QueryTask] = []
     seen: set[str] = set()
@@ -143,4 +147,3 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
         pages_per_query=profile.pages_per_query,
         parallel_requests=profile.parallel_requests,
     )
-

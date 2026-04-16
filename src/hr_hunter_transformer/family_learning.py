@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from hr_hunter.config import resolve_feedback_db_path
+from hr_hunter.config import resolve_feedback_db_path, resolve_output_dir
 from hr_hunter.db import connect_database, resolve_database_target
 from hr_hunter.feedback import NEGATIVE_ACTIONS, POSITIVE_ACTIONS
 from hr_hunter_transformer.role_profiles import infer_role_family
@@ -26,7 +26,7 @@ class FamilyLearningStats:
 
 
 def _default_report_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "output" / "search"
+    return resolve_output_dir()
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float:

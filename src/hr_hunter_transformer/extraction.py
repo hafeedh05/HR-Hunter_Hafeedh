@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
+from hr_hunter_transformer.company_quality import looks_like_bad_company as _company_looks_bad
 from hr_hunter_transformer.models import EvidenceRecord, RawSearchHit, SearchBrief
 from hr_hunter_transformer.role_profiles import (
     PROFESSIONAL_SOURCES,
@@ -80,7 +81,49 @@ ROLE_WORDS = {
     "supply",
 }
 NON_NAME_WORDS = {"we", "our", "join", "team", "careers", "career", "post", "posts"}
+COMPANY_NAME_HINTS = {
+    "architects",
+    "architecture",
+    "aviation",
+    "bank",
+    "care",
+    "consultants",
+    "consulting",
+    "consumer",
+    "design",
+    "development",
+    "developments",
+    "engineering",
+    "foods",
+    "global",
+    "group",
+    "healthcare",
+    "holdings",
+    "international",
+    "lighting",
+    "llc",
+    "logistics",
+    "ltd",
+    "petroleum",
+    "properties",
+    "retail",
+    "services",
+    "solutions",
+    "systems",
+    "technologies",
+    "technology",
+    "trading",
+}
 LINKEDIN_HOSTS = {"linkedin.com", "ae.linkedin.com", "sa.linkedin.com", "in.linkedin.com", "pk.linkedin.com"}
+LINKEDIN_COUNTRY_HOST_HINTS = {
+    "ae.linkedin.com": "United Arab Emirates",
+    "sa.linkedin.com": "Saudi Arabia",
+    "kw.linkedin.com": "Kuwait",
+    "qa.linkedin.com": "Qatar",
+    "in.linkedin.com": "India",
+    "pk.linkedin.com": "Pakistan",
+    "de.linkedin.com": "Germany",
+}
 BIDI_CONTROL_RE = re.compile(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 MONTH_YEAR_RE = re.compile(r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\d{2}$", re.IGNORECASE)
 MONTH_YEAR_TEXT_RE = re.compile(r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{2,4}$", re.IGNORECASE)
@@ -151,27 +194,7 @@ class ProfileExtractor:
     def _looks_like_bad_company_value(self, value: str, current_title: str = "") -> bool:
         cleaned = self._normalize_company_candidate(value, current_title)
         lowered = cleaned.lower()
-        if not cleaned:
-            return True
-        if lowered in BAD_COMPANY_LITERALS:
-            return True
-        if len(cleaned) <= 2:
-            return True
-        if MONTH_YEAR_RE.fullmatch(lowered):
-            return True
-        if MONTH_YEAR_TEXT_RE.fullmatch(lowered):
-            return True
-        if re.fullmatch(r"[()@&+\\-]+", cleaned):
-            return True
-        if lowered.startswith("i ") or lowered.startswith("we "):
-            return True
-        if lowered.startswith(("view org chart", "org ...", "view manager", "view profile")):
-            return True
-        if " is a " in lowered or lowered.startswith("at "):
-            return True
-        if current_title and normalize_text(cleaned) == normalize_text(current_title):
-            return True
-        if any(phrase in lowered for phrase in ("chief executive officer", "machine learning engineer", "ai engineer", "llm engineer")):
+        if _company_looks_bad(cleaned, current_title):
             return True
         role_patterns = (
             "supply chain manager",
@@ -250,6 +273,10 @@ class ProfileExtractor:
         if any(any(char.isdigit() for char in token) for token in tokens):
             return False
         lowered = {token.lower().strip(".") for token in tokens}
+        if lowered.intersection(COMPANY_NAME_HINTS):
+            return False
+        if len(tokens) >= 2 and all(any(char.isalpha() for char in token) and token.upper() == token for token in tokens):
+            return False
         if lowered.intersection(ROLE_WORDS):
             return False
         return not lowered.intersection(NON_PERSON_TOKENS)
@@ -361,6 +388,10 @@ class ProfileExtractor:
         for value in [*brief.cities, *brief.countries]:
             if normalize_text(value) in normalized:
                 return value
+        host = urlparse(hit.url).netloc.lower().removeprefix("www.")
+        hinted_country = LINKEDIN_COUNTRY_HOST_HINTS.get(host, "")
+        if hinted_country and normalize_text(hinted_country) in {normalize_text(value) for value in brief.countries}:
+            return hinted_country
         return ""
 
     def _supporting_keywords(self, hit: RawSearchHit, brief: SearchBrief) -> list[str]:
@@ -382,10 +413,15 @@ class ProfileExtractor:
             return None
         current_company, company_confidence = self._guess_company(hit, brief, current_title)
         current_location = self._guess_location(hit, brief)
+        normalized_hit = normalize_text(f"{hit.title} {hit.snippet}")
         role_family = infer_role_family(current_title, brief.role_title, *brief.titles)
         requested_family = infer_role_family(brief.role_title, *brief.titles)
         title_match = bool(current_title and role_family == requested_family)
-        company_match = bool(current_company and normalize_text(current_company) in {normalize_text(value) for value in brief.company_targets})
+        normalized_company = normalize_text(current_company)
+        exact_company_targets = {normalize_text(value) for value in brief.company_targets if normalize_text(value)}
+        peer_company_targets = {normalize_text(value) for value in brief.peer_company_targets if normalize_text(value)}
+        company_match = bool(normalized_company and normalized_company in exact_company_targets)
+        peer_company_match = bool(normalized_company and normalized_company in peer_company_targets)
         location_match = bool(current_location and normalize_text(current_location) in {normalize_text(value) for value in [*brief.cities, *brief.countries]})
         source_domain = urlparse(hit.url).netloc.lower().removeprefix("www.")
         current_role_signal = bool(
@@ -400,7 +436,8 @@ class ProfileExtractor:
         title_confidence = 0.82 if title_match else 0.22
         if company_match:
             company_confidence = max(company_confidence, 0.92)
-        location_confidence = 0.72 if location_match else 0.48 if current_location else 0.0
+        explicit_location_match = bool(current_location and normalize_text(current_location) in normalized_hit)
+        location_confidence = 0.72 if explicit_location_match else 0.44 if location_match else 0.0
         currentness_confidence = 0.74 if current_role_signal else 0.2
         freshness_confidence = 0.62
         confidence = (
@@ -425,6 +462,7 @@ class ProfileExtractor:
             role_family=role_family,
             title_match=title_match,
             company_match=company_match,
+            peer_company_match=peer_company_match,
             location_match=location_match,
             current_role_signal=current_role_signal,
             confidence=min(1.0, round(confidence, 2)),

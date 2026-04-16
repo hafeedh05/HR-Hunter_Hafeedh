@@ -1104,3 +1104,65 @@ def test_apply_evidence_refines_country_only_ireland_with_company_office_locatio
     assert updated.location_name == "Citywest, Ireland"
     assert updated.location_precision_bucket == "named_target_location"
     assert "precise location inferred from company office/contact evidence" in updated.verification_notes
+
+
+def test_apply_evidence_allows_country_only_for_broad_market_search() -> None:
+    verifier = PublicEvidenceVerifier()
+    brief = build_search_brief(
+        {
+            "id": "verify-broad-market-country-only-test",
+            "role_title": "Supply Chain Manager",
+            "titles": ["Supply Chain Manager", "Supply Planning Manager"],
+            "company_targets": ["Amazon"],
+            "geography": {
+                "location_name": "Dubai",
+                "country": "United Arab Emirates",
+                "location_hints": ["Abu Dhabi", "Sharjah", "Jebel Ali"],
+            },
+            "industry_keywords": ["logistics"],
+        }
+    )
+    candidate = score_candidate(
+        CandidateProfile(
+            full_name="Broad Market Supply Chain",
+            current_title="Supply Chain Manager",
+            current_company="Amazon",
+            location_name="United Arab Emirates",
+            summary="Supply Chain Manager at Amazon leading logistics programs in the UAE.",
+        ),
+        brief,
+    )
+    evidence = [
+        EvidenceRecord(
+            source_url="https://ae.linkedin.com/in/broad-market-supply-chain",
+            source_domain="ae.linkedin.com",
+            name_match=True,
+            company_match="Amazon",
+            title_matches=["Supply Chain Manager"],
+            location_match=True,
+            location_match_text="United Arab Emirates",
+            precise_location_match=False,
+            profile_signal=True,
+            current_employment_signal=True,
+            confidence=0.86,
+        ),
+        EvidenceRecord(
+            source_url="https://example.com/team/broad-market-supply-chain",
+            source_domain="example.com",
+            name_match=True,
+            company_match="Amazon",
+            title_matches=["Supply Chain Manager"],
+            location_match=True,
+            location_match_text="United Arab Emirates",
+            precise_location_match=False,
+            profile_signal=True,
+            current_employment_signal=True,
+            confidence=0.8,
+        ),
+    ]
+
+    updated = verifier.apply_evidence(candidate, brief, evidence)
+
+    assert updated.current_location_confirmed is True
+    assert updated.precise_location_confirmed is False
+    assert updated.verification_status == "verified"
