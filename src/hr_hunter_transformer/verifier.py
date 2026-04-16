@@ -75,6 +75,19 @@ LOCATION_LIKE_COMPANY_LITERALS = {
     "united arab emirates",
 }
 
+EXECUTIVE_TITLE_MARKERS = (
+    "ceo",
+    "chief executive officer",
+    "president",
+    "managing director",
+    "general manager",
+    "group ceo",
+    "regional ceo",
+    "brand president",
+    "country manager",
+    "vice president",
+)
+
 
 @dataclass(frozen=True)
 class VerificationProfile:
@@ -175,6 +188,11 @@ def _executive_company_ready(entity: CandidateEntity, max_company_confidence: fl
     )
 
 
+def _looks_like_executive_title(title: str) -> bool:
+    normalized_title = normalize_text(title)
+    return any(marker in normalized_title for marker in EXECUTIVE_TITLE_MARKERS)
+
+
 def compute_verification_confidence(entity: CandidateEntity, brief: SearchBrief) -> float:
     current_role = min(1.0, 0.35 + min(0.45, entity.current_role_proof_count * 0.18)) if entity.current_role_proof_count else 0.0
     title = max(entity.title_match_score, blended_title_precision(entity.current_title, brief))
@@ -239,6 +257,7 @@ def verify_candidate(entity: CandidateEntity, brief: SearchBrief) -> CandidateEn
     ) >= profile.company_inference_floor
     company_ready_for_verified = company_ready_for_verified and company_quality >= max(0.35, profile.company_inference_floor - 0.08)
     executive_ready_for_verified = True
+    executive_verified_override = False
     architecture_ready_for_verified = True
     if entity.role_family == "executive":
         brief_company_signal = 1.0 if entity.company_match else 0.75 if entity.peer_company_match else 0.0
@@ -270,6 +289,36 @@ def verify_candidate(entity: CandidateEntity, brief: SearchBrief) -> CandidateEn
             and _executive_company_ready(entity, max_company_confidence)
             and (canonical_ready or adjacent_ready)
         )
+        exact_company_exec_fast_track = (
+            entity.company_match
+            and _looks_like_executive_title(entity.current_title)
+            and entity.current_role_proof_count >= 1
+            and company_quality >= 0.4
+            and max(entity.location_match_score, max_location_confidence) >= 0.0
+            and entity.score >= max(54.0, profile.verified_score_floor - 15.0)
+            and entity.verification_confidence >= max(0.38, profile.review_threshold - 0.05)
+            and (
+                primary_title_signal >= 0.34
+                or requested_title_precision >= 0.1
+                or requested_title_coverage >= 0.4
+            )
+        )
+        peer_company_exec_fast_track = (
+            entity.peer_company_match
+            and _looks_like_executive_title(entity.current_title)
+            and entity.current_role_proof_count >= 1
+            and company_quality >= 0.4
+            and max(entity.location_match_score, max_location_confidence) >= 0.0
+            and entity.score >= max(55.0, profile.verified_score_floor - 14.0)
+            and entity.verification_confidence >= max(0.4, profile.review_threshold - 0.04)
+            and (
+                requested_title_precision >= 0.12
+                or requested_title_coverage >= 0.45
+                or primary_title_signal >= 0.34
+            )
+        )
+        executive_ready_for_verified = executive_ready_for_verified or exact_company_exec_fast_track or peer_company_exec_fast_track
+        executive_verified_override = exact_company_exec_fast_track or peer_company_exec_fast_track
         if not executive_ready_for_verified:
             diagnostics.append("weak_company_or_industry_signals")
     elif entity.role_family == "design_architecture":
@@ -318,14 +367,19 @@ def verify_candidate(entity: CandidateEntity, brief: SearchBrief) -> CandidateEn
         and "identity_conflict" not in diagnostics
     )
     if (
-        entity.verification_confidence >= profile.verified_threshold
-        and entity.score >= profile.verified_score_floor
-        and company_ready_for_verified
-        and executive_ready_for_verified
-        and architecture_ready_for_verified
-        and "adjacent_title_leakage" not in diagnostics
-        and "identity_conflict" not in diagnostics
-    ):
+        (
+            entity.verification_confidence >= profile.verified_threshold
+            and entity.score >= profile.verified_score_floor
+            and company_ready_for_verified
+            and executive_ready_for_verified
+            and architecture_ready_for_verified
+        )
+        or (
+            executive_verified_override
+            and company_ready_for_verified
+            and architecture_ready_for_verified
+        )
+    ) and "adjacent_title_leakage" not in diagnostics and "identity_conflict" not in diagnostics:
         entity.verification_status = "verified"
     elif dense_role_verified:
         entity.verification_status = "verified"

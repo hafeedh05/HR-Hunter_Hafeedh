@@ -37,6 +37,28 @@ PROFESSIONAL_SOURCES = {
     "architizer.com",
 }
 
+FAMILY_OVERRIDES: tuple[tuple[str, tuple[str, ...], float], ...] = (
+    (
+        "hr_talent",
+        (
+            "head of hr",
+            "head of human resources",
+            "human resources director",
+            "hr director",
+            "vp human resources",
+            "vp hr",
+            "head of people",
+            "people director",
+            "people and culture director",
+            "talent director",
+            "chief people officer",
+            "chief human resources officer",
+            "chro",
+        ),
+        0.98,
+    ),
+)
+
 
 def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9+/#&.-]+", " ", str(value or "").lower())).strip()
@@ -46,6 +68,9 @@ def infer_role_family_with_confidence(*values: str) -> tuple[str, float]:
     haystack = " ".join(normalize_text(value) for value in values if str(value).strip())
     if not haystack:
         return "other", 0.0
+    for family, hints, confidence in FAMILY_OVERRIDES:
+        if any(normalize_text(hint) in haystack for hint in hints):
+            return family, confidence
     haystack_tokens = set(token for token in haystack.split(" ") if token)
     best_family = "other"
     best_score = 0.0

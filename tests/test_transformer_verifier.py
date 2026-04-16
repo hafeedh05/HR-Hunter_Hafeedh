@@ -503,6 +503,73 @@ def test_transformer_verifier_allows_strong_adjacent_executive_with_brief_releva
     assert verified.verification_status == "verified"
 
 
+def test_transformer_verifier_fast_tracks_exact_company_executive_with_strong_current_role() -> None:
+    brief = SearchBrief(
+        role_title="Chief Executive Officer (CEO)",
+        titles=["Chief Executive Officer", "CEO", "Managing Director", "General Manager"],
+        countries=["United Arab Emirates"],
+        cities=["Dubai"],
+        company_targets=["Pan Emirates"],
+        peer_company_targets=["Home Centre"],
+        required_keywords=["P&L", "Growth", "Strategy"],
+        industry_keywords=["retail", "home furnishings"],
+    )
+    candidate = CandidateEntity(
+        full_name="Sachin Tiwari",
+        canonical_key="sachin-tiwari",
+        current_title="General Manager",
+        current_company="Pan Emirates",
+        current_location="Dubai",
+        role_family="executive",
+        title_match=True,
+        company_match=True,
+        location_match=True,
+        current_role_proof_count=1,
+        current_company_confirmed=True,
+        current_title_confirmed=True,
+        current_location_confirmed=True,
+        title_match_score=0.62,
+        company_match_score=0.92,
+        company_consensus_score=0.78,
+        location_match_score=0.7,
+        skill_match_score=0.4,
+        industry_match_score=0.32,
+        currentness_score=0.82,
+        source_trust_score=0.88,
+        verification_confidence=0.0,
+        score=56.5,
+        evidence=[
+            EvidenceRecord(
+                source_url="https://linkedin.com/in/sachin-tiwari",
+                source_domain="linkedin.com",
+                source_type="scrapingbee_google",
+                page_title="Sachin Tiwari | General Manager at Pan Emirates",
+                page_snippet="General Manager at Pan Emirates in Dubai",
+                full_name="Sachin Tiwari",
+                current_title="General Manager",
+                current_company="Pan Emirates",
+                current_location="Dubai",
+                role_family="executive",
+                title_match=True,
+                company_match=True,
+                location_match=True,
+                current_role_signal=True,
+                confidence=0.88,
+                title_confidence=0.76,
+                company_confidence=0.92,
+                location_confidence=0.7,
+                currentness_confidence=0.82,
+                freshness_confidence=0.65,
+                supporting_keywords=["P&L", "Growth", "retail"],
+            )
+        ],
+    )
+
+    verified = verify_candidate(candidate, brief)
+
+    assert verified.verification_status == "verified"
+
+
 def test_transformer_verifier_keeps_requested_architect_title_with_strong_company_evidence_verified() -> None:
     brief = SearchBrief(
         role_title="Project Architect",

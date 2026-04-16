@@ -12,7 +12,7 @@ This document is the deploy handoff for the current release cut from:
 - Final release path: `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final`
 - Previous rollback release: `/srv/hr-hunter/releases/20260416T092614Z-c654cce-ceo-order`
 - Health check: `https://hr-hunter.hyvelabs.tech/healthz` returns `{"status":"ok"}`
-- Frontend assets: `20260416clientready2`
+- Frontend assets: `20260416etaquality1`
 - Production serving: `HR_HUNTER_WEB_WORKERS=2`
 - Transformer startup warmup: `HR_HUNTER_WARM_TRANSFORMER_ON_STARTUP=0`
 - Latest pre-prune backup: `/srv/hr-hunter/backups/20260416T094559Z-pre-client-run-prune-live-env`
@@ -53,6 +53,26 @@ CEO pilot validation after the executive search/order pass:
 - raw / unique: `3737 / 505`
 - job elapsed: `554s`
 - ordering: all verified candidates appear before review candidates.
+
+Large targeted CEO pilot after company parsing and executive-retrieval cleanup:
+
+- project id: `project_7b0143fa2546`
+- run id: `ceo-dcdc6591`
+- backend: `transformer_v2`
+- requested / returned: `600 / 587`
+- verified / review / reject: `437 / 115 / 35`
+- raw / unique / query count: `3981 / 587 / 330`
+- job elapsed: `732s`
+
+Head of HR family-correction validation:
+
+- project id: `project_eb72b39b177e`
+- backend: `transformer_v2`
+- requested / returned: `1000 / 1000`
+- verified / review / reject: `114 / 886 / 0`
+- raw / unique / query count: `2868 / 1000 / 189`
+- job elapsed: `399s`
+- family mapping: `hr_talent`
 
 Run-history cleanup after backup:
 
@@ -96,6 +116,12 @@ CEO is still constrained and should not be used as the main client go/no-go demo
 - verification-aware final ordering from a wider scored tranche
 - two-worker web serving to keep health/status/UI responsive during long transformer searches
 - run-prune operator utility under `scripts/prune_project_runs.py`
+- live Hunt company-paste splitting for target-company and similar-company fields
+- clearer live Hunt labels:
+  - `Where is the role based?`
+  - `Candidates must currently work at`
+  - `Similar companies to search (optional)`
+- stage-aware ETA semantics for new long transformer runs so the UI does not invent countdowns during planning or early retrieval
 
 ## Current Transformer App Baseline
 
@@ -175,6 +201,7 @@ Do not describe production as “everything on Cloud SQL.”
 - previous production deployment needed a hotfix because old saved runs still contained deprecated scope-era fields in report JSON
 - old saved projects can appear to have no Results/Candidates if that compatibility path breaks
 - operators should not push code back to GitHub from deployment work unless explicitly asked
+- old saved run ETAs remain historical; only new runs get the fixed stage-aware ETA behavior
 
 ## Branch And Merge Flow
 

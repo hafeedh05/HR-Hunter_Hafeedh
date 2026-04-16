@@ -32,6 +32,17 @@ def test_unknown_but_related_ai_title_maps_to_technical_family() -> None:
     assert confidence >= 0.34
 
 
+def test_head_of_hr_maps_to_hr_talent_instead_of_executive() -> None:
+    family, confidence = infer_role_family_with_confidence(
+        "Head of HR",
+        "HR Director",
+        "VP Human Resources",
+        "Holding Company",
+    )
+    assert family == "hr_talent"
+    assert confidence >= 0.9
+
+
 def test_query_plan_uses_wider_profile_for_low_confidence_role() -> None:
     brief = SearchBrief(
         role_title="Quantum Logistics Planner",
@@ -62,9 +73,42 @@ def test_executive_query_plan_prioritizes_peer_company_queries_before_generic_ti
     first_queries = plan.queries[:12]
 
     assert plan.role_understanding.role_family == "executive"
-    assert all(task.query_type in {"company_exact_priority", "company_geo_priority"} for task in first_queries)
+    assert all(
+        task.query_type in {
+            "company_leadership_priority",
+            "company_leadership_geo_priority",
+            "company_exact_priority",
+            "company_geo_priority",
+            "peer_leadership_priority",
+            "peer_leadership_geo_priority",
+            "peer_company_exact_priority",
+            "peer_company_geo_priority",
+        }
+        for task in first_queries
+    )
     assert any('"Home Centre"' in task.query_text for task in first_queries)
     assert any('"Dubai"' in task.query_text for task in first_queries)
+
+
+def test_large_executive_query_plan_stays_more_target_company_driven() -> None:
+    brief = SearchBrief(
+        role_title="Chief Executive Officer",
+        titles=["Chief Executive Officer", "CEO", "Managing Director", "President"],
+        countries=["United Arab Emirates", "Saudi Arabia"],
+        cities=["Dubai", "Riyadh"],
+        company_targets=["Pottery Barn", "West Elm", "Home Centre", "The One"],
+        peer_company_targets=["Chalhoub Group", "Alshaya Group", "Harrods", "Bloomingdale's"],
+        target_count=600,
+    )
+
+    plan = build_query_plan(brief)
+
+    assert plan.role_understanding.role_family == "executive"
+    assert plan.pages_per_query == 1
+    assert plan.max_queries <= 340
+    assert len(plan.queries) >= 100
+    assert any(task.page_budget == 2 for task in plan.queries[:20])
+    assert sum(1 for task in plan.queries if "Chalhoub Group" in task.query_text) >= 2
 
 
 def test_dense_family_learning_does_not_overexpand_high_fill_supply_chain(monkeypatch) -> None:

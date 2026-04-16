@@ -19,7 +19,7 @@ class QueryProfile:
 
 
 QUERY_PROFILES: dict[str, QueryProfile] = {
-    "executive": QueryProfile(180, 2, 6, ("professional", "leadership", "news"), ('"leadership"', '"executive"', '"board"'), True, 5, 2, "hard"),
+    "executive": QueryProfile(140, 1, 6, ("professional", "leadership"), ('"executive"', '"board"'), True, 4, 1, "hard"),
     "technical_ai": QueryProfile(140, 2, 8, ("professional", "technical"), ('"machine learning"', '"artificial intelligence"', '"llm"'), True, 6, 2, "hard"),
     "supply_chain": QueryProfile(54, 1, 10, ("professional", "operations"), ('"s&op"', '"inventory"', '"logistics"'), True, 5, 2, "dense"),
     "finance": QueryProfile(54, 1, 10, ("professional", "finance"), ('"accounting"', '"finance"', '"controller"'), True, 5, 2, "dense"),
@@ -100,11 +100,14 @@ def resolve_query_profile(role_family: str, requested_limit: int, *, family_conf
         adaptive_mode = f"{adaptive_mode}_low_confidence"
 
     if int(requested_limit or 0) >= 250:
-        boost = 1.35 if profile.adaptive_mode in {"dense", "balanced", "strong"} else 1.18
+        if role_family == "executive":
+            boost = 1.18 if int(requested_limit or 0) >= 600 else 1.12 if int(requested_limit or 0) >= 500 else 1.08
+        else:
+            boost = 1.35 if profile.adaptive_mode in {"dense", "balanced", "strong"} else 1.18
         max_queries = int(round(max_queries * boost))
         source_site_budget = min(8, source_site_budget + 1)
         family_term_budget = min(3, family_term_budget + 1)
-        if profile.adaptive_mode in {"dense", "balanced"}:
+        if role_family != "executive" and profile.adaptive_mode in {"dense", "balanced"}:
             pages_per_query = max(pages_per_query, 2)
         adaptive_mode = f"{adaptive_mode}_high_target"
 

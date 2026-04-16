@@ -114,6 +114,7 @@ class TokenField {
     this.tokens = [];
     this.suggestions = suggestions;
     this.onChange = typeof options.onChange === "function" ? options.onChange : null;
+    this.fieldType = String(options.fieldType || "").trim().toLowerCase();
     this.root.innerHTML = "";
     this.input = document.createElement("input");
     this.input.className = "token-input";
@@ -137,14 +138,26 @@ class TokenField {
         this.addFromInput();
       }
     });
+    this.input.addEventListener("paste", (event) => {
+      const pasted = event.clipboardData?.getData("text") || "";
+      const parsed = this.parseValue(pasted);
+      if (parsed.length > 1) {
+        event.preventDefault();
+        this.add(parsed.join("\n"));
+        this.input.value = "";
+      }
+    });
     this.input.addEventListener("blur", () => this.addFromInput());
     root.appendChild(this.input);
   }
 
   parseValue(value) {
-    return String(value || "")
-      .split(/[\n,;]+/)
-      .map((item) => item.trim())
+    const raw = String(value || "");
+    const splitValues = this.fieldType === "company"
+      ? splitCompanyInput(raw)
+      : raw.split(/[\n,;\t\u2022]+/);
+    return splitValues
+      .map((item) => String(item || "").trim())
       .filter(Boolean);
   }
 
@@ -206,6 +219,184 @@ class TokenField {
       this.root.insertBefore(chip, this.input);
     });
   }
+}
+
+const COMPANY_PASTE_PHRASES = [
+  "Pottery Barn",
+  "West Elm",
+  "2XL Furniture & Home Decor",
+  "2XL Furniture & Home Décor",
+  "Home Centre",
+  "Homes R Us",
+  "The One",
+  "Pan Emirates",
+  "Maisons du Monde",
+  "BoConcept",
+  "Ligne Roset",
+  "Roche Bobois",
+  "Vitra",
+  "Kartell",
+  "Poltrona Frau",
+  "Fendi Casa",
+  "IKEA",
+  "Restoration Hardware",
+  "Crate & Barrel",
+  "Tanagra",
+  "Chalhoub Group",
+  "Alshaya Group",
+  "Harrods",
+  "Bloomingdale's",
+  "Harvey Nichols",
+  "Anthropologie",
+  "Brunello Cucinelli",
+  "Tod's Group",
+  "Valentino",
+  "Puig",
+  "Apparel Group",
+  "Jumeirah Group",
+  "Four Seasons Hotels",
+  "Kerzner International",
+  "Belmond",
+  "Aman Resorts",
+];
+
+const COMPANY_BOUNDARY_WORDS = new Set([
+  "group",
+  "holding",
+  "holdings",
+  "international",
+  "hotel",
+  "hotels",
+  "resort",
+  "resorts",
+  "furniture",
+  "decor",
+  "décor",
+  "centre",
+  "home",
+  "homes",
+  "us",
+  "one",
+  "emirates",
+  "monde",
+  "roset",
+  "bobois",
+  "vitra",
+  "kartell",
+  "frau",
+  "casa",
+  "ikea",
+  "hardware",
+  "barrel",
+  "harrods",
+  "bloomingdale's",
+  "nichols",
+  "tanagra",
+  "anthropologie",
+  "cucinelli",
+  "valentino",
+  "puig",
+  "belmond",
+]);
+
+const COMPANY_JOIN_WORDS = new Set(["&", "and", "the", "of", "de", "du", "r"]);
+
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeCompanyToken(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}&']+/gu, "")
+    .trim();
+}
+
+function uniqueStrings(values) {
+  const seen = new Set();
+  const result = [];
+  for (const raw of values || []) {
+    const value = String(raw || "").trim();
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
+function splitCompanyInput(value) {
+  const raw = String(value || "");
+  if (!raw.trim()) return [];
+  const delimited = raw
+    .split(/[\n,;\t\u2022]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (delimited.length > 1) {
+    return uniqueStrings(delimited.flatMap((item) => splitSingleCompanyBlob(item)));
+  }
+  return splitSingleCompanyBlob(raw);
+}
+
+function splitSingleCompanyBlob(value) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  if (normalized.length < 40) return [normalized];
+  const matched = [];
+  let remaining = normalized;
+  const phraseMatchers = COMPANY_PASTE_PHRASES
+    .slice()
+    .sort((left, right) => right.length - left.length)
+    .map((phrase) => ({
+      phrase,
+      regex: new RegExp(`^${phrase.split(/\s+/).map((part) => escapeRegex(part)).join("\\s+")}(?=$|\\s)`, "i"),
+    }));
+
+  while (remaining) {
+    const working = remaining.trim();
+    if (!working) break;
+    let phraseMatch = null;
+    for (const matcher of phraseMatchers) {
+      const hit = working.match(matcher.regex);
+      if (hit) {
+        phraseMatch = hit[0].trim();
+        break;
+      }
+    }
+    if (phraseMatch) {
+      matched.push(phraseMatch);
+      remaining = working.slice(phraseMatch.length).trim();
+      continue;
+    }
+    const words = working.split(" ");
+    const chunk = [];
+    let consumed = 0;
+    while (consumed < words.length) {
+      const word = words[consumed];
+      const nextWord = words[consumed + 1] || "";
+      chunk.push(word);
+      consumed += 1;
+      const lowerWord = normalizeCompanyToken(word);
+      const nextStartsBoundary = nextWord && /^[A-Z0-9]/.test(nextWord);
+      if (COMPANY_BOUNDARY_WORDS.has(lowerWord) && nextStartsBoundary) {
+        break;
+      }
+      if (
+        chunk.length >= 4
+        && nextStartsBoundary
+        && !COMPANY_JOIN_WORDS.has(lowerWord)
+      ) {
+        break;
+      }
+    }
+    matched.push(chunk.join(" "));
+    remaining = words.slice(consumed).join(" ").trim();
+  }
+  return uniqueStrings(
+    matched
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
 }
 
 function escapeHtml(value) {
@@ -987,13 +1178,13 @@ function initialiseTokenFields() {
     countries: new TokenField(document.getElementById("countries-field"), config.countries || [], { onChange: notifyBriefInputsChanged }),
     continents: new TokenField(document.getElementById("continents-field"), config.continents || [], { onChange: notifyBriefInputsChanged }),
     cities: new TokenField(document.getElementById("cities-field"), [], { onChange: notifyBriefInputsChanged }),
-    companies: new TokenField(document.getElementById("companies-field"), [], { onChange: notifyBriefInputsChanged }),
-    peerCompanies: new TokenField(document.getElementById("peer-companies-field"), [], { onChange: notifyBriefInputsChanged }),
+    companies: new TokenField(document.getElementById("companies-field"), [], { onChange: notifyBriefInputsChanged, fieldType: "company" }),
+    peerCompanies: new TokenField(document.getElementById("peer-companies-field"), [], { onChange: notifyBriefInputsChanged, fieldType: "company" }),
     mustHave: new TokenField(document.getElementById("must-have-field"), [], { onChange: notifyBriefInputsChanged }),
     niceToHave: new TokenField(document.getElementById("nice-to-have-field"), [], { onChange: notifyBriefInputsChanged }),
     industry: new TokenField(document.getElementById("industry-field"), [], { onChange: notifyBriefInputsChanged }),
     excludeTitles: new TokenField(document.getElementById("exclude-titles-field"), [], { onChange: notifyBriefInputsChanged }),
-    excludeCompanies: new TokenField(document.getElementById("exclude-companies-field"), [], { onChange: notifyBriefInputsChanged }),
+    excludeCompanies: new TokenField(document.getElementById("exclude-companies-field"), [], { onChange: notifyBriefInputsChanged, fieldType: "company" }),
   };
 }
 
@@ -1221,7 +1412,7 @@ function assessHuntReadiness(briefPayload) {
     score += 2;
     detailSignals += 1;
   } else {
-    missing.push("target geography (country/city/continent)");
+    missing.push("where the role is based");
   }
 
   if (mustHave.length >= 2) {
@@ -1368,7 +1559,7 @@ function renderBriefGuidance() {
           <h4>${escapeHtml(searchProfileLabel(quality.search_profile || "balanced"))} Profile</h4>
         </div>
         <div class="chip-row">
-          <span class="info-chip"><strong>Readiness</strong> ${escapeHtml(String(quality.score || 0))}</span>
+          <span class="info-chip"><strong>Brief Strength</strong> ${escapeHtml(String(quality.score || 0))}/12</span>
           <span class="info-chip"><strong>Mode</strong> ${escapeHtml(searchProfileLabel(quality.search_profile || "balanced"))}</span>
         </div>
       </div>
@@ -1851,6 +2042,9 @@ function finalizingEtaReady(finalizedCount, requested, stageElapsedSeconds) {
 function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds = 0) {
   const requested = jobRequestedLimit(job);
   const transformerMode = String(job?.payload?.search_backend || "").toLowerCase() === "transformer";
+  const roleFamily = inferTransformerRoleFamily(job?.payload || {});
+  const highVolumeTransformerSearch = transformerMode && requested >= 500;
+  const executiveHeavySearch = transformerMode && roleFamily === "executive" && requested >= 500;
   const stage = String(backendProgress.stage || job?.status || "").toLowerCase();
   const retrievalStage = stage === "retrieval_running" || stage === "retrieval";
   if (job?.job_type === "train_ranker") {
@@ -1871,7 +2065,7 @@ function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds =
   if (transformerMode && retrievalStage && queriesTotal <= 0 && rawFound <= 0 && uniqueAfterDedupe <= 0) {
     return 0;
   }
-  if (backendEstimatedTotal > 0 && stableRerankEta && stableFinalizingEta) {
+  if (backendEstimatedTotal > 0 && stableRerankEta && stableFinalizingEta && !(retrievalStage && executiveHeavySearch)) {
     return Math.max(elapsedSeconds + (stage === "completed" ? 0 : 1), Math.round(backendEstimatedTotal));
   }
   if (stage === "completed") {
@@ -1901,19 +2095,33 @@ function estimatedJobDurationSeconds(job, backendProgress = {}, elapsedSeconds =
   if (retrievalStage && requested > 0 && elapsedSeconds > 5) {
     const queryCoverage = queriesTotal > 0 ? queriesCompleted / Math.max(1, queriesTotal) : 0;
     const uniqueCoverage = uniqueAfterDedupe > 0 ? uniqueAfterDedupe / Math.max(1, requested) : 0;
-    const rawCoverage = rawFound > 0 ? rawFound / Math.max(1, requested * 1.2) : 0;
-    const coverage = Math.max(queryCoverage, uniqueCoverage, rawCoverage);
+    const coverage = Math.max(queryCoverage, Math.min(0.45, uniqueCoverage * 0.45));
     if (coverage >= 0.06) {
-      const projectedRetrievalTotal = elapsedSeconds / Math.min(0.98, coverage);
-      const retrievalTail = Math.max(25, Math.min(180, requested * 0.3));
+      const projectedRetrievalTotal = elapsedSeconds / Math.max(0.04, Math.min(0.94, coverage));
+      let retrievalTail = Math.max(25, Math.min(180, requested * 0.3));
+      if (executiveHeavySearch) {
+        retrievalTail = Math.max(260, Math.min(1200, requested * 1.15));
+        if (uniqueAfterDedupe > 0 && uniqueAfterDedupe < requested * 0.35) {
+          retrievalTail += Math.max(120, Math.min(360, requested * 0.35));
+        }
+      }
       return Math.max(elapsedSeconds + 10, Math.min(4 * 3600, Math.round(projectedRetrievalTotal + retrievalTail)));
     }
   }
   if (retrievalStage && queriesTotal > 0 && queriesCompleted >= 4 && elapsedSeconds > 3) {
-    const remainingQueries = Math.max(0, queriesTotal - queriesCompleted);
-    const perQuerySeconds = Math.max(0.1, elapsedSeconds / Math.max(1, queriesCompleted));
-    const stageOverhead = Math.max(25, Math.min(220, requested * 0.4));
-    const dynamicTotal = elapsedSeconds + (remainingQueries * perQuerySeconds) + stageOverhead;
+    const queryCoverage = Math.max(0.04, Math.min(0.95, queriesCompleted / Math.max(1, queriesTotal)));
+    const projectedRetrievalTotal = elapsedSeconds / queryCoverage;
+    let stageOverhead = Math.max(25, Math.min(220, requested * 0.4));
+    if (executiveHeavySearch) {
+      stageOverhead = Math.max(320, Math.min(1400, requested * 1.2));
+      if (queriesCompleted < queriesTotal * 0.55) {
+        stageOverhead += 120;
+      }
+      if (uniqueAfterDedupe > 0 && uniqueAfterDedupe < requested * 0.3) {
+        stageOverhead += 120;
+      }
+    }
+    const dynamicTotal = projectedRetrievalTotal + stageOverhead;
     return Math.max(elapsedSeconds + 10, Math.min(4 * 3600, Math.round(dynamicTotal)));
   }
   const allowPercentProjection =
@@ -1956,6 +2164,10 @@ function formatCounterValue(value) {
 function runningJobProgress(job) {
   const backendProgress = jobProgressPayload(job);
   const transformerMode = String(job?.payload?.search_backend || "").toLowerCase() === "transformer";
+  const roleFamily = inferTransformerRoleFamily(job?.payload || {});
+  const requested = jobRequestedLimit(job);
+  const highVolumeTransformerSearch = transformerMode && requested >= 500;
+  const executiveHeavySearch = transformerMode && roleFamily === "executive" && requested >= 500;
   const backendElapsed = safeNumber(backendProgress.elapsed_seconds, 0);
   const completedElapsed = durationSecondsBetween(
     job?.started_at || job?.created_at,
@@ -1963,6 +2175,8 @@ function runningJobProgress(job) {
   );
   const backendEstimatedTotal = safeNumber(backendProgress.estimated_total_seconds, 0);
   const backendEta = safeNumber(backendProgress.eta_seconds, Number.NaN);
+  const backendEtaReliable = Boolean(backendProgress.eta_reliable);
+  const etaReason = String(backendProgress.eta_reason || "").trim().toLowerCase();
   const status = String(job?.status || "").toLowerCase();
   const elapsedSeconds = status === "completed"
     ? Math.max(completedElapsed, backendElapsed)
@@ -1977,7 +2191,7 @@ function runningJobProgress(job) {
   const finalizedCount = safeNumber(backendProgress.finalized_count, 0);
   const explicitPercent = safeNumber(backendProgress.percent, NaN);
   const backendPercentUsable = Number.isFinite(explicitPercent) && explicitPercent >= 0;
-  let estimatedSeconds = backendEstimatedTotal > 0
+  let estimatedSeconds = backendEtaReliable && backendEstimatedTotal > 0
     ? Math.max(elapsedSeconds, Math.round(backendEstimatedTotal))
     : estimatedJobDurationSeconds(job, backendProgress, elapsedSeconds);
   estimatedSeconds = Math.max(elapsedSeconds + (status === "completed" ? 0 : 2), estimatedSeconds);
@@ -2025,16 +2239,18 @@ function runningJobProgress(job) {
   const displayedEstimatedSeconds = estimatedSeconds;
   const baseEtaKnown =
     status === "completed"
-    || Number.isFinite(backendEta)
-    || backendEstimatedTotal > 0
-    || displayedEstimatedSeconds > elapsedSeconds;
+    || (backendEtaReliable && (Number.isFinite(backendEta) || backendEstimatedTotal > 0));
   const etaSuppressedForTransformer =
     transformerMode
     && (
       (retrievalStage && queriesTotal <= 0 && rawFound <= 0 && uniqueAfterDedupe <= 0)
       || (retrievalStage && queriesTotal > 0 && queriesCompleted >= queriesTotal && uniqueAfterDedupe <= 0 && finalizedCount <= 0)
+      || (retrievalStage && highVolumeTransformerSearch && queriesTotal > 0 && queriesCompleted < Math.max(16, Math.ceil(queriesTotal * 0.82)))
+      || (retrievalStage && executiveHeavySearch && queriesTotal > 0 && queriesCompleted < Math.max(12, Math.ceil(queriesTotal * 0.88)))
     );
-  const etaKnown = !etaSuppressedForTransformer && stableRerankEta && stableFinalizingEta && baseEtaKnown;
+  const etaKnown = status === "completed"
+    ? true
+    : (!etaSuppressedForTransformer && stableRerankEta && stableFinalizingEta && baseEtaKnown);
   const stableEstimatedSeconds = etaKnown ? displayedEstimatedSeconds : 0;
   const remainingSeconds = etaKnown
     ? (
@@ -2051,11 +2267,28 @@ function runningJobProgress(job) {
     runtimeTargetSeconds(jobRequestedLimit(job)),
     safeNumber(backendProgress.target_runtime_seconds, 0),
   );
+  let etaHint = "";
+  if (!etaKnown && retrievalStage) {
+    if (executiveHeavySearch) {
+      etaHint = "Long executive retrieval. ETA becomes more reliable once retrieval is nearly complete.";
+    } else if (highVolumeTransformerSearch) {
+      etaHint = "Large retrieval in progress. ETA becomes more reliable once most queries have completed.";
+    }
+  } else if (!etaKnown && etaReason === "planning") {
+    etaHint = "Planning queries and budgets. ETA will appear after planning finishes.";
+  } else if (!etaKnown && etaReason === "rerank") {
+    etaHint = "Reranking started. ETA will appear once enough candidates have been scored.";
+  } else if (!etaKnown && etaReason === "verifying") {
+    etaHint = "Verifying public evidence. ETA will appear after enough candidates have been checked.";
+  } else if (!etaKnown && etaReason === "finalizing") {
+    etaHint = "Finalizing results. ETA will appear once candidates start landing in the final list.";
+  }
   return {
     elapsedSeconds,
     estimatedSeconds: stableEstimatedSeconds,
     remainingSeconds,
     etaKnown,
+    etaReason,
     progressPercent,
     statusLabel: titleCaseWords(status || "queued"),
     stage,
@@ -2075,8 +2308,9 @@ function runningJobProgress(job) {
     rejectCount,
     verifyingCount,
     stalledForSeconds,
-    requested: jobRequestedLimit(job),
+    requested,
     targetRuntimeSeconds: targetRuntime,
+    etaHint,
   };
 }
 
@@ -2249,8 +2483,8 @@ function runningJobMarkup(job, options = {}) {
   const verifyingCounter = progress.verifyingCount > 0
     ? formatCounterValue(progress.verifyingCount)
     : (progress.stage === "verifying" ? "0" : "Pending");
-  const etaValue = progress.etaKnown ? formatDuration(progress.remainingSeconds) : "Calculating...";
-  const estimatedTotalValue = progress.etaKnown ? formatDuration(progress.estimatedSeconds) : "Calculating...";
+  const etaValue = progress.etaKnown ? formatDuration(progress.remainingSeconds) : "Long retrieval";
+  const estimatedTotalValue = progress.etaKnown ? formatDuration(progress.estimatedSeconds) : "Updating";
   const stallNote = progress.stage === "retrieval" && progress.stalledForSeconds >= 20
     ? `No fresh completion for ${formatDuration(progress.stalledForSeconds)}. Still waiting on in-flight retrieval requests.`
     : "";
@@ -2289,6 +2523,7 @@ function runningJobMarkup(job, options = {}) {
         <span><strong>Progress</strong> ${escapeHtml(String(progress.progressPercent))}%</span>
         <span><strong>Target</strong> ${escapeHtml(String(progress.requested))} candidates</span>
       </div>
+      ${progress.etaHint ? `<p class="muted">${escapeHtml(progress.etaHint)}</p>` : ""}
       <div class="job-progress-counters">
         <span><strong>Queries</strong> ${escapeHtml(queryCounter)}</span>
         <span><strong>In Flight</strong> ${escapeHtml(formatCounterValue(progress.queriesInFlight))}</span>
@@ -2666,7 +2901,7 @@ function renderResultsSummary() {
       const queryCounter = live.queriesTotal > 0
         ? `${formatCounterValue(live.queriesCompleted)} / ${formatCounterValue(live.queriesTotal)}`
         : formatCounterValue(live.queriesCompleted);
-      const etaText = live.etaKnown ? formatDuration(live.remainingSeconds) : "Calculating...";
+      const etaText = live.etaKnown ? formatDuration(live.remainingSeconds) : (live.etaHint || "Updating...");
       root.innerHTML = `
         <div class="empty-state compact-empty">
           <h4>Search In Progress</h4>

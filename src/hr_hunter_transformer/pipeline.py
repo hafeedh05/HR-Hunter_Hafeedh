@@ -96,7 +96,7 @@ class CandidateIntelligencePipeline:
             if record is not None:
                 records.append(record)
 
-        entities = self.graph.merge(records)
+        entities = self.graph.merge(records, brief)
         event = telemetry.emit(
             "entity_resolution",
             message=f"Merged evidence into {len(entities)} candidate entities.",

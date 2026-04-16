@@ -88,6 +88,8 @@ def _refresh_job_progress_runtime(row: Any, progress: Dict[str, Any]) -> Dict[st
         refreshed["stage_elapsed_seconds"] = 0
         refreshed["estimated_total_seconds"] = elapsed_seconds
         refreshed["eta_seconds"] = 0
+        refreshed["eta_reliable"] = True
+        refreshed["eta_reason"] = ""
         return refreshed
 
     updated_at = (
@@ -103,12 +105,18 @@ def _refresh_job_progress_runtime(row: Any, progress: Dict[str, Any]) -> Dict[st
         refreshed["elapsed_seconds"],
         max(stored_stage_elapsed, stored_stage_elapsed + stale_seconds),
     )
-    estimated_total_seconds = max(
-        int(refreshed.get("estimated_total_seconds", 0) or 0),
-        refreshed["elapsed_seconds"] + 2,
-    )
-    refreshed["estimated_total_seconds"] = estimated_total_seconds
-    refreshed["eta_seconds"] = max(0, estimated_total_seconds - refreshed["elapsed_seconds"])
+    eta_reliable = bool(refreshed.get("eta_reliable", False))
+    if eta_reliable:
+        estimated_total_seconds = max(
+            int(refreshed.get("estimated_total_seconds", 0) or 0),
+            refreshed["elapsed_seconds"] + 2,
+        )
+        refreshed["estimated_total_seconds"] = estimated_total_seconds
+        refreshed["eta_seconds"] = max(0, estimated_total_seconds - refreshed["elapsed_seconds"])
+    else:
+        refreshed["estimated_total_seconds"] = 0
+        refreshed["eta_seconds"] = 0
+        refreshed["eta_reason"] = str(refreshed.get("eta_reason", "") or "")
     return refreshed
 
 
@@ -172,6 +180,8 @@ def _default_job_progress(*, target: int = 0, stage: str = "queued", status: str
         "stage_elapsed_seconds": 0,
         "estimated_total_seconds": 0,
         "eta_seconds": 0,
+        "eta_reliable": False,
+        "eta_reason": "",
         "message": "",
         "updated_at": _now(),
     }

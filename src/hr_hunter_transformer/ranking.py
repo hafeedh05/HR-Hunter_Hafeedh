@@ -183,7 +183,7 @@ class VerificationAwareRanker:
             if adjacent_architecture and architecture_relevance < 0.3:
                 entity.score = round(entity.score - min(4.0, (0.3 - architecture_relevance) * 10.0), 2)
         if requested_family == "executive":
-            brief_company_signal = 1.0 if entity.company_match else 0.75 if entity.peer_company_match else 0.0
+            brief_company_signal = 1.0 if entity.company_match else 0.55 if entity.peer_company_match else 0.0
             brief_relevance = max(
                 brief_company_signal,
                 entity.industry_match_score,
@@ -192,6 +192,10 @@ class VerificationAwareRanker:
             relevance_floor = 0.55 if title_gap >= 0.32 else 0.4
             if brief_relevance < relevance_floor:
                 entity.score = round(entity.score - min(5.4, (relevance_floor - brief_relevance) * 12.0), 2)
+            if entity.company_match:
+                entity.score = round(entity.score + 5.0, 2)
+            elif entity.peer_company_match:
+                entity.score = round(entity.score + 2.0, 2)
         if conflict_penalty:
             entity.score = round(entity.score * max(0.88, 1.0 - (conflict_penalty * bonus_weights["conflict_scale"])), 2)
         notes: list[str] = []

@@ -71,6 +71,8 @@ GENERIC_COMPANY_LITERALS = {
     "board",
     "ceo",
     "chief executive officer",
+    "co",
+    "co.",
     "company",
     "confidential",
     "current",
@@ -93,6 +95,20 @@ GENERIC_COMPANY_LITERALS = {
     "strategy",
     "transform",
     "we",
+}
+MONTH_ONLY_LITERALS = {
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
 }
 AFFILIATION_TOKENS = {
     "advisor",
@@ -203,7 +219,7 @@ def looks_like_bad_company(value: str, current_title: str = "") -> bool:
     lowered = normalize_text(cleaned)
     if not cleaned:
         return True
-    if lowered in GENERIC_COMPANY_LITERALS or lowered in LOCATION_LIKE_COMPANY_LITERALS:
+    if lowered in GENERIC_COMPANY_LITERALS or lowered in LOCATION_LIKE_COMPANY_LITERALS or lowered in MONTH_ONLY_LITERALS:
         return True
     if len(cleaned) <= 2:
         return True
@@ -213,7 +229,11 @@ def looks_like_bad_company(value: str, current_title: str = "") -> bool:
         return True
     if re.fullmatch(r"[()@&+\-./]+", cleaned):
         return True
+    if cleaned.count("(") != cleaned.count(")"):
+        return True
     if cleaned.endswith(("&", "+", "/", "|", "-", "–", "—")):
+        return True
+    if re.search(r"[(][A-Za-z]{0,3}$", cleaned):
         return True
     if lowered.startswith(("i ", "we ")):
         return True

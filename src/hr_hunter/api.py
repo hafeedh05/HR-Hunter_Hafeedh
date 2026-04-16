@@ -1162,6 +1162,9 @@ def create_app() -> "FastAPI":
                 "reject_count": 0,
                 "stage_elapsed_seconds": 0,
                 "estimated_total_seconds": 0,
+                "eta_seconds": 0,
+                "eta_reliable": False,
+                "eta_reason": "starting",
                 "target_runtime_seconds": runtime_target_seconds,
                 "target": requested_limit,
                 "round": 0,
@@ -1171,7 +1174,7 @@ def create_app() -> "FastAPI":
             live_stage_name = "running"
             live_stage_started_monotonic = job_started_monotonic
 
-            def _project_total_runtime_seconds() -> int:
+            def _eta_projection() -> tuple[int, bool, str]:
                 elapsed_seconds = int(latest_telemetry.get("elapsed_seconds", 0) or 0)
                 stage = str(latest_telemetry.get("stage", "")).strip().lower() or "running"
                 target_count = max(1, int(latest_telemetry.get("target", requested_limit) or requested_limit or 1))
@@ -1201,10 +1204,37 @@ def create_app() -> "FastAPI":
                     else 0
                 )
                 retrieval_tail = max(20, min(240, int(max(queries_total, target_count) * 0.12) + (queries_in_flight * 3)))
+                high_volume_search = target_count >= 500
+                retrieval_min_queries = (
+                    max(
+                        12,
+                        int(round(queries_total * (0.55 if high_volume_search else 0.35))),
+                    )
+                    if queries_total > 0
+                    else 0
+                )
+                stable_rerank_samples = (
+                    min(rerank_target, max(24, int(round(rerank_target * 0.18))))
+                    if rerank_target > 0
+                    else 0
+                )
+                verification_min_checked = (
+                    min(verification_target_count, max(10, int(round(verification_target_count * 0.2))))
+                    if verification_target_count > 0
+                    else 0
+                )
 
                 if stage in {"completed", "failed"}:
-                    return elapsed_seconds
-                if stage in {"retrieval", "dedupe", "running"}:
+                    return elapsed_seconds, True, ""
+                if stage in {"query_planning", "brief_normalized", "role_understood", "queries_planned"}:
+                    return 0, False, "planning"
+                if stage in {"retrieval", "retrieval_running", "dedupe", "running"}:
+                    if (
+                        queries_total <= 0
+                        or stage_elapsed_seconds < (30 if high_volume_search else 18)
+                        or queries_completed < retrieval_min_queries
+                    ):
+                        return 0, False, "retrieval"
                     if queries_total > 0 and queries_completed > 0 and stage_elapsed_seconds > 0:
                         coverage = min(0.995, max(0.02, queries_completed / max(1, queries_total)))
                         stage_total = int(round(stage_elapsed_seconds / coverage))
@@ -1216,18 +1246,15 @@ def create_app() -> "FastAPI":
                         + rerank_budget
                         + verification_budget
                         + finalizing_budget
-                    )
-                if stage == "rerank":
-                    stable_rerank_samples = (
-                        min(rerank_target, max(24, int(round(rerank_target * 0.18))))
-                        if rerank_target > 0
-                        else 0
-                    )
+                    ), True, ""
+                if stage in {"rerank", "scoring"}:
                     rerank_projection_ready = (
                         rerank_target > 0
                         and reranked_count >= stable_rerank_samples
                         and stage_elapsed_seconds >= 20
                     )
+                    if not rerank_projection_ready:
+                        return 0, False, "rerank"
                     if rerank_projection_ready:
                         coverage = min(0.995, max(0.12, reranked_count / max(1, rerank_target)))
                         stage_total = int(round(stage_elapsed_seconds / coverage))
@@ -1236,22 +1263,30 @@ def create_app() -> "FastAPI":
                             45,
                             min(240, int(max(1, rerank_target or predicted_rerank_pool) * 0.9) + 30),
                         )
-                    return completed_before_stage + max(stage_elapsed_seconds, stage_total) + verification_budget + finalizing_budget
-                if stage == "verifying":
+                    return completed_before_stage + max(stage_elapsed_seconds, stage_total) + verification_budget + finalizing_budget, True, ""
+                if stage in {"verifying", "verification"}:
+                    if (
+                        verification_target_count <= 0
+                        or stage_elapsed_seconds < 12
+                        or verified_candidates_checked < verification_min_checked
+                    ):
+                        return 0, False, "verifying"
                     if verification_target_count > 0 and verified_candidates_checked > 0 and stage_elapsed_seconds > 0:
                         coverage = min(0.995, max(0.02, verified_candidates_checked / max(1, verification_target_count)))
                         stage_total = int(round(stage_elapsed_seconds / coverage))
                     else:
                         stage_total = stage_elapsed_seconds + verification_budget
-                    return completed_before_stage + max(stage_elapsed_seconds, stage_total) + finalizing_budget
+                    return completed_before_stage + max(stage_elapsed_seconds, stage_total) + finalizing_budget, True, ""
                 if stage == "finalizing":
+                    if finalized_count <= 0 or stage_elapsed_seconds < 6:
+                        return 0, False, "finalizing"
                     if target_count > 0 and finalized_count > 0 and stage_elapsed_seconds > 0:
                         coverage = min(0.995, max(0.05, finalized_count / max(1, target_count)))
                         stage_total = int(round(stage_elapsed_seconds / coverage))
                     else:
                         stage_total = stage_elapsed_seconds + max(8, min(90, int(max(1, target_count) * 0.05) + 8))
-                    return completed_before_stage + max(stage_elapsed_seconds, stage_total)
-                return max(elapsed_seconds + 2, completed_before_stage + stage_elapsed_seconds + finalizing_budget)
+                    return completed_before_stage + max(stage_elapsed_seconds, stage_total), True, ""
+                return 0, False, "stage_transition"
 
             def _push_progress(
                 patch: Dict[str, Any],
@@ -1266,6 +1301,7 @@ def create_app() -> "FastAPI":
                 patch_payload = {key: value for key, value in dict(patch or {}).items() if value is not None}
                 previous_stage = str(latest_telemetry.get("stage", "")).strip().lower() or "running"
                 previous_estimated_total = int(latest_telemetry.get("estimated_total_seconds", 0) or 0)
+                previous_eta_reliable = bool(latest_telemetry.get("eta_reliable", False))
                 stage_name = str(patch_payload.get("stage", latest_telemetry.get("stage", ""))).strip().lower() or "running"
                 if stage_name != live_stage_name:
                     live_stage_name = stage_name
@@ -1283,26 +1319,33 @@ def create_app() -> "FastAPI":
                 elapsed_seconds = max(0, int(now - job_started_monotonic))
                 latest_telemetry["elapsed_seconds"] = elapsed_seconds
                 stage = str(latest_telemetry.get("stage", "")).strip().lower() or "running"
-                projected_total_seconds = _project_total_runtime_seconds()
-                computed_estimated_total = max(
-                    elapsed_seconds + (0 if stage in {"completed", "failed"} else 2),
-                    min(4 * 3600, max(0, int(projected_total_seconds or 0))),
-                )
-                if (
-                    previous_estimated_total > 0
-                    and stage == previous_stage
-                    and stage not in {"completed", "failed"}
-                ):
-                    smoothed_estimate = int(round((previous_estimated_total * 0.7) + (computed_estimated_total * 0.3)))
+                projected_total_seconds, eta_reliable, eta_reason = _eta_projection()
+                if eta_reliable:
                     computed_estimated_total = max(
-                        elapsed_seconds + 2,
-                        min(4 * 3600, smoothed_estimate),
+                        elapsed_seconds + (0 if stage in {"completed", "failed"} else 2),
+                        min(4 * 3600, max(0, int(projected_total_seconds or 0))),
                     )
-                latest_telemetry["estimated_total_seconds"] = computed_estimated_total
-                latest_telemetry["eta_seconds"] = max(
-                    0,
-                    int(latest_telemetry["estimated_total_seconds"]) - elapsed_seconds,
-                ) if stage not in {"completed", "failed"} else 0
+                    if (
+                        previous_eta_reliable
+                        and previous_estimated_total > 0
+                        and stage == previous_stage
+                        and stage not in {"completed", "failed"}
+                    ):
+                        smoothed_estimate = int(round((previous_estimated_total * 0.7) + (computed_estimated_total * 0.3)))
+                        computed_estimated_total = max(
+                            elapsed_seconds + 2,
+                            min(4 * 3600, smoothed_estimate),
+                        )
+                    latest_telemetry["estimated_total_seconds"] = computed_estimated_total
+                    latest_telemetry["eta_seconds"] = max(
+                        0,
+                        int(latest_telemetry["estimated_total_seconds"]) - elapsed_seconds,
+                    ) if stage not in {"completed", "failed"} else 0
+                else:
+                    latest_telemetry["estimated_total_seconds"] = 0
+                    latest_telemetry["eta_seconds"] = 0
+                latest_telemetry["eta_reliable"] = bool(eta_reliable)
+                latest_telemetry["eta_reason"] = str(eta_reason or "")
                 update_job_progress(
                     job_id,
                     latest_telemetry,
@@ -1329,6 +1372,8 @@ def create_app() -> "FastAPI":
                         "stage_elapsed_seconds": int(latest_telemetry.get("stage_elapsed_seconds", 0) or 0),
                         "estimated_total_seconds": int(latest_telemetry.get("estimated_total_seconds", 0) or 0),
                         "eta_seconds": int(latest_telemetry.get("eta_seconds", 0) or 0),
+                        "eta_reliable": bool(latest_telemetry.get("eta_reliable", False)),
+                        "eta_reason": str(latest_telemetry.get("eta_reason", "") or ""),
                         "target_runtime_seconds": runtime_target_seconds,
                         "requested_limit": requested_limit,
                         "internal_fetch_limit": internal_fetch_limit,

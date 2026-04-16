@@ -23,6 +23,10 @@ This repo is cut for a client-safe transformer-first release.
   - Settings
   - Admin
 - Hunt Brief stays familiar and is not redesigned in this release
+- Live brief quality improvements now include:
+  - company-paste splitting for target and similar-company fields
+  - clearer geography wording: `Where is the role based?`
+  - stage-aware ETA behavior for new long-running transformer jobs
 
 This release does not claim equal strength across every job family.
 
@@ -42,7 +46,7 @@ This release does not claim equal strength across every job family.
 - Legal / Compliance
 - Sustainability / ESG
 - General Operations
-- Executive / CEO when positioned as public-evidence constrained sourcing, not guaranteed high-volume verification
+- Executive / CEO when positioned as public-evidence constrained sourcing, not guaranteed literal hard-fill volume
 
 ### Weak families not to oversell
 
@@ -78,6 +82,7 @@ HR Hunter is built around a project-first recruiter workflow:
   - typed JD and uploaded JD support
   - recruiter notes
 - Background search jobs
+- Honest stage-aware progress for new transformer runs
 - Results, Candidates, Feedback, History, Settings, Admin
 - Transformer-first ranking and verification
 - CSV and JSON exports

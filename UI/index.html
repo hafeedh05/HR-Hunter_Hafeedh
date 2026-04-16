@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HR Hunter</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260416clientready2" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260416etaquality1" />
   </head>
   <body class="theme-bright">
     <div class="auth-shell" id="auth-shell">
@@ -159,7 +159,7 @@
                   <input id="role-title" type="text" placeholder="Senior Data Analyst" />
                 </label>
                 <label>
-                  <span>Target Geography</span>
+                  <span>Where is the role based?</span>
                   <input id="target-geography" type="text" placeholder="United Arab Emirates" />
                 </label>
                 <label class="span-2">
@@ -259,17 +259,17 @@
               <div class="form-grid">
                 <div class="span-2">
                   <div class="inline-heading">
-                    <span>Must Current Companies</span>
-                    <span class="muted small">Use only when the candidate must currently work there.</span>
+                    <span>Candidates must currently work at</span>
+                    <span class="muted small">Paste one company per line, or separate companies with commas.</span>
                   </div>
-                  <div class="token-field" id="companies-field" data-placeholder="Add a target company"></div>
+                  <div class="token-field" id="companies-field" data-placeholder="Paste or add target companies"></div>
                 </div>
                 <div class="span-2">
                   <div class="inline-heading">
-                    <span>Peer Companies to Source From</span>
-                    <span class="muted small">Comparable brands to source from without treating them as hard current-company gates.</span>
+                    <span>Similar companies to search (optional)</span>
+                    <span class="muted small">Similar brands or groups to search. Candidates do not need to work there now.</span>
                   </div>
-                  <div class="token-field" id="peer-companies-field" data-placeholder="Add a peer company"></div>
+                  <div class="token-field" id="peer-companies-field" data-placeholder="Paste or add similar companies"></div>
                 </div>
                 <label>
                   <span>Company Match Mode</span>
@@ -290,15 +290,15 @@
                 </label>
                 <div class="span-2">
                   <div class="inline-heading">
-                    <span>Must-Have Skills</span>
+                    <span>Required Skills</span>
                   </div>
-                  <div class="token-field" id="must-have-field" data-placeholder="Add a must-have skill"></div>
+                  <div class="token-field" id="must-have-field" data-placeholder="Add a required skill"></div>
                 </div>
                 <div class="span-2">
                   <div class="inline-heading">
-                    <span>Nice-to-Have Skills</span>
+                    <span>Helpful Extra Skills</span>
                   </div>
-                  <div class="token-field" id="nice-to-have-field" data-placeholder="Add a nice-to-have skill"></div>
+                  <div class="token-field" id="nice-to-have-field" data-placeholder="Add a helpful extra skill"></div>
                 </div>
                 <div class="span-2">
                   <div class="inline-heading">
@@ -1038,7 +1038,7 @@
         }
       })();
     </script>
-    <script src="/assets/app.js?v=20260416clientready2" defer></script>
+    <script src="/assets/app.js?v=20260416etaquality1" defer></script>
     <script>
       // If the main bundle fails to load/parse, make that obvious instead of looking like "login is broken".
       window.setTimeout(() => {

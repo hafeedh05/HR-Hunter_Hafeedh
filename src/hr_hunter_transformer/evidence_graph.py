@@ -4,7 +4,7 @@ import re
 from collections import Counter, defaultdict
 
 from hr_hunter_transformer.company_quality import company_quality_score
-from hr_hunter_transformer.models import CandidateEntity, EvidenceRecord
+from hr_hunter_transformer.models import CandidateEntity, EvidenceRecord, SearchBrief
 from hr_hunter_transformer.role_profiles import normalize_text
 
 
@@ -28,11 +28,29 @@ def _looks_like_bad_company(value: str, current_title: str = "") -> bool:
 
 
 def _best_company(values: list[EvidenceRecord], current_title: str) -> str:
-    candidates = [record.current_company for record in values if record.current_company and not _looks_like_bad_company(record.current_company, current_title)]
-    if not candidates:
+    scored_companies: dict[str, float] = defaultdict(float)
+    representative_values: dict[str, str] = {}
+    for record in values:
+        company = str(record.current_company or "").strip()
+        if not company or _looks_like_bad_company(company, current_title):
+            continue
+        normalized_company = normalize_text(company)
+        quality = company_quality_score(company, current_title, record.role_family)
+        score = (
+            quality * 1.8
+            + max(0.0, record.company_confidence)
+            + (0.55 if record.company_match else 0.0)
+            + (0.2 if record.peer_company_match else 0.0)
+            + (0.2 if record.current_role_signal else 0.0)
+        )
+        scored_companies[normalized_company] += score
+        existing_value = representative_values.get(normalized_company, "")
+        if not existing_value or len(company) > len(existing_value):
+            representative_values[normalized_company] = company
+    if not scored_companies:
         return ""
-    company_counter = Counter(candidates)
-    return company_counter.most_common(1)[0][0]
+    best_key = max(scored_companies, key=lambda key: scored_companies[key])
+    return representative_values.get(best_key, "")
 
 
 def _strong_company_key(record: EvidenceRecord) -> str:
@@ -135,13 +153,23 @@ def _conflict_score(values: list[EvidenceRecord]) -> float:
 
 
 class EvidenceGraphBuilder:
-    def merge(self, records: list[EvidenceRecord]) -> list[CandidateEntity]:
+    def merge(self, records: list[EvidenceRecord], brief: SearchBrief | None = None) -> list[CandidateEntity]:
         grouped: dict[str, list[EvidenceRecord]] = defaultdict(list)
         for record in records:
             key = _canonical_person_key(record.full_name)
             if key:
                 grouped[key].append(record)
 
+        exact_company_targets = {
+            normalize_text(value)
+            for value in (brief.company_targets if brief else [])
+            if normalize_text(value)
+        }
+        peer_company_targets = {
+            normalize_text(value)
+            for value in (brief.peer_company_targets if brief else [])
+            if normalize_text(value)
+        }
         entities: list[CandidateEntity] = []
         for key, values in grouped.items():
             for cluster in _cluster_records(values):
@@ -204,8 +232,17 @@ class EvidenceGraphBuilder:
                     location_support_count=location_support_count,
                     source_domains=sorted({record.source_domain for record in cluster if record.source_domain}),
                 )
+                chosen_company_key = normalize_text(chosen_company)
+                if chosen_company_key and chosen_company_key in exact_company_targets:
+                    entity.company_match = True
+                if chosen_company_key and chosen_company_key in peer_company_targets:
+                    entity.peer_company_match = True
                 entity.title_match_score = round(max((record.title_confidence for record in cluster), default=0.0), 4)
                 entity.company_match_score = round(max((record.company_confidence for record in cluster), default=0.0), 4)
+                if chosen_company_key and chosen_company_key in exact_company_targets:
+                    entity.company_match_score = max(entity.company_match_score, 0.92)
+                elif chosen_company_key and chosen_company_key in peer_company_targets:
+                    entity.company_match_score = max(entity.company_match_score, 0.72)
                 entity.company_quality_score = company_quality
                 entity.company_consensus_score = company_consensus_score
                 entity.location_match_score = round(max((record.location_confidence for record in cluster), default=0.0), 4)

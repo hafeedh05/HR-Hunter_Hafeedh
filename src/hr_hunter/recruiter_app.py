@@ -468,13 +468,151 @@ def slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-") or "brief"
 
 
-def parse_multi_value(value: Any) -> List[str]:
+COMPANY_PASTE_PHRASES = [
+    "Pottery Barn",
+    "West Elm",
+    "2XL Furniture & Home Decor",
+    "2XL Furniture & Home Décor",
+    "Home Centre",
+    "Homes R Us",
+    "The One",
+    "Pan Emirates",
+    "Maisons du Monde",
+    "BoConcept",
+    "Ligne Roset",
+    "Roche Bobois",
+    "Vitra",
+    "Kartell",
+    "Poltrona Frau",
+    "Fendi Casa",
+    "IKEA",
+    "Restoration Hardware",
+    "Crate & Barrel",
+    "Tanagra",
+    "Chalhoub Group",
+    "Alshaya Group",
+    "Harrods",
+    "Bloomingdale's",
+    "Harvey Nichols",
+    "Anthropologie",
+    "Brunello Cucinelli",
+    "Tod's Group",
+    "Valentino",
+    "Puig",
+    "Apparel Group",
+    "Jumeirah Group",
+    "Four Seasons Hotels",
+    "Kerzner International",
+    "Belmond",
+    "Aman Resorts",
+]
+COMPANY_BOUNDARY_WORDS = {
+    "group",
+    "holding",
+    "holdings",
+    "international",
+    "hotel",
+    "hotels",
+    "resort",
+    "resorts",
+    "furniture",
+    "decor",
+    "décor",
+    "centre",
+    "home",
+    "homes",
+    "us",
+    "one",
+    "emirates",
+    "monde",
+    "roset",
+    "bobois",
+    "vitra",
+    "kartell",
+    "frau",
+    "casa",
+    "ikea",
+    "hardware",
+    "barrel",
+    "harrods",
+    "bloomingdale's",
+    "nichols",
+    "tanagra",
+    "anthropologie",
+    "cucinelli",
+    "valentino",
+    "puig",
+    "belmond",
+}
+COMPANY_JOIN_WORDS = {"&", "and", "the", "of", "de", "du", "r"}
+COMPANY_PASTE_MATCHERS = [
+    re.compile(
+        r"^" + r"\s+".join(re.escape(part) for part in phrase.split()) + r"(?=$|\s)",
+        re.IGNORECASE,
+    )
+    for phrase in sorted(COMPANY_PASTE_PHRASES, key=len, reverse=True)
+]
+
+
+def _normalize_company_token(value: str) -> str:
+    return re.sub(r"[^\w&']+", "", str(value or "").lower()).strip()
+
+
+def _split_single_company_blob(value: Any) -> List[str]:
+    normalized = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not normalized:
+        return []
+    if len(normalized) < 40:
+        return [normalized]
+    matched: List[str] = []
+    remaining = normalized
+    while remaining:
+        working = remaining.strip()
+        if not working:
+            break
+        phrase_match = None
+        for matcher in COMPANY_PASTE_MATCHERS:
+            hit = matcher.match(working)
+            if hit:
+                phrase_match = hit.group(0).strip()
+                break
+        if phrase_match:
+            matched.append(phrase_match)
+            remaining = working[len(phrase_match):].strip()
+            continue
+        words = working.split()
+        chunk: List[str] = []
+        consumed = 0
+        while consumed < len(words):
+            word = words[consumed]
+            next_word = words[consumed + 1] if consumed + 1 < len(words) else ""
+            chunk.append(word)
+            consumed += 1
+            lower_word = _normalize_company_token(word)
+            next_starts_boundary = bool(next_word and re.match(r"^[A-Z0-9]", next_word))
+            if lower_word in COMPANY_BOUNDARY_WORDS and next_starts_boundary:
+                break
+            if len(chunk) >= 4 and next_starts_boundary and lower_word not in COMPANY_JOIN_WORDS:
+                break
+        matched.append(" ".join(chunk).strip())
+        remaining = " ".join(words[consumed:]).strip()
+    return unique_preserving_order([item for item in matched if item])
+
+
+def parse_multi_value(value: Any, *, field: str = "") -> List[str]:
+    field_key = str(field or "").strip().lower()
     if isinstance(value, list):
         items = [str(item).strip() for item in value]
     else:
         text = str(value or "")
-        items = re.split(r"[\n,;]+", text)
-    return unique_preserving_order([item for item in items if str(item).strip()])
+        items = re.split(r"[\n,;\t\u2022]+", text)
+    cleaned = [item for item in items if str(item).strip()]
+    if field_key == "company":
+        expanded: List[str] = []
+        for item in cleaned:
+            expanded.extend(_split_single_company_blob(item))
+        cleaned = expanded
+    return unique_preserving_order(cleaned)
 
 
 def _truncate(text: str, limit: int = 280) -> str:
@@ -1839,11 +1977,11 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     countries = parse_multi_value(payload.get("countries"))
     continents = parse_multi_value(payload.get("continents"))
     cities = parse_multi_value(payload.get("cities"))
-    companies = parse_multi_value(payload.get("company_targets"))
-    peer_companies = parse_multi_value(payload.get("peer_company_targets"))
+    companies = parse_multi_value(payload.get("company_targets"), field="company")
+    peer_companies = parse_multi_value(payload.get("peer_company_targets"), field="company")
     sourcing_companies = unique_preserving_order([*companies, *peer_companies])
     exclude_titles = parse_multi_value(payload.get("exclude_title_keywords"))
-    exclude_companies = parse_multi_value(payload.get("exclude_company_keywords"))
+    exclude_companies = parse_multi_value(payload.get("exclude_company_keywords"), field="company")
     must_have = parse_multi_value(payload.get("must_have_keywords"))
     nice_to_have = parse_multi_value(payload.get("nice_to_have_keywords"))
     industry_keywords = parse_multi_value(payload.get("industry_keywords"))

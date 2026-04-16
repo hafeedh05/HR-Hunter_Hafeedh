@@ -20,6 +20,12 @@
 - Production now runs two Uvicorn workers so a long transformer job does not monopolize all health/status/UI traffic.
 - Startup transformer warmup is disabled by default in production to avoid every worker loading the model at boot.
 - Added `scripts/prune_project_runs.py` for operator run-history cleanup after backup.
+- Live Hunt company paste is now split on both the client and server side, so pasted target-company and similar-company blobs break into real company entries instead of one malformed chip.
+- Hunt wording is clearer live:
+  - `Target Geography` -> `Where is the role based?`
+  - `Must Current Companies` -> `Candidates must currently work at`
+  - `Peer Companies` -> `Similar companies to search (optional)`
+- ETA for new long transformer runs is now stage-aware and reliability-gated. The UI stays honest and shows an updating state until planning/retrieval/rerank/verifying have enough signal for a real countdown.
 
 ## Live Validation Results
 
@@ -38,6 +44,11 @@ Latest project runs after cleanup:
 - Project Architect Test: `project-architect-07ac2f33`, `300 / 259 verified / 41 review / 0 reject`, `330s`.
 - Senior Accountant Test: `senior-accountant-8c860221`, `300 / 167 verified / 133 review / 0 reject`.
 - AI Engineer Test: `ai-engineer-baae73bf`, `300 / 73 verified / 227 review / 0 reject`.
+
+Additional live runs after the client-ready pass:
+
+- CEO - Marina Homes: `ceo-dcdc6591`, `587 / 437 verified / 115 review / 35 reject`, `732s`.
+- Head of HR - hold co: `1000 / 114 verified / 886 review / 0 reject`, `399s`.
 
 ## Client Positioning
 

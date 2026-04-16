@@ -38,6 +38,12 @@ This is the working team position:
 - runtime/progress truth fix so report summaries preserve job wall-clock runtime, transformer pipeline runtime, and product target runtime
 - asset cache bump so live browsers pull the latest app bundle
 - extraction/company-quality pass for malformed company fragments and regional profile-host location evidence
+- company-paste splitting for target and similar-company fields in the live Hunt brief
+- clearer live Hunt labels:
+  - `Where is the role based?`
+  - `Candidates must currently work at`
+  - `Similar companies to search (optional)`
+- stage-aware ETA reliability for new long transformer jobs so the UI can show “updating” until the estimate is trustworthy
 
 ## Latest Live Client-Ready Validation
 
@@ -86,6 +92,30 @@ Latest CEO pilot validation:
 - job elapsed: `554s`
 - result ordering: verified candidates appear before review candidates
 
+Latest live CEO 600-company-targeted pilot after company parsing / ETA / executive targeting fixes:
+
+- project id: `project_7b0143fa2546`
+- run id: `ceo-dcdc6591`
+- backend: `transformer_v2`
+- requested: `600`
+- returned: `587`
+- verified/review/reject: `437 / 115 / 35`
+- raw/unique/query count: `3981 / 587 / 330`
+- job elapsed: `732s`
+- note: quality is much stronger now, but the stricter brief still stopped at `587` unique candidates instead of a literal `600/600` hard fill
+
+Latest live HR leadership validation after family mapping correction:
+
+- project id: `project_eb72b39b177e`
+- role: `Head of HR`
+- backend: `transformer_v2`
+- requested: `1000`
+- returned: `1000`
+- verified/review/reject: `114 / 886 / 0`
+- raw/unique/query count: `2868 / 1000 / 189`
+- job elapsed: `399s`
+- family mapping: `hr_talent` with `0.98` family confidence
+
 ## Current Verification Baseline
 
 Use these current local app-project baselines as the reference when validating another environment:
@@ -115,9 +145,11 @@ Use `docs/local-transformer-validation-20260415.md` for the exact hunt briefs, r
 - Digital Marketing
 - Interior Design
 - Architecture / Project Architect
+- Senior Accountant / Accounting
 
 ### Pilot-only families
 
+- Finance / Accounting outside the validated accountant path
 - HR / Talent Acquisition
 - Legal / Compliance
 - Sustainability / ESG
@@ -125,6 +157,7 @@ Use `docs/local-transformer-validation-20260415.md` for the exact hunt briefs, r
 - Data / BI / Analytics
 - Product / Program / Government / Research
 - Executive / CEO when demoed honestly as public-evidence constrained sourcing
+- Head of HR / HR leadership
 
 ### Weak families not to oversell
 

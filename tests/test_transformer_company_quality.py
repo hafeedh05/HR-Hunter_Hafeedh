@@ -18,6 +18,8 @@ def test_company_quality_rejects_generic_ui_and_fragment_values() -> None:
     assert looks_like_bad_company("DAT & Partners Consultant Damascus University")
     assert looks_like_bad_company("Amar Golden Design AMGD United Arab Emirates University", "Architect")
     assert company_quality_score("U.S") < 0.18
+    assert looks_like_bad_company("Feb")
+    assert looks_like_bad_company("(Co")
 
 
 def test_company_quality_keeps_real_architecture_employers() -> None:

@@ -121,5 +121,28 @@ def test_extractor_matches_peer_company_inside_parenthetical_parent_brand() -> N
     record = extractor.extract(hit, brief)
 
     assert record is not None
-    assert record.current_company == "Home Centre (Landmark Group)"
+    assert record.current_company == "Home Centre"
+    assert record.peer_company_match is True
+
+
+def test_extractor_keeps_peer_company_from_snippet_when_not_in_exact_targets() -> None:
+    extractor = ProfileExtractor()
+    brief = SearchBrief(
+        role_title="Chief Executive Officer",
+        titles=["Chief Executive Officer", "CEO"],
+        company_targets=["Pottery Barn"],
+        peer_company_targets=["Chalhoub Group"],
+        countries=["United Arab Emirates"],
+    )
+    hit = RawSearchHit(
+        title="Nadia Karim | Chief Executive Officer",
+        snippet="Chief Executive Officer at Chalhoub Group in Dubai",
+        url="https://ae.linkedin.com/in/nadia-karim",
+        source="scrapingbee_google",
+    )
+
+    record = extractor.extract(hit, brief)
+
+    assert record is not None
+    assert record.current_company == "Chalhoub Group"
     assert record.peer_company_match is True

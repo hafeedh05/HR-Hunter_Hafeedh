@@ -9,7 +9,7 @@ This note records the production validation for the client-ready transformer-fir
 - Previous rollback release path: `/srv/hr-hunter/releases/20260416T092614Z-c654cce-ceo-order`
 - Health endpoint: `https://hr-hunter.hyvelabs.tech/healthz`
 - Health result: `{"status":"ok"}`
-- Frontend asset version: `20260416clientready2`
+- Frontend asset version: `20260416etaquality1`
 - Active backend: `transformer_v2`
 - Web serving: two Uvicorn workers via `HR_HUNTER_WEB_WORKERS=2`
 - Startup transformer warmup: disabled in production via `HR_HUNTER_WARM_TRANSFORMER_ON_STARTUP=0`
@@ -40,6 +40,12 @@ This note records the production validation for the client-ready transformer-fir
 - Added CEO peer-company query priority and fuzzy peer-company matching for parenthetical/compound company names.
 - Added two-worker production serving so health/status/UI requests stay responsive while one worker is busy with a long transformer run.
 - Pruned saved run clutter after backup; each visible validation project now has 1-2 saved runs.
+- Added company-paste splitting for the live Hunt brief so target/similar company blobs break into real company entries.
+- Renamed Hunt wording for clarity:
+  - `Target Geography` -> `Where is the role based?`
+  - `Must Current Companies` -> `Candidates must currently work at`
+  - `Peer Companies` -> `Similar companies to search (optional)`
+- ETA is now stage-aware for new runs. Large transformer jobs only show a countdown when the backend has enough stage signal; otherwise the UI stays honest and shows an updating state instead of fake precision.
 
 ## Live Smoke Checks
 
@@ -133,6 +139,45 @@ This run was completed before the final runtime-target metadata polish. The qual
 - CSV export: passed
 - result ordering: first 34 candidates are verified before any review candidates.
 
+### CEO - Marina Homes (600-candidate targeted luxury retail brief)
+
+- project id: `project_7b0143fa2546`
+- run id: `ceo-dcdc6591`
+- backend: `transformer_v2`
+- requested: `600`
+- returned: `587`
+- verified: `437`
+- needs review: `115`
+- rejected: `35`
+- query count: `330`
+- raw found: `3981`
+- unique after dedupe: `587`
+- job elapsed: `732s`
+- strongest matched-company band now includes:
+  - `The One`
+  - `Home Centre`
+  - `Chalhoub Group`
+  - `Alshaya Group`
+  - `Pottery Barn`
+  - `West Elm`
+  - `Homes R Us`
+- note: this is now a much cleaner and stronger CEO pilot, but the stricter brief still did not hard-fill a literal `600/600`
+
+### Head of HR - hold co (1000-candidate HR leadership validation)
+
+- project id: `project_eb72b39b177e`
+- backend: `transformer_v2`
+- requested: `1000`
+- returned: `1000`
+- verified: `114`
+- needs review: `886`
+- rejected: `0`
+- query count: `189`
+- raw found: `2868`
+- unique after dedupe: `1000`
+- job elapsed: `399s`
+- family mapping corrected to: `hr_talent` with `0.98` family confidence
+
 Top verified CEO examples:
 
 - `Sameer Jain`, CEO, Landmark Group / Home Centre.
@@ -169,6 +214,12 @@ CEO is much better than the earlier weak run, but still public-evidence constrai
 - earlier weak live run: `300 / 16 verified / 284 review / 0 reject`
 - current live run: `300 / 34 verified / 266 review / 0 reject`
 - main remaining diagnostic: weak company / industry signals for candidates outside the strongest peer-company tranche.
+
+For the large targeted CEO brief:
+
+- earlier malformed-company brief behavior produced unrelated-company noise and weak verified yield
+- current corrected-company pilot produced `587 / 437 verified / 115 review / 35 reject`
+- main remaining limitation is fill depth under strict company/title/geo constraints, not company parsing
 
 ## Rollback
 

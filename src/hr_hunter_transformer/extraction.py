@@ -174,6 +174,22 @@ def _company_target_match(normalized_company: str, targets: set[str]) -> bool:
     return False
 
 
+def _best_target_company_match(text: str, companies: list[str]) -> str:
+    normalized_text = normalize_text(text)
+    matches: list[tuple[int, int, str]] = []
+    for company in companies:
+        normalized_company = normalize_text(company)
+        if not normalized_company:
+            continue
+        position = normalized_text.find(normalized_company)
+        if position >= 0:
+            matches.append((position, -len(normalized_company), company))
+    if not matches:
+        return ""
+    matches.sort()
+    return matches[0][2]
+
+
 class ProfileExtractor:
     def _sanitize_person_name(self, value: str) -> str:
         cleaned = BIDI_CONTROL_RE.sub("", str(value or "")).strip()
@@ -202,6 +218,9 @@ class ProfileExtractor:
         cleaned = re.sub(r"\bView org chart\b.*$", "", cleaned, flags=re.IGNORECASE).strip(" -|,.;:")
         cleaned = re.sub(r"\bis a\b.*$", "", cleaned, flags=re.IGNORECASE).strip(" -|,.;:")
         cleaned = re.sub(r"\bfrom\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2,4}\b.*$", "", cleaned, flags=re.IGNORECASE).strip(" -|,.;:")
+        cleaned = re.sub(r"\(\s*[A-Za-z]{0,3}$", "", cleaned).strip(" -|,.;:")
+        if cleaned.count("(") != cleaned.count(")"):
+            cleaned = cleaned.split("(")[0].strip(" -|,.;:")
         return cleaned
 
     def _looks_like_bad_company_value(self, value: str, current_title: str = "") -> bool:
@@ -363,10 +382,13 @@ class ProfileExtractor:
         return cleaned
 
     def _guess_company(self, hit: RawSearchHit, brief: SearchBrief, current_title: str) -> tuple[str, float]:
-        normalized = normalize_text(f"{hit.title} {hit.snippet}")
-        for company in brief.company_targets:
-            if normalize_text(company) in normalized:
-                return company, 0.92
+        combined_text = f"{hit.title} {hit.snippet}"
+        exact_company = _best_target_company_match(combined_text, list(brief.company_targets))
+        if exact_company:
+            return exact_company, 0.92
+        peer_company = _best_target_company_match(combined_text, list(brief.peer_company_targets))
+        if peer_company:
+            return peer_company, 0.86
         url_company = self._company_from_url(hit.url)
         if url_company and not self._looks_like_bad_company_value(url_company, current_title):
             return url_company, 0.84
