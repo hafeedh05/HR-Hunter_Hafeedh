@@ -5,7 +5,7 @@ This note records the production validation for the client-ready transformer-fir
 ## Live Deployment
 
 - Live app: `https://hr-hunter.hyvelabs.tech`
-- Final release path: `/srv/hr-hunter/releases/20260416T094357Z-c6c79d7-timeout-safe`
+- Final release path: `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final`
 - Previous rollback release path: `/srv/hr-hunter/releases/20260416T092614Z-c654cce-ceo-order`
 - Health endpoint: `https://hr-hunter.hyvelabs.tech/healthz`
 - Health result: `{"status":"ok"}`

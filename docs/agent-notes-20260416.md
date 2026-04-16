@@ -3,7 +3,7 @@
 ## Production Release
 
 - Live app: `https://hr-hunter.hyvelabs.tech`
-- Active release path: `/srv/hr-hunter/releases/20260416T094357Z-c6c79d7-timeout-safe`
+- Active release path: `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final`
 - Previous rollback release: `/srv/hr-hunter/releases/20260416T092614Z-c654cce-ceo-order`
 - Runtime service: `/etc/systemd/system/hr-hunter.service`
 - Current service command: `/srv/hr-hunter/.venv/bin/python -m hr_hunter.cli serve --host 127.0.0.1 --port 8765 --workers 2`

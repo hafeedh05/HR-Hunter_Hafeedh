@@ -159,7 +159,7 @@ This release includes the following practical changes:
 
 ## Current Live Validation
 
-Latest GCP release: `/srv/hr-hunter/releases/20260416T094357Z-c6c79d7-timeout-safe`
+Latest GCP release: `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final`
 
 - Health: `https://hr-hunter.hyvelabs.tech/healthz` returns `{"status":"ok"}`
 - Auth/session API works for the admin account

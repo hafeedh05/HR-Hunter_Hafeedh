@@ -43,7 +43,7 @@ This is the working team position:
 
 Final live release path:
 
-- `/srv/hr-hunter/releases/20260416T094357Z-c6c79d7-timeout-safe`
+- `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final`
 
 Verified live on `https://hr-hunter.hyvelabs.tech`:
 

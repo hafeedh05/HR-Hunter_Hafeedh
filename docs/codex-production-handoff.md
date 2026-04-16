@@ -9,7 +9,7 @@ This document is the deploy handoff for the current release cut from:
 ## Current Live Release
 
 - Live app: `https://hr-hunter.hyvelabs.tech`
-- Final release path: `/srv/hr-hunter/releases/20260416T094357Z-c6c79d7-timeout-safe`
+- Final release path: `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final`
 - Previous rollback release: `/srv/hr-hunter/releases/20260416T092614Z-c654cce-ceo-order`
 - Health check: `https://hr-hunter.hyvelabs.tech/healthz` returns `{"status":"ok"}`
 - Frontend assets: `20260416clientready2`
