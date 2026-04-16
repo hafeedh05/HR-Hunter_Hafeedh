@@ -101,3 +101,25 @@ def test_extractor_keeps_company_like_bayt_employers() -> None:
         "AL FUTTAIM",
         "ASSA ABLOY Opening Solutions ME",
     ]
+
+
+def test_extractor_matches_peer_company_inside_parenthetical_parent_brand() -> None:
+    extractor = ProfileExtractor()
+    brief = SearchBrief(
+        role_title="Chief Executive Officer",
+        titles=["Chief Executive Officer", "CEO"],
+        peer_company_targets=["Home Centre", "Landmark Group"],
+        countries=["United Arab Emirates"],
+    )
+    hit = RawSearchHit(
+        title="Arja Taaveniku | Chief Executive Officer | Home Centre (Landmark Group)",
+        snippet="CEO at Home Centre (Landmark Group), United Arab Emirates",
+        url="https://ae.linkedin.com/in/arja-taaveniku",
+        source="scrapingbee_google",
+    )
+
+    record = extractor.extract(hit, brief)
+
+    assert record is not None
+    assert record.current_company == "Home Centre (Landmark Group)"
+    assert record.peer_company_match is True

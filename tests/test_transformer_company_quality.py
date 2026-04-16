@@ -7,6 +7,9 @@ def test_company_quality_rejects_generic_ui_and_fragment_values() -> None:
     assert looks_like_bad_company("Follow")
     assert looks_like_bad_company("Intern")
     assert looks_like_bad_company("Consultant")
+    assert looks_like_bad_company("CEO")
+    assert looks_like_bad_company("2005")
+    assert looks_like_bad_company("Furniture")
     assert looks_like_bad_company("/ BIM Consultant")
     assert looks_like_bad_company("– ADREA")
     assert company_quality_score("– ADREA", "Architect", "design_architecture") == 0.0

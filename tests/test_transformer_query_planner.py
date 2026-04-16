@@ -47,6 +47,26 @@ def test_query_plan_uses_wider_profile_for_low_confidence_role() -> None:
     assert plan.max_queries > 54
 
 
+def test_executive_query_plan_prioritizes_peer_company_queries_before_generic_titles() -> None:
+    brief = SearchBrief(
+        role_title="Chief Executive Officer",
+        titles=["Chief Executive Officer", "CEO", "Managing Director"],
+        countries=["United Arab Emirates", "Saudi Arabia"],
+        cities=["Dubai", "Riyadh"],
+        peer_company_targets=["Home Centre", "Chalhoub Group", "Al-Futtaim"],
+        industry_keywords=["premium retail", "home furnishings"],
+        target_count=300,
+    )
+
+    plan = build_query_plan(brief)
+    first_queries = plan.queries[:12]
+
+    assert plan.role_understanding.role_family == "executive"
+    assert all(task.query_type in {"company_exact_priority", "company_geo_priority"} for task in first_queries)
+    assert any('"Home Centre"' in task.query_text for task in first_queries)
+    assert any('"Dubai"' in task.query_text for task in first_queries)
+
+
 def test_dense_family_learning_does_not_overexpand_high_fill_supply_chain(monkeypatch) -> None:
     monkeypatch.setattr(
         "hr_hunter_transformer.query_profiles.family_learning_stats",

@@ -65,8 +65,10 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
         family_confidence=understanding.family_confidence,
     )
     geographies = [value for value in [*brief.cities[:6], *brief.countries[:6]] if str(value).strip()] or [""]
+    executive_search = understanding.role_family == "executive"
+    company_limit = 12 if executive_search else 8
     companies = []
-    for value in [*brief.company_targets[:6], *brief.peer_company_targets[:8]]:
+    for value in [*brief.company_targets[:6], *brief.peer_company_targets[:company_limit]]:
         text = str(value or "").strip()
         if text and text not in companies:
             companies.append(text)
@@ -96,6 +98,20 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
 
     exact_titles = understanding.title_variants[:6] or [brief.role_title]
     adjacent_titles = understanding.adjacent_titles[:4] if profile.adjacent_titles_enabled else []
+
+    if companies:
+        priority_title_count = 5 if executive_search else 3
+        priority_geo_count = 3 if executive_search else 2
+        for company in companies:
+            for title in exact_titles[:priority_title_count]:
+                add(f'site:linkedin.com/in "{title}" "{company}"', "company_exact_priority", "professional")
+                for geography in geographies[:priority_geo_count]:
+                    if geography:
+                        add(
+                            f'site:linkedin.com/in "{title}" "{company}" "{geography}"',
+                            "company_geo_priority",
+                            "professional",
+                        )
 
     for title in exact_titles:
         for geography in geographies[:4]:

@@ -161,6 +161,19 @@ BAD_COMPANY_LITERALS = {
 }
 
 
+def _company_target_match(normalized_company: str, targets: set[str]) -> bool:
+    if not normalized_company or not targets:
+        return False
+    for target in targets:
+        if not target or len(target) < 3:
+            continue
+        if normalized_company == target:
+            return True
+        if target in normalized_company or normalized_company in target:
+            return True
+    return False
+
+
 class ProfileExtractor:
     def _sanitize_person_name(self, value: str) -> str:
         cleaned = BIDI_CONTROL_RE.sub("", str(value or "")).strip()
@@ -420,8 +433,8 @@ class ProfileExtractor:
         normalized_company = normalize_text(current_company)
         exact_company_targets = {normalize_text(value) for value in brief.company_targets if normalize_text(value)}
         peer_company_targets = {normalize_text(value) for value in brief.peer_company_targets if normalize_text(value)}
-        company_match = bool(normalized_company and normalized_company in exact_company_targets)
-        peer_company_match = bool(normalized_company and normalized_company in peer_company_targets)
+        company_match = _company_target_match(normalized_company, exact_company_targets)
+        peer_company_match = _company_target_match(normalized_company, peer_company_targets)
         location_match = bool(current_location and normalize_text(current_location) in {normalize_text(value) for value in [*brief.cities, *brief.countries]})
         source_domain = urlparse(hit.url).netloc.lower().removeprefix("www.")
         current_role_signal = bool(

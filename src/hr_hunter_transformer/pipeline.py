@@ -9,10 +9,34 @@ from hr_hunter_transformer.evidence_graph import EvidenceGraphBuilder
 from hr_hunter_transformer.extraction import ProfileExtractor
 from hr_hunter_transformer.models import PipelineMetrics, PipelineResult, QueryPlan, RawSearchHit, SearchBrief
 from hr_hunter_transformer.query_planner import build_query_plan
+from hr_hunter_transformer.role_profiles import normalize_text
 from hr_hunter_transformer.ranking import VerificationAwareRanker
 from hr_hunter_transformer.telemetry import StageTelemetry, stage_percent
 from hr_hunter_transformer.transformer_ranker import HFTransformerTextEncoder, HashingTextEncoder, TransformerScorer
 from hr_hunter_transformer.verifier import verify_candidates
+
+
+def _verification_window_size(total_candidates: int, target_count: int) -> int:
+    if total_candidates <= 0:
+        return 0
+    target = max(1, int(target_count or 300))
+    return min(total_candidates, max(target, target * 3))
+
+
+def _final_candidate_order_key(candidate: Any) -> tuple[float, float, float, float, float, str]:
+    status_priority = {
+        "verified": 0,
+        "review": 1,
+        "reject": 2,
+    }.get(str(candidate.verification_status or "").lower(), 3)
+    return (
+        float(status_priority),
+        -float(candidate.score or 0.0),
+        -float(candidate.verification_confidence or 0.0),
+        -float(candidate.company_consensus_score or 0.0),
+        -float(candidate.industry_match_score or 0.0),
+        normalize_text(candidate.full_name),
+    )
 
 
 class CandidateIntelligencePipeline:
@@ -83,18 +107,19 @@ class CandidateIntelligencePipeline:
             progress_callback(event)
 
         ranked = self.ranker.rank(entities, brief)
-        candidates = ranked[: brief.target_count]
+        verification_window = ranked[: _verification_window_size(len(ranked), brief.target_count)]
         event = telemetry.emit(
             "scoring",
-            message=f"Scored {len(candidates)} candidates.",
+            message=f"Scored {len(verification_window)} candidates for verification-aware final ordering.",
             percent=stage_percent("scoring"),
-            reranked_count=len(candidates),
+            reranked_count=len(verification_window),
             rerank_target=min(brief.target_count, len(entities)),
         )
         if progress_callback:
             progress_callback(event)
 
-        candidates = verify_candidates(candidates, brief)
+        verified_window = verify_candidates(verification_window, brief)
+        candidates = sorted(verified_window, key=_final_candidate_order_key)[: brief.target_count]
         verified_count = sum(candidate.verification_status == "verified" for candidate in candidates)
         review_count = sum(candidate.verification_status == "review" for candidate in candidates)
         reject_count = sum(candidate.verification_status == "reject" for candidate in candidates)

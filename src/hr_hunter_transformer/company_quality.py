@@ -45,11 +45,16 @@ GENERIC_DESCRIPTOR_TOKENS = {
     "college",
     "degree",
     "design",
+    "decor",
     "education",
+    "furniture",
+    "home",
+    "interiors",
     "follow",
     "interior",
     "job",
     "jobs",
+    "lifestyle",
     "profile",
     "project",
     "projects",
@@ -64,6 +69,8 @@ GENERIC_COMPANY_LITERALS = {
     "+",
     "at",
     "board",
+    "ceo",
+    "chief executive officer",
     "company",
     "confidential",
     "current",
@@ -199,6 +206,8 @@ def looks_like_bad_company(value: str, current_title: str = "") -> bool:
     if lowered in GENERIC_COMPANY_LITERALS or lowered in LOCATION_LIKE_COMPANY_LITERALS:
         return True
     if len(cleaned) <= 2:
+        return True
+    if re.fullmatch(r"\d{4}", cleaned):
         return True
     if MONTH_YEAR_RE.fullmatch(cleaned):
         return True
