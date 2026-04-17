@@ -12,10 +12,16 @@ class SearchBrief:
     cities: list[str] = field(default_factory=list)
     company_targets: list[str] = field(default_factory=list)
     peer_company_targets: list[str] = field(default_factory=list)
+    exclude_title_keywords: list[str] = field(default_factory=list)
+    exclude_company_keywords: list[str] = field(default_factory=list)
     required_keywords: list[str] = field(default_factory=list)
     preferred_keywords: list[str] = field(default_factory=list)
     industry_keywords: list[str] = field(default_factory=list)
     target_count: int = 300
+    company_match_mode: str = "both"
+    allow_adjacent_titles: bool = True
+    exact_company_scope: bool = False
+    strict_market_scope: bool = False
 
 
 @dataclass(slots=True)

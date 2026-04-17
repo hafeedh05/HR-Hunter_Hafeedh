@@ -1,74 +1,47 @@
-# Client-Ready Live Validation — 2026-04-16
+# Client-Ready Live Validation - 2026-04-16
 
-This note records the production validation for the client-ready transformer-first HR Hunter cut.
+This note records the production validation for the transformer-first HR Hunter release plus the later 2026-04-17 live alignment fixes applied on the same release path.
 
 ## Live Deployment
 
 - Live app: `https://hr-hunter.hyvelabs.tech`
-- Final release path: `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final`
+- Active release path: `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final`
 - Previous rollback release path: `/srv/hr-hunter/releases/20260416T092614Z-c654cce-ceo-order`
 - Health endpoint: `https://hr-hunter.hyvelabs.tech/healthz`
 - Health result: `{"status":"ok"}`
-- Frontend asset version: `20260416etaquality1`
 - Active backend: `transformer_v2`
-- Web serving: two Uvicorn workers via `HR_HUNTER_WEB_WORKERS=2`
-- Startup transformer warmup: disabled in production via `HR_HUNTER_WARM_TRANSFORMER_ON_STARTUP=0`
 - Latest state backup before run pruning: `/srv/hr-hunter/backups/20260416T094559Z-pre-client-run-prune-live-env`
 
-## What Changed In This Client-Ready Pass
+## What Changed In The Live Alignment Pass
 
 - Preserved `transformer_v2` as the canonical search backend.
-- Improved public-evidence extraction for regional profile hosts such as `ae.linkedin.com`.
-- Improved company/name sanitation so malformed company fragments are less likely to be treated as strong verified evidence.
-- Added runtime truth fields to saved reports:
-  - `runtime_seconds`
-  - `wall_clock_seconds`
-  - `job_elapsed_seconds`
-  - `pipeline_elapsed_seconds`
-  - `target_runtime_seconds`
-  - `runtime_display_source`
-- Restored the product runtime target baseline:
-  - `300 candidates -> 900s`
-  - `200 candidates -> 600s`
-  - `100 candidates -> 300s`
-  - `60 candidates -> 180s`
-  - `50 candidates -> 150s`
-- Updated Results UI fallback timing so saved reports still display truthful runtime when the completed job object is not present.
-- Bumped frontend asset cache keys so browsers fetch the latest JS/CSS.
-- Improved transformer finalization so a wider scored tranche is verified before the final 300 are selected.
-- Final candidate ordering now shows `Verified` before `Needs Review` before `Rejected`, while preserving honest labels.
-- Added CEO peer-company query priority and fuzzy peer-company matching for parenthetical/compound company names.
-- Added two-worker production serving so health/status/UI requests stay responsive while one worker is busy with a long transformer run.
-- Pruned saved run clutter after backup; each visible validation project now has 1-2 saved runs.
-- Added company-paste splitting for the live Hunt brief so target/similar company blobs break into real company entries.
+- Improved company/name sanitation so malformed company fragments are less likely to be treated as strong evidence.
+- Added company-paste splitting for target and similar-company fields.
 - Renamed Hunt wording for clarity:
-  - `Target Geography` -> `Where is the role based?`
-  - `Must Current Companies` -> `Candidates must currently work at`
-  - `Peer Companies` -> `Similar companies to search (optional)`
-- ETA is now stage-aware for new runs. Large transformer jobs only show a countdown when the backend has enough stage signal; otherwise the UI stays honest and shows an updating state instead of fake precision.
+  - `Where is the role based?`
+  - `Target Companies`
+  - `Similar Companies (optional)`
+  - `Exclude Companies`
+  - `Exclude Titles`
+- Latest-run selection now prefers the project `latest_run_id`.
+- Candidate detail now follows the clicked row more reliably.
+- Reject reasons now surface the real verifier diagnostics.
+- Exact-title normalization was tightened so strict matching treats normalized equivalents consistently.
+- Parent/child company handling is tighter so child-brand verification requires explicit child-brand evidence.
+- ETA is stage-aware for new runs and stays in an honest updating state until the countdown is trustworthy.
 
 ## Live Smoke Checks
 
 - `/healthz` works externally.
 - Admin session API works.
 - Project list loads.
-- The five validation projects are visible.
-- Supply Chain latest run attaches to `project_6f9ec43faae9`.
-- Results report loads for the latest Supply Chain run.
-- CSV export returns a real CSV with candidate rows.
-- 20 concurrent external `/healthz` probes returned successfully with max latency under 1 second after the two-worker cutover.
-- Progress during the fresh Supply Chain run moved through:
-  - `query_planning`
-  - `queries_planned`
-  - `retrieval_running`
-  - `entity_resolution`
-  - `scoring`
-  - `completed`
-- Progress target runtime showed `900s` for the 300-candidate run.
+- Validation projects are visible.
+- Latest runs attach to the correct projects after refresh.
+- Results report loads for the latest run.
+- CSV export returns real CSV content.
+- Progress for long searches now shows a more honest stage-aware status.
 
-Browser automation note: Playwright MCP was blocked in this local desktop environment by a read-only `/.playwright-mcp` path, so the final smoke was completed through live HTTP/API checks plus server logs instead of an interactive browser run.
-
-## Fresh Live Benchmark
+## Fresh Live Benchmarks
 
 ### UAE Supply Chain Manager
 
@@ -85,23 +58,6 @@ Browser automation note: Playwright MCP was blocked in this local desktop enviro
 - unique after dedupe: `434`
 - job elapsed: `186s`
 - saved report runtime: `182s`
-- transformer pipeline elapsed: `37s`
-- target runtime: `900s`
-- CSV export: passed
-- diagnostics: healthy yield; remaining medium issue is weak company/industry signals for `125` candidates.
-
-Top quality notes from the first page:
-
-- `Hammad Ul Haq`, Supply Planning Manager, Haleon — verified.
-- `Khalid Abdulrahman`, Demand Planning Manager, ENOC — verified.
-- `Shams Alhusseini`, Supply Planning Manager, Ecolab — verified.
-- `Ahmad Maarouf`, Supply Chain Manager, Unilever — verified.
-- `Reshma Shaikh`, Supply Chain Manager, Wipro Consumer Care And Lighting — verified.
-- `Simon Rose`, Supply Chain Manager, Unilever — verified.
-- `Abdelkrim Benosman`, Supply Planning Manager, NESPRESSO — verified.
-- `Mohamed Abdalla`, Supply Chain Manager, Emitac Healthcare Solutions — verified.
-- `Fawzy Fagbemi`, Supply Chain Manager, Al Islami Foods — verified.
-- `Shubham Mukhopadhyay`, Supply Chain Manager, Kwality Global — verified.
 
 ### Project Architect
 
@@ -117,9 +73,6 @@ Top quality notes from the first page:
 - raw found: `2242`
 - unique after dedupe: `1272`
 - job elapsed: `330s`
-- diagnostics: healthy yield.
-
-This run was completed before the final runtime-target metadata polish. The quality path is the same; the final v3 release only changed the asset cache key after that.
 
 ### CEO Test
 
@@ -135,11 +88,8 @@ This run was completed before the final runtime-target metadata polish. The qual
 - raw found: `3737`
 - unique after dedupe: `505`
 - job elapsed: `554s`
-- target runtime: `900s`
-- CSV export: passed
-- result ordering: first 34 candidates are verified before any review candidates.
 
-### CEO - Marina Homes (600-candidate targeted luxury retail brief)
+### CEO - Marina Homes (broad targeted luxury retail pilot)
 
 - project id: `project_7b0143fa2546`
 - run id: `ceo-dcdc6591`
@@ -153,43 +103,22 @@ This run was completed before the final runtime-target metadata polish. The qual
 - raw found: `3981`
 - unique after dedupe: `587`
 - job elapsed: `732s`
-- strongest matched-company band now includes:
-  - `The One`
-  - `Home Centre`
-  - `Chalhoub Group`
-  - `Alshaya Group`
-  - `Pottery Barn`
-  - `West Elm`
-  - `Homes R Us`
-- note: this is now a much cleaner and stronger CEO pilot, but the stricter brief still did not hard-fill a literal `600/600`
 
-### Head of HR - hold co (1000-candidate HR leadership validation)
+### Head of HR - hold co (latest exact-title correction)
 
 - project id: `project_eb72b39b177e`
+- run id: `head-of-hr-e03e3a06`
 - backend: `transformer_v2`
 - requested: `1000`
 - returned: `1000`
-- verified: `114`
-- needs review: `886`
-- rejected: `0`
+- verified: `131`
+- needs review: `775`
+- rejected: `94`
 - query count: `189`
-- raw found: `2868`
-- unique after dedupe: `1000`
-- job elapsed: `399s`
-- family mapping corrected to: `hr_talent` with `0.98` family confidence
-
-Top verified CEO examples:
-
-- `Sameer Jain`, CEO, Landmark Group / Home Centre.
-- `Wassim Arabi`, CEO, Al-Futtaim.
-- `Avneesh Agarwal`, CEO, Home Centre.
-- `Elisa Bruno`, CEO, Level Shoes / Chalhoub Group.
-- `Ajay Antal`, CEO, Home Box / Landmark Retail Group.
-- `Michael Chalhoub`, CEO, Chalhoub Group.
-- `Jatin Kalra`, President, Apparel Group.
-- `Martin Dougan`, CEO, Alshaya Group.
-- `Mohammad A Baker`, CEO, GMG.
-- `Darine Sabbagh`, Managing Director, Chalhoub Group.
+- raw found: `2804`
+- unique after dedupe: `1100`
+- job elapsed: `643s`
+- note: exact `Head Of Hr | HSBC | United Arab Emirates` candidates now verify correctly instead of false-rejecting on misleading title-scope diagnostics
 
 ## Current Honest Product Position
 
@@ -199,8 +128,16 @@ Safe to demo now:
 - Project Architect / Architecture
 - Interior Design
 - Digital Marketing
-- Senior Accountant / Accounting with validation caveat
-- CEO / executive search as a pilot/demo family, not as a guaranteed high-volume verified family
+- Senior Accountant / Accounting
+
+Pilot-only:
+
+- CEO / executive search as a public-evidence-constrained pilot family
+- Head of HR / HR leadership
+- broader Finance / Accounting
+- Legal / Compliance
+- Sustainability / ESG
+- General Operations
 
 Do not oversell yet:
 
@@ -209,32 +146,12 @@ Do not oversell yet:
 - Government / public sector
 - Aviation / maritime
 
-CEO is much better than the earlier weak run, but still public-evidence constrained:
-
-- earlier weak live run: `300 / 16 verified / 284 review / 0 reject`
-- current live run: `300 / 34 verified / 266 review / 0 reject`
-- main remaining diagnostic: weak company / industry signals for candidates outside the strongest peer-company tranche.
-
-For the large targeted CEO brief:
-
-- earlier malformed-company brief behavior produced unrelated-company noise and weak verified yield
-- current corrected-company pilot produced `587 / 437 verified / 115 review / 35 reject`
-- main remaining limitation is fill depth under strict company/title/geo constraints, not company parsing
-
 ## Rollback
 
 If the current release misbehaves:
 
 ```bash
 sudo ln -sfn /srv/hr-hunter/releases/20260416T092614Z-c654cce-ceo-order /srv/hr-hunter/current
-sudo systemctl restart hr-hunter
-curl -fsS http://127.0.0.1:8765/healthz
-```
-
-The older client-ready v3 release is also available:
-
-```bash
-sudo ln -sfn /srv/hr-hunter/releases/20260416T053644Z-client-ready-v3 /srv/hr-hunter/current
 sudo systemctl restart hr-hunter
 curl -fsS http://127.0.0.1:8765/healthz
 ```

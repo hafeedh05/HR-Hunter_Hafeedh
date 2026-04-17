@@ -124,6 +124,29 @@ LINKEDIN_COUNTRY_HOST_HINTS = {
     "pk.linkedin.com": "Pakistan",
     "de.linkedin.com": "Germany",
 }
+COUNTRY_EQUIVALENTS = {
+    "uae": {"uae", "united arab emirates"},
+    "united arab emirates": {"uae", "united arab emirates"},
+    "uk": {"uk", "united kingdom", "great britain"},
+    "united kingdom": {"uk", "united kingdom", "great britain"},
+    "saudi arabia": {"saudi arabia", "kingdom of saudi arabia", "ksa"},
+    "ksa": {"saudi arabia", "kingdom of saudi arabia", "ksa"},
+    "qatar": {"qatar", "state of qatar"},
+    "bahrain": {"bahrain", "kingdom of bahrain"},
+    "oman": {"oman", "sultanate of oman"},
+    "egypt": {"egypt", "arab republic of egypt"},
+    "hong kong": {"hong kong", "hong kong sar", "hk"},
+    "hk": {"hong kong", "hong kong sar", "hk"},
+    "netherlands": {"netherlands", "holland", "the netherlands"},
+    "switzerland": {"switzerland", "swiss confederation"},
+    "singapore": {"singapore", "sg"},
+    "france": {"france", "french republic"},
+    "germany": {"germany", "federal republic of germany"},
+    "italy": {"italy", "italian republic"},
+    "india": {"india", "republic of india"},
+    "kuwait": {"kuwait", "state of kuwait"},
+    "sweden": {"sweden", "kingdom of sweden"},
+}
 BIDI_CONTROL_RE = re.compile(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 MONTH_YEAR_RE = re.compile(r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\d{2}$", re.IGNORECASE)
 MONTH_YEAR_TEXT_RE = re.compile(r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{2,4}$", re.IGNORECASE)
@@ -383,6 +406,21 @@ class ProfileExtractor:
 
     def _guess_company(self, hit: RawSearchHit, brief: SearchBrief, current_title: str) -> tuple[str, float]:
         combined_text = f"{hit.title} {hit.snippet}"
+        host = urlparse(hit.url).netloc.lower().removeprefix("www.")
+        title_text = BIDI_CONTROL_RE.sub("", hit.title)
+        if current_title and "linkedin." in host:
+            title_parts = [part.strip() for part in re.split(r"[|,\-]", title_text) if part.strip()]
+            for part in title_parts[1:4]:
+                lead_match = re.search(rf"{re.escape(current_title)}\s+(.+)$", part, flags=re.IGNORECASE)
+                if lead_match:
+                    candidate = self._normalize_company_candidate(self._strip_company_tail(lead_match.group(1)), current_title)
+                    if candidate and not self._looks_like_person_name(candidate) and not self._looks_like_bad_company_value(candidate, current_title):
+                        return candidate, 0.96
+            at_match = re.search(rf"{re.escape(current_title)}\s+(?:at|@)\s+([^|;,.]{{2,80}})", title_text, flags=re.IGNORECASE)
+            if at_match:
+                candidate = self._normalize_company_candidate(self._strip_company_tail(at_match.group(1)), current_title)
+                if candidate and not self._looks_like_person_name(candidate) and not self._looks_like_bad_company_value(candidate, current_title):
+                    return candidate, 0.96
         exact_company = _best_target_company_match(combined_text, list(brief.company_targets))
         if exact_company:
             return exact_company, 0.92
@@ -399,7 +437,6 @@ class ProfileExtractor:
                 if candidate and not self._looks_like_person_name(candidate) and not self._looks_like_bad_company_value(candidate, current_title):
                     return candidate, 0.82
         if current_title:
-            title_text = BIDI_CONTROL_RE.sub("", hit.title)
             title_parts = [part.strip() for part in re.split(r"[|,\-]", title_text) if part.strip()]
             for part in title_parts[1:3]:
                 lead_match = re.search(rf"{re.escape(current_title)}\s+(.+)$", part, flags=re.IGNORECASE)
@@ -421,12 +458,31 @@ class ProfileExtractor:
     def _guess_location(self, hit: RawSearchHit, brief: SearchBrief) -> str:
         normalized = normalize_text(f"{hit.title} {hit.snippet}")
         for value in [*brief.cities, *brief.countries]:
-            if normalize_text(value) in normalized:
+            variants = self._location_variants(value)
+            if any(variant in normalized for variant in variants):
                 return value
         host = urlparse(hit.url).netloc.lower().removeprefix("www.")
         hinted_country = LINKEDIN_COUNTRY_HOST_HINTS.get(host, "")
-        if hinted_country and normalize_text(hinted_country) in {normalize_text(value) for value in brief.countries}:
-            return hinted_country
+        if hinted_country:
+            matched_country = self._match_brief_location(hinted_country, brief.countries)
+            if matched_country:
+                return matched_country
+        return ""
+
+    def _location_variants(self, value: str) -> set[str]:
+        normalized_value = normalize_text(value)
+        if not normalized_value:
+            return set()
+        return set(COUNTRY_EQUIVALENTS.get(normalized_value, {normalized_value}))
+
+    def _match_brief_location(self, value: str, options: list[str]) -> str:
+        incoming_variants = self._location_variants(value)
+        if not incoming_variants:
+            return ""
+        for option in options:
+            option_variants = self._location_variants(option)
+            if option_variants.intersection(incoming_variants):
+                return option
         return ""
 
     def _supporting_keywords(self, hit: RawSearchHit, brief: SearchBrief) -> list[str]:

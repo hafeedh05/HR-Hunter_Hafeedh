@@ -1346,11 +1346,7 @@ def _recommended_allow_adjacent_titles(
     companies: List[str],
     location_count: int,
 ) -> bool:
-    if explicit_title_scope:
-        return False
-    if executive_brief:
-        return bool(search_profile == EXPLORATORY_SEARCH_PROFILE and not companies and location_count >= 2)
-    return bool(search_profile != FOCUSED_SEARCH_PROFILE or common_volume_search)
+    return False
 
 
 def _has_explicit_company_scope(company_match_mode: str) -> bool:
@@ -1363,13 +1359,7 @@ def _recommended_exact_company_scope(
     executive_brief: bool,
     company_count: int,
 ) -> bool:
-    if company_count <= 0:
-        return False
-    if executive_brief:
-        return True
-    if search_profile == FOCUSED_SEARCH_PROFILE and company_count <= 4:
-        return True
-    return False
+    return bool(company_count > 0)
 
 
 def _recommended_strict_market_scope(
@@ -1382,19 +1372,7 @@ def _recommended_strict_market_scope(
     countries: List[str],
     cities: List[str],
 ) -> bool:
-    if not location_targets:
-        return False
-    if executive_brief:
-        return True
-    if company_count > 0 and (cities or len(countries) <= 2):
-        return True
-    if common_volume_search:
-        return False
-    if cities:
-        return True
-    if search_profile == FOCUSED_SEARCH_PROFILE and len(countries) <= 2:
-        return True
-    return False
+    return bool(location_targets)
 
 
 def _default_query_family_budgets(
@@ -1470,11 +1448,12 @@ def _expanded_top_up_geography(
     top_up_round: int,
     expand_search_when_thin: bool,
     limit: int,
+    strict_market_scope: bool,
 ) -> Dict[str, List[str]]:
     resolved_countries = unique_preserving_order(countries)
     resolved_continents = unique_preserving_order(continents)
     resolved_cities = unique_preserving_order(cities)
-    if top_up_round <= 0 or not expand_search_when_thin or limit < 180:
+    if strict_market_scope or top_up_round <= 0 or not expand_search_when_thin or limit < 180:
         return {
             "countries": resolved_countries,
             "continents": resolved_continents,
@@ -1733,6 +1712,8 @@ def _resolve_top_up_expansion_strategy(
     query_family_budgets: Dict[str, int],
     limit: int,
     location_targets: List[str],
+    exact_company_scope: bool,
+    strict_market_scope: bool,
 ) -> Dict[str, Any]:
     strategy = {
         "round": top_up_round,
@@ -1764,8 +1745,27 @@ def _resolve_top_up_expansion_strategy(
     explicit_adjacent_titles = _coerce_bool(raw_brief_clarifications.get("allow_adjacent_titles"))
     explicit_expand_search = _coerce_bool(raw_brief_clarifications.get("expand_search_when_thin"))
     explicit_prioritize_location = _coerce_bool(raw_brief_clarifications.get("prioritize_first_location"))
+    strict_scope = bool(exact_company_scope or strict_market_scope or not allow_adjacent_titles)
 
     budgets = dict(query_family_budgets)
+
+    if strict_scope:
+        if top_up_round >= 1:
+            scrapingbee_parallel_requests = max(scrapingbee_parallel_requests, 10 if top_up_round == 1 else 12)
+            scrapingbee_max_queries = max(scrapingbee_max_queries, max(180, limit * (4 if top_up_round == 1 else 5)))
+            strategy["auto_broadened"] = True
+            strategy["steps"].append("increased strict-scope retrieval depth without widening titles, companies, or geography")
+        return {
+            "allow_adjacent_titles": False,
+            "expand_search_when_thin": expand_search_when_thin,
+            "resolved_geo_fanout": False if strict_market_scope else resolved_geo_fanout,
+            "include_country_only_queries": False if strict_market_scope else include_country_only_queries,
+            "max_geo_groups": max_geo_groups,
+            "scrapingbee_parallel_requests": scrapingbee_parallel_requests,
+            "scrapingbee_max_queries": scrapingbee_max_queries,
+            "query_family_budgets": dict(budgets),
+            "strategy": strategy,
+        }
 
     if (explicit_expand_search is None or technical_brief) and not expand_search_when_thin:
         expand_search_when_thin = True
@@ -1842,6 +1842,21 @@ def assess_ui_brief_quality(brief_config: Dict[str, Any]) -> Dict[str, Any]:
     geography = brief_config.get("geography", {})
     if not isinstance(geography, dict):
         geography = {}
+    countries = [
+        str(value).strip()
+        for value in brief_config.get("countries", [])
+        if str(value).strip()
+    ]
+    continents = [
+        str(value).strip()
+        for value in brief_config.get("continents", [])
+        if str(value).strip()
+    ]
+    cities = [
+        str(value).strip()
+        for value in brief_config.get("cities", [])
+        if str(value).strip()
+    ]
     location_targets = [
         str(value).strip()
         for value in brief_config.get("location_targets", [])
@@ -1902,6 +1917,9 @@ def assess_ui_brief_quality(brief_config: Dict[str, Any]) -> Dict[str, Any]:
 
     geo_present = bool(
         location_targets
+        or countries
+        or continents
+        or cities
         or str(geography.get("location_name", "")).strip()
         or str(geography.get("country", "")).strip()
     )
@@ -2160,6 +2178,7 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         top_up_round=top_up_round,
         expand_search_when_thin=expand_search_when_thin,
         limit=limit,
+        strict_market_scope=strict_market_scope,
     )
     countries = expanded_geography["countries"]
     continents = expanded_geography["continents"]
@@ -2168,7 +2187,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     geography_country = countries[0] if len(countries) == 1 else ""
     geography_location = cities[0] if cities else (countries[0] if len(countries) == 1 else "")
     if exact_company_scope and companies:
-        payload["company_match_mode"] = "current_only"
+        peer_companies = []
+        sourcing_companies = list(companies)
     if prioritize_first_location and location_targets:
         geography_country = countries[0] if countries else geography_country
         if cities:
@@ -2414,6 +2434,8 @@ def build_ui_brief_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         query_family_budgets=resolved_query_family_budgets,
         limit=limit,
         location_targets=location_targets,
+        exact_company_scope=exact_company_scope,
+        strict_market_scope=strict_market_scope,
     )
     allow_adjacent_titles = bool(top_up_strategy["allow_adjacent_titles"])
     expand_search_when_thin = bool(top_up_strategy["expand_search_when_thin"])

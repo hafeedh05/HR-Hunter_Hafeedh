@@ -211,6 +211,9 @@ class EvidenceGraphBuilder:
                     record.current_location and record.location_confidence >= 0.48
                     for record in cluster
                 ) or bool(chosen_location and location_support_count >= 2 and location_consensus_score >= 0.7)
+                chosen_company_key = normalize_text(chosen_company)
+                chosen_company_is_target = bool(chosen_company_key and chosen_company_key in exact_company_targets)
+                chosen_company_is_peer = bool(chosen_company_key and chosen_company_key in peer_company_targets)
                 entity = CandidateEntity(
                     full_name=_sanitize_name(max((record.full_name for record in cluster), key=len)),
                     canonical_key=key,
@@ -220,8 +223,8 @@ class EvidenceGraphBuilder:
                     role_family=resolved_family,
                     evidence=sorted(cluster, key=lambda record: record.confidence, reverse=True),
                     title_match=any(record.title_match for record in cluster),
-                    company_match=any(record.company_match for record in cluster),
-                    peer_company_match=any(record.peer_company_match for record in cluster),
+                    company_match=chosen_company_is_target,
+                    peer_company_match=chosen_company_is_peer,
                     location_match=any(record.location_match for record in cluster),
                     current_role_proof_count=sum(1 for record in cluster if record.current_role_signal),
                     current_company_confirmed=current_company_confirmed,
@@ -232,16 +235,15 @@ class EvidenceGraphBuilder:
                     location_support_count=location_support_count,
                     source_domains=sorted({record.source_domain for record in cluster if record.source_domain}),
                 )
-                chosen_company_key = normalize_text(chosen_company)
-                if chosen_company_key and chosen_company_key in exact_company_targets:
+                if chosen_company_is_target:
                     entity.company_match = True
-                if chosen_company_key and chosen_company_key in peer_company_targets:
+                if chosen_company_is_peer:
                     entity.peer_company_match = True
                 entity.title_match_score = round(max((record.title_confidence for record in cluster), default=0.0), 4)
                 entity.company_match_score = round(max((record.company_confidence for record in cluster), default=0.0), 4)
-                if chosen_company_key and chosen_company_key in exact_company_targets:
+                if chosen_company_is_target:
                     entity.company_match_score = max(entity.company_match_score, 0.92)
-                elif chosen_company_key and chosen_company_key in peer_company_targets:
+                elif chosen_company_is_peer:
                     entity.company_match_score = max(entity.company_match_score, 0.72)
                 entity.company_quality_score = company_quality
                 entity.company_consensus_score = company_consensus_score

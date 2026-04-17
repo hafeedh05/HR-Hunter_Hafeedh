@@ -193,6 +193,19 @@ def _looks_like_executive_title(title: str) -> bool:
     return any(marker in normalized_title for marker in EXECUTIVE_TITLE_MARKERS)
 
 
+def _matches_excluded_keyword(value: str, exclusions: list[str]) -> bool:
+    normalized_value = normalize_text(value)
+    if not normalized_value:
+        return False
+    for exclusion in exclusions:
+        normalized_exclusion = normalize_text(exclusion)
+        if not normalized_exclusion:
+            continue
+        if normalized_exclusion in normalized_value or normalized_value in normalized_exclusion:
+            return True
+    return False
+
+
 def compute_verification_confidence(entity: CandidateEntity, brief: SearchBrief) -> float:
     current_role = min(1.0, 0.35 + min(0.45, entity.current_role_proof_count * 0.18)) if entity.current_role_proof_count else 0.0
     title = max(entity.title_match_score, blended_title_precision(entity.current_title, brief))
@@ -235,7 +248,12 @@ def verify_candidate(entity: CandidateEntity, brief: SearchBrief) -> CandidateEn
     canonical_coverage = canonical_title_coverage(entity.current_title, brief)
     title_gap = adjacent_title_gap(entity.current_title, brief)
     strong_requested_title = requested_title_precision >= 0.84 and requested_title_coverage >= 0.84
+    strict_title_scope = bool(not brief.allow_adjacent_titles and (brief.titles or brief.role_title))
+    strict_company_scope = bool(brief.exact_company_scope and brief.company_targets)
+    strict_market_scope = bool(brief.strict_market_scope and (brief.countries or brief.cities))
     company_quality = max(entity.company_quality_score, company_quality_score(entity.current_company, entity.current_title, entity.role_family))
+    excluded_title_match = _matches_excluded_keyword(entity.current_title, getattr(brief, "exclude_title_keywords", []))
+    excluded_company_match = _matches_excluded_keyword(entity.current_company, getattr(brief, "exclude_company_keywords", []))
     if entity.title_match_score < 0.35:
         diagnostics.append("title_mismatch")
     if entity.role_family in STRICT_TITLE_PRECISION_FAMILIES and requested_title_precision < 0.34:
@@ -250,6 +268,67 @@ def verify_candidate(entity: CandidateEntity, brief: SearchBrief) -> CandidateEn
         diagnostics.append("missing_current_company_confirmation")
     if company_quality < 0.38:
         diagnostics.append("weak_company_identity")
+    if excluded_title_match:
+        diagnostics.append("excluded_title")
+    if excluded_company_match:
+        diagnostics.append("excluded_company")
+    strict_title_violation = bool(
+        strict_title_scope
+        and not (
+            strong_requested_title
+            or (
+                requested_title_precision >= 0.78
+                and max(requested_title_coverage, canonical_coverage) >= 0.72
+            )
+            or primary_title_signal >= 0.8
+        )
+    )
+    strict_company_violation = bool(strict_company_scope and not entity.company_match)
+    strict_market_violation = bool(
+        strict_market_scope
+        and not entity.location_match
+        and max(entity.location_match_score, max_location_confidence) < 0.82
+    )
+    reviewable_missing_market_evidence = bool(
+        strict_market_violation
+        and strict_market_scope
+        and entity.company_match
+        and not entity.peer_company_match
+        and not entity.current_location_confirmed
+        and not str(entity.current_location or "").strip()
+        and (
+            strong_requested_title
+            or requested_title_precision >= 0.78
+            or primary_title_signal >= 0.8
+        )
+        and entity.current_role_proof_count >= 1
+    )
+    if strict_title_violation:
+        diagnostics.append("strict_title_scope")
+    if strict_company_violation:
+        diagnostics.append("strict_company_scope")
+    if strict_market_violation:
+        diagnostics.append("strict_market_scope")
+        if reviewable_missing_market_evidence:
+            diagnostics.append("strict_market_scope_review")
+    strict_market_verified_ready = bool(
+        not strict_market_scope
+        or (
+            entity.location_match
+            and (
+                entity.current_location_confirmed
+                or bool(str(entity.current_location or "").strip())
+            )
+        )
+    )
+    strict_company_verified_ready = bool(
+        not strict_company_scope
+        or (
+            entity.company_match
+            and entity.current_company_confirmed
+            and bool(str(entity.current_company or "").strip())
+        )
+    )
     company_ready_for_verified = entity.current_company_confirmed or max(
         entity.company_match_score,
         max_company_confidence,
@@ -357,6 +436,8 @@ def verify_candidate(entity: CandidateEntity, brief: SearchBrief) -> CandidateEn
         and entity.score >= max(64.5, profile.verified_score_floor - 3.0)
         and entity.title_match_score >= 0.65
         and company_quality >= 0.4
+        and strict_company_verified_ready
+        and strict_market_verified_ready
         and architecture_ready_for_verified
         and max(entity.location_match_score, max_location_confidence) >= profile.location_floor
         and entity.current_role_proof_count >= 1
@@ -366,17 +447,25 @@ def verify_candidate(entity: CandidateEntity, brief: SearchBrief) -> CandidateEn
         and "geo_mismatch" not in diagnostics
         and "identity_conflict" not in diagnostics
     )
-    if (
+    if strict_title_violation or strict_company_violation or excluded_title_match or excluded_company_match:
+        entity.verification_status = "reject"
+    elif strict_market_violation and not reviewable_missing_market_evidence:
+        entity.verification_status = "reject"
+    elif (
         (
             entity.verification_confidence >= profile.verified_threshold
             and entity.score >= profile.verified_score_floor
             and company_ready_for_verified
+            and strict_company_verified_ready
+            and strict_market_verified_ready
             and executive_ready_for_verified
             and architecture_ready_for_verified
         )
         or (
             executive_verified_override
             and company_ready_for_verified
+            and strict_company_verified_ready
+            and strict_market_verified_ready
             and architecture_ready_for_verified
         )
     ) and "adjacent_title_leakage" not in diagnostics and "identity_conflict" not in diagnostics:
@@ -392,6 +481,8 @@ def verify_candidate(entity: CandidateEntity, brief: SearchBrief) -> CandidateEn
         and "title_mismatch" not in diagnostics
         and entity.evidence_conflict_score < 0.78
     ):
+        entity.verification_status = "review"
+    elif reviewable_missing_market_evidence and "title_mismatch" not in diagnostics and entity.evidence_conflict_score < 0.78:
         entity.verification_status = "review"
     else:
         entity.verification_status = "reject"

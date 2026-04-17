@@ -1,4 +1,4 @@
-# Agent Notes — 2026-04-16 Client Readiness Pass
+# Agent Notes - 2026-04-16 / 2026-04-17 Live Alignment Pass
 
 ## Production Release
 
@@ -6,55 +6,60 @@
 - Active release path: `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final`
 - Previous rollback release: `/srv/hr-hunter/releases/20260416T092614Z-c654cce-ceo-order`
 - Runtime service: `/etc/systemd/system/hr-hunter.service`
-- Current service command: `/srv/hr-hunter/.venv/bin/python -m hr_hunter.cli serve --host 127.0.0.1 --port 8765 --workers 2`
 - State source: Postgres from `/srv/hr-hunter/shared/env/hr-hunter.env`
 - State backup before run pruning: `/srv/hr-hunter/backups/20260416T094559Z-pre-client-run-prune-live-env`
 
 ## What Changed
 
-- CEO retrieval now prioritizes peer-company executive queries before generic broad CEO queries.
-- Peer-company matching now handles compound company strings such as parenthetical parent brands.
-- Malformed generic company fragments like `CEO`, `Furniture`, and year-like strings are treated as weak company identities.
-- Transformer finalization verifies a wider scored tranche before choosing the final requested count.
-- Final candidate ordering is bucket-aware: `Verified`, then `Needs Review`, then `Rejected`.
-- Production now runs two Uvicorn workers so a long transformer job does not monopolize all health/status/UI traffic.
-- Startup transformer warmup is disabled by default in production to avoid every worker loading the model at boot.
-- Added `scripts/prune_project_runs.py` for operator run-history cleanup after backup.
-- Live Hunt company paste is now split on both the client and server side, so pasted target-company and similar-company blobs break into real company entries instead of one malformed chip.
-- Hunt wording is clearer live:
-  - `Target Geography` -> `Where is the role based?`
-  - `Must Current Companies` -> `Candidates must currently work at`
-  - `Peer Companies` -> `Similar companies to search (optional)`
-- ETA for new long transformer runs is now stage-aware and reliability-gated. The UI stays honest and shows an updating state until planning/retrieval/rerank/verifying have enough signal for a real countdown.
+- CEO retrieval was tightened to prioritize better executive company and title evidence.
+- Company paste in Hunt now splits target and similar-company blobs into real chips on the client and server.
+- Live Hunt wording now uses:
+  - `Where is the role based?`
+  - `Target Companies`
+  - `Similar Companies (optional)`
+  - `Exclude Companies`
+  - `Exclude Titles`
+- ETA for new long transformer runs is now stage-aware and stays in an updating state until the estimate is trustworthy.
+- Results/Candidates/History now prefer the project `latest_run_id` instead of stale older saved runs.
+- Reject reasons now come from the real verifier diagnostics rather than a generic reject fallback.
+- Strict exact-title handling was fixed so variants like `Head Of Hr` and `Head of HR` normalize and verify correctly.
+- Parent/child company handling was tightened so child-brand verification requires explicit child-brand evidence.
+- Candidate-detail selection was stabilized so the clicked row and selected detail pane stay aligned more reliably.
 
 ## Live Validation Results
 
 - Health: external `/healthz` passed.
-- Concurrency smoke: 20 concurrent `/healthz` probes passed, max latency under 1 second.
 - Projects visible: `5`.
-- Each visible project now has 1-2 saved runs.
+- Visible projects still have 1-2 saved runs each after pruning.
 - Results load for each latest project run.
-- CSV export returns real 300-row candidate CSV files.
-- Transformer default confirmed in `/app-config`.
+- CSV export returns real CSV output.
+- Transformer remains the default backend in `/app-config`.
 
-Latest project runs after cleanup:
+Latest project runs:
 
-- CEO Test: `chief-executive-officer-(ceo)-9530e9dd`, `300 / 34 verified / 266 review / 0 reject`, `554s`.
-- UAE Supply Chain Manager: `supply-chain-manager-e424bd18`, `300 / 212 verified / 88 review / 0 reject`, `186s`.
-- Project Architect Test: `project-architect-07ac2f33`, `300 / 259 verified / 41 review / 0 reject`, `330s`.
-- Senior Accountant Test: `senior-accountant-8c860221`, `300 / 167 verified / 133 review / 0 reject`.
-- AI Engineer Test: `ai-engineer-baae73bf`, `300 / 73 verified / 227 review / 0 reject`.
+- CEO Test: `chief-executive-officer-(ceo)-9530e9dd`, `300 / 34 verified / 266 review / 0 reject`, `554s`
+- UAE Supply Chain Manager: `supply-chain-manager-e424bd18`, `300 / 212 verified / 88 review / 0 reject`, `186s`
+- Project Architect Test: `project-architect-07ac2f33`, `300 / 259 verified / 41 review / 0 reject`, `330s`
+- Senior Accountant Test: `senior-accountant-8c860221`, `300 / 167 verified / 133 review / 0 reject`
+- AI Engineer Test: `ai-engineer-baae73bf`, `300 / 73 verified / 227 review / 0 reject`
 
-Additional live runs after the client-ready pass:
+Additional later live runs on the same release path:
 
-- CEO - Marina Homes: `ceo-dcdc6591`, `587 / 437 verified / 115 review / 35 reject`, `732s`.
-- Head of HR - hold co: `1000 / 114 verified / 886 review / 0 reject`, `399s`.
+- CEO - Marina Homes, broad targeted pilot: `ceo-dcdc6591`, `587 / 437 verified / 115 review / 35 reject`, `732s`
+- Head of HR - hold co, exact-title/reject-reason correction: `head-of-hr-e03e3a06`, `1000 / 131 verified / 775 review / 94 reject`, `643s`
+
+## Important Functional Notes
+
+- Exact-title normalization now matters materially for strict matching. This specifically fixed false rejects like:
+  - `Head Of Hr | HSBC | United Arab Emirates`
+- Older saved runs may still contain stale or weaker extracted evidence, especially around location and parent/child company presentation.
+- New runs benefit from the latest reject-reason path and latest-run selection fixes; old runs do not rewrite themselves.
 
 ## Client Positioning
 
 - Best showcase families: Supply Chain / Logistics and Project Architect / Architecture.
-- CEO is now demo-usable as a pilot family, with verified executives ordered first, but should still be positioned as public-evidence constrained.
-- AI Engineer is usable for broad sourcing, but do not promise high strict-verified yield yet.
+- Head of HR is improved and now behaves more defensibly on exact-title strictness, but it is still a pilot family.
+- CEO remains demo-usable as a pilot family, but should still be positioned as public-evidence constrained.
 
 ## Rollback
 

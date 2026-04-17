@@ -77,7 +77,7 @@ HR Hunter is built around a project-first recruiter workflow:
   - target titles
   - years and tolerance
   - countries, continents, cities, radius
-  - current companies and peer companies
+  - target companies, similar companies, exclude companies, and exclude titles
   - must-have and nice-to-have keywords
   - typed JD and uploaded JD support
   - recruiter notes
@@ -161,6 +161,16 @@ This release includes the following practical changes:
 - CEO/executive query priority, peer-company matching, and verification-aware final ordering
 - two-worker production serving so the UI and health/status endpoints stay responsive during long transformer searches
 - operator run-prune utility for keeping client-visible project history clean after state backup
+- latest-run / latest-job consistency fixes so Results/Candidates/History bind to the real latest run
+- strict-title normalization fixes so exact matches such as `Head Of Hr` and `Head of HR` are treated consistently
+- reject reasons now come from real verifier diagnostics instead of generic fallback labels
+- candidate detail handling now tracks the selected row more reliably
+- live Hunt wording now uses:
+  - `Target Companies`
+  - `Similar Companies (optional)`
+  - `Exclude Companies`
+  - `Exclude Titles`
+- stricter parent/child company handling so child brands must be explicit to verify as child-brand matches
 
 ## Current Live Validation
 
@@ -168,7 +178,7 @@ Latest GCP release: `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final
 
 - Health: `https://hr-hunter.hyvelabs.tech/healthz` returns `{"status":"ok"}`
 - Auth/session API works for the admin account
-- Production serves with `HR_HUNTER_WEB_WORKERS=2`
+- Production currently serves in a stability-first single-worker mode after later live verifier/search patches on the same release path
 - Latest state backup before run pruning: `/srv/hr-hunter/backups/20260416T094559Z-pre-client-run-prune-live-env`
 - Visible validation projects now have 1-2 saved runs each
 - Project list loads with the five validation projects
@@ -176,6 +186,9 @@ Latest GCP release: `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final
 - Supply Chain saved report now stores `runtime_seconds=182`, `pipeline_elapsed_seconds=37`, and `target_runtime_seconds=900`
 - CSV export returned a real CSV with candidate rows
 - Project Architect quality validation from the same quality code path: `300 returned / 259 verified / 41 review / 0 reject`
+- Head of HR live alignment rerun after exact-title/reject-reason fixes: `1000 returned / 131 verified / 775 review / 94 reject`
+- strict latest-run selection now prefers the project `latest_run_id` instead of stale older saved runs
+- reject cards now surface real disqualifier reasons such as `strict_company_scope`, `strict_market_scope`, or `insufficient_current_role_proof`
 
 ## Current Laptop Benchmark Baseline
 

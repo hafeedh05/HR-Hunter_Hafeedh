@@ -393,6 +393,21 @@ def _runtime_storage_snapshot() -> Dict[str, Dict[str, Any]]:
         "workspace": dict(state_storage),
     }
 
+
+def _resolve_feedback_db_request_path(value: Any = None) -> Path:
+    fallback = Path(str(resolve_feedback_db_path())).expanduser().resolve()
+    requested_text = str(value or "").strip()
+    if not requested_text:
+        init_feedback_db(fallback)
+        return fallback
+    requested = Path(requested_text).expanduser().resolve()
+    try:
+        init_feedback_db(requested)
+        return requested
+    except Exception:
+        init_feedback_db(fallback)
+        return fallback
+
 def _finalize_report_for_limit(report, *, requested_limit: int, internal_fetch_limit: int, brief=None):
     requested = max(1, int(requested_limit or 1))
     retrieval = max(requested, int(internal_fetch_limit or requested))
@@ -408,6 +423,13 @@ def _finalize_report_for_limit(report, *, requested_limit: int, internal_fetch_l
     summary["requested_candidate_limit"] = requested
     summary["retrieval_candidate_limit"] = retrieval
     summary["returned_candidate_count"] = len(report.candidates)
+    summary["accepted_candidate_count"] = len(
+        [
+            candidate
+            for candidate in report.candidates
+            if str(getattr(candidate, "verification_status", "") or "").lower() in {"verified", "review", "needs_review"}
+        ]
+    )
     rebuilt_summary = build_reporting_summary(report.candidates, summary)
     pipeline_metrics = dict(rebuilt_summary.get("pipeline_metrics") or {})
     reranked_count = max(0, int(pipeline_metrics.get("reranked_count", 0) or 0))
@@ -2073,11 +2095,45 @@ def create_app() -> "FastAPI":
     @app.post("/app/projects/{project_id}/save-brief")
     async def app_project_save_brief(request: Request, project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         user = _require_app_user(request)
+        brief_json = payload.get("brief_json") if isinstance(payload.get("brief_json"), dict) else {}
+        if isinstance(brief_json, dict):
+            ui_meta = brief_json.get("ui_meta", {})
+            if not isinstance(ui_meta, dict):
+                ui_meta = {}
+            source = resolve_job_description_source(
+                typed_text=str(ui_meta.get("job_description", brief_json.get("job_description", ""))),
+                uploaded_text=str(
+                    ui_meta.get(
+                        "uploaded_job_description_text",
+                        brief_json.get("uploaded_job_description_text", ""),
+                    )
+                ),
+                uploaded_file_name=str(
+                    ui_meta.get(
+                        "uploaded_job_description_name",
+                        brief_json.get("uploaded_job_description_name", ""),
+                    )
+                ),
+            )
+            if source["combined_text"].strip():
+                existing_breakdown = brief_json.get("jd_breakdown", ui_meta.get("jd_breakdown", {}))
+                if not isinstance(existing_breakdown, dict):
+                    existing_breakdown = {}
+                breakdown = ensure_structured_jd_breakdown(
+                    existing_breakdown,
+                    job_description=source["combined_text"],
+                    role_title=str(payload.get("role_title", brief_json.get("role_title", ""))),
+                )
+                breakdown["source"] = source["source"]
+                breakdown["uploaded_file_name"] = source["file_name"]
+                brief_json["jd_breakdown"] = breakdown
+                ui_meta["jd_breakdown"] = breakdown
+                brief_json["ui_meta"] = ui_meta
         try:
             project = save_project_brief(
                 user,
                 project_id=project_id,
-                brief_json=payload.get("brief_json") if isinstance(payload.get("brief_json"), dict) else {},
+                brief_json=brief_json,
                 role_title=str(payload.get("role_title", "")),
                 target_geography=str(payload.get("target_geography", "")),
             )
@@ -2655,6 +2711,7 @@ def create_app() -> "FastAPI":
             get_project(user, project_id)
         brief_config = payload.get("brief")
         brief = build_search_brief(brief_config) if isinstance(brief_config, dict) else None
+        db_path = _resolve_feedback_db_request_path(payload.get("feedback_db"))
         try:
             result = log_feedback(
                 report_path=Path(str(payload.get("report_path", ""))).expanduser().resolve(),
@@ -2665,13 +2722,13 @@ def create_app() -> "FastAPI":
                 note=str(payload.get("note", "")),
                 recruiter_name=user["full_name"],
                 team_id=user.get("team_id", ""),
-                db_path=Path(str(payload.get("feedback_db", resolve_feedback_db_path()))).expanduser().resolve(),
+                db_path=db_path,
                 brief=brief,
                 mandate_id=project_id,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        result["feedback_db"] = str(Path(str(payload.get("feedback_db", resolve_feedback_db_path()))).expanduser().resolve())
+        result["feedback_db"] = str(db_path)
         return result
 
     @app.post("/feedback/export")

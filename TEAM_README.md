@@ -6,13 +6,13 @@ Live validation note: [docs/client-ready-live-validation-20260416.md](docs/clien
 
 ## Current Team Reality
 
-HR Hunter is now a transformer-first recruiter sourcing app with a stable recruiter UI shell and a client-safe release cut prepared for deployment from GitHub to GCP.
+HR Hunter is a transformer-first recruiter sourcing app with a stable recruiter UI shell and a live production deployment on [hr-hunter.hyvelabs.tech](https://hr-hunter.hyvelabs.tech).
 
-This is the working team position:
+Current working position:
 
 - canonical engine: `transformer_v2`
 - classic engine: fallback only
-- UI stays familiar:
+- UI shell remains:
   - Projects
   - Hunt
   - Results
@@ -21,10 +21,10 @@ This is the working team position:
   - History
   - Settings
   - Admin
-- TOTP login stays the same
-- Hunt Brief stays familiar for this release
+- TOTP login remains unchanged
+- Hunt Brief remains familiar, but the live wording is now clearer
 
-## What We Shipped In This Release Cut
+## What The Repo Now Reflects
 
 - transformer-first search path committed into the repo
 - taxonomy and family query profile files added
@@ -32,89 +32,73 @@ This is the working team position:
 - candidate name/company cleanup in UI and CSV export
 - CSV download fixed to return real CSV files
 - feedback page wording simplified for user understanding
-- production deploy handoff updated for GitHub-to-GCP deployment
-- workspace-state startup compatibility fix
+- startup compatibility fix for workspace state loading
 - legacy saved-run compatibility fix for Results/Candidates loading
 - runtime/progress truth fix so report summaries preserve job wall-clock runtime, transformer pipeline runtime, and product target runtime
-- asset cache bump so live browsers pull the latest app bundle
 - extraction/company-quality pass for malformed company fragments and regional profile-host location evidence
 - company-paste splitting for target and similar-company fields in the live Hunt brief
-- clearer live Hunt labels:
+- live Hunt wording now uses:
   - `Where is the role based?`
-  - `Candidates must currently work at`
-  - `Similar companies to search (optional)`
-- stage-aware ETA reliability for new long transformer jobs so the UI can show “updating” until the estimate is trustworthy
+  - `Target Companies`
+  - `Similar Companies (optional)`
+  - `Exclude Companies`
+  - `Exclude Titles`
+- stage-aware ETA reliability for long transformer jobs so the UI stays in an honest updating state until the estimate is trustworthy
+- latest-run binding fixes so Results/Candidates/History follow the project `latest_run_id`
+- reject reasons now use real verifier diagnostics instead of a generic fallback
+- strict exact-title normalization fixes so variants like `Head Of Hr` and `Head of HR` verify consistently
+- parent/child company handling is tighter: child-brand verification requires explicit child-brand evidence
 
-## Latest Live Client-Ready Validation
+## Latest Live Validation Snapshot
 
-Final live release path:
+Live release path:
 
 - `/srv/hr-hunter/releases/20260416T101500Z-client-ready-final`
 
-Verified live on `https://hr-hunter.hyvelabs.tech`:
+Verified live on [hr-hunter.hyvelabs.tech](https://hr-hunter.hyvelabs.tech):
 
 - `/healthz` returns healthy
-- app is running with two Uvicorn workers to reduce timeout risk during long searches
 - admin session API works
-- five validation projects load
+- project list loads
 - latest Supply Chain run attaches to the correct project
 - Results and report summary load with truthful runtime fields
 - CSV export returns a real candidate CSV
 - visible project run history is pruned to 1-2 runs per project after a Postgres-backed state backup
+- later 2026-04-17 live-fix passes stayed on the same release path and patched:
+  - latest-run selection
+  - candidate-detail consistency
+  - reject reasons
+  - exact-title strict matching
+  - parent/child company handling
 
-Latest fresh Supply Chain run:
+Latest validated runs:
 
-- run id: `supply-chain-manager-e424bd18`
-- backend: `transformer_v2`
-- returned: `300`
-- verified/review/reject: `212 / 88 / 0`
-- raw/unique/query count: `889 / 434 / 73`
-- job elapsed: `186s`
-- saved report runtime: `182s`
-- target runtime baseline: `900s`
-
-Latest Project Architect quality validation from the same quality code path:
-
-- run id: `project-architect-07ac2f33`
-- backend: `transformer_v2`
-- returned: `300`
-- verified/review/reject: `259 / 41 / 0`
-- raw/unique/query count: `2242 / 1272 / 135`
-- job elapsed: `330s`
-
-Latest CEO pilot validation:
-
-- run id: `chief-executive-officer-(ceo)-9530e9dd`
-- backend: `transformer_v2`
-- returned: `300`
-- verified/review/reject: `34 / 266 / 0`
-- raw/unique/query count: `3737 / 505 / 212`
-- job elapsed: `554s`
-- result ordering: verified candidates appear before review candidates
-
-Latest live CEO 600-company-targeted pilot after company parsing / ETA / executive targeting fixes:
-
-- project id: `project_7b0143fa2546`
-- run id: `ceo-dcdc6591`
-- backend: `transformer_v2`
-- requested: `600`
-- returned: `587`
-- verified/review/reject: `437 / 115 / 35`
-- raw/unique/query count: `3981 / 587 / 330`
-- job elapsed: `732s`
-- note: quality is much stronger now, but the stricter brief still stopped at `587` unique candidates instead of a literal `600/600` hard fill
-
-Latest live HR leadership validation after family mapping correction:
-
-- project id: `project_eb72b39b177e`
-- role: `Head of HR`
-- backend: `transformer_v2`
-- requested: `1000`
-- returned: `1000`
-- verified/review/reject: `114 / 886 / 0`
-- raw/unique/query count: `2868 / 1000 / 189`
-- job elapsed: `399s`
-- family mapping: `hr_talent` with `0.98` family confidence
+- Supply Chain Manager
+  - `supply-chain-manager-e424bd18`
+  - `300 / 212 verified / 88 review / 0 reject`
+  - `889 raw / 434 unique / 73 queries`
+  - `186s`
+- Project Architect
+  - `project-architect-07ac2f33`
+  - `300 / 259 verified / 41 review / 0 reject`
+  - `2242 raw / 1272 unique / 135 queries`
+  - `330s`
+- CEO Test
+  - `chief-executive-officer-(ceo)-9530e9dd`
+  - `300 / 34 verified / 266 review / 0 reject`
+  - `3737 raw / 505 unique / 212 queries`
+  - `554s`
+- CEO - Marina Homes, broad targeted pilot
+  - `ceo-dcdc6591`
+  - `587 / 437 verified / 115 review / 35 reject`
+  - `3981 raw / 587 unique / 330 queries`
+  - `732s`
+- Head of HR - hold co, latest exact-title/reject-reason correction
+  - `head-of-hr-e03e3a06`
+  - `1000 / 131 verified / 775 review / 94 reject`
+  - `2804 raw / 1100 unique / 189 queries`
+  - `643s`
+  - exact `Head Of Hr | HSBC | United Arab Emirates` candidates now verify correctly instead of false-rejecting on misleading strict-title diagnostics
 
 ## Current Verification Baseline
 
@@ -128,18 +112,9 @@ Use these current local app-project baselines as the reference when validating a
 
 If another environment performs materially worse than these on the same briefs, treat it as a deployment/config/runtime issue until proven otherwise.
 
-Use `docs/local-transformer-validation-20260415.md` for the exact hunt briefs, run IDs, and comparison notes.
-
-## What Was Wrong In The Previous Deploy Cycle
-
-- production transformer search initially failed because transformer config was not inheriting the main app secret-resolution behavior, so ScrapingBee was missing in transformer mode
-- old saved run JSON files could fail to open because deprecated scope-era fields were still being deserialized directly into `CandidateProfile`
-- deploy notes incorrectly suggested `python -m hr_hunter.api` as the startup command; the correct app startup path is the CLI serve command
-- a deploy operator response included git update directives even though deploy work should not push code unless explicitly requested
-
 ## Safe Internal/Product Scope
 
-### Safe families right now
+Safe families right now:
 
 - Supply Chain / Logistics
 - Digital Marketing
@@ -147,7 +122,7 @@ Use `docs/local-transformer-validation-20260415.md` for the exact hunt briefs, r
 - Architecture / Project Architect
 - Senior Accountant / Accounting
 
-### Pilot-only families
+Pilot-only families:
 
 - Finance / Accounting outside the validated accountant path
 - HR / Talent Acquisition
@@ -159,14 +134,12 @@ Use `docs/local-transformer-validation-20260415.md` for the exact hunt briefs, r
 - Executive / CEO when demoed honestly as public-evidence constrained sourcing
 - Head of HR / HR leadership
 
-### Weak families not to oversell
+Weak families not to oversell:
 
 - Healthcare / Doctors
 - Pharma / Clinical
 - Government / Public Sector
 - Aviation / Maritime
-
-Accounting and architecture improved locally in this quality pass, but they should still be validated from saved runs instead of being sold as universal strengths.
 
 ## Storage Reality
 
@@ -175,7 +148,7 @@ Production is mixed-storage today:
 - `Cloud SQL / Postgres` is the source of truth for structured app state
 - the `VM` still holds runtime assets and file-based artifacts such as releases, `.venv`, logs, backups, caches, and feedback SQLite unless migrated
 
-Do not describe production as “fully on Cloud SQL.”
+Do not describe production as "fully on Cloud SQL."
 
 ## Operating Rules For The Team
 
@@ -212,15 +185,13 @@ Before deploy, the minimum checks are:
 
 ## Latest Local Quality Pass
 
-The latest local-only transformer quality pass added:
+The current repo also includes:
 
 - family-history-aware query expansion
 - family-history-aware verifier thresholds
 - stricter extraction/company sanitation
 - app-level retrieval widening for large requests like `300`
-- a local family sweep across all `31` families to identify weak families
-
-The app project list was then reduced to the five validation projects used for deployment comparison.
+- strict exact-title/company/location work that is now being aligned with the live environment
 
 ## Reference
 

@@ -506,10 +506,14 @@ async function fetchJSON(url, options = {}) {
     ...(options.headers || {}),
   };
   let timeoutHandle = null;
+  let timedOut = false;
   const timeoutMs = Math.max(0, safeNumber(options.timeoutMs, 0));
   const controller = timeoutMs > 0 ? new AbortController() : null;
   if (controller) {
-    timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
+    timeoutHandle = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
   }
   let response;
   try {
@@ -519,6 +523,11 @@ async function fetchJSON(url, options = {}) {
       body: options.body ? JSON.stringify(options.body) : undefined,
       ...(controller ? { signal: controller.signal } : {}),
     });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(timedOut ? "Request timed out." : "Request was interrupted.");
+    }
+    throw error;
   } finally {
     if (timeoutHandle) {
       window.clearTimeout(timeoutHandle);
@@ -1499,7 +1508,12 @@ function renderBriefGuidance() {
     return;
   }
   if (state.briefQuality?.error) {
-    root.innerHTML = `<p class="muted">Guidance is temporarily unavailable. You can still save the brief and run search.</p>`;
+    root.innerHTML = `
+      <div class="empty-state compact-empty">
+        <h4>Clarify and Tune Needs a Refresh</h4>
+        <p>${escapeHtml(state.briefQuality.error || "Guidance is temporarily unavailable.")}</p>
+      </div>
+    `;
     return;
   }
   if (!state.briefQuality) {
@@ -1593,6 +1607,10 @@ async function refreshBriefQuality() {
     state.briefQuality = payload?.quality || null;
   } catch (error) {
     if (requestId !== state.briefQualityRequestId) return null;
+    const message = String(error?.message || "");
+    if (message === "Request was interrupted." || message === "signal is aborted without reason") {
+      return null;
+    }
     state.briefQuality = { error: error.message };
   }
   renderBriefGuidance();
@@ -1643,6 +1661,34 @@ function summarizeTargetGeographyFromTokens({ targetGeography = "", countries = 
   return "";
 }
 
+function parseTargetGeographySummary(targetGeography = "") {
+  const text = String(targetGeography || "")
+    .replace(/\(\+\d+\s+more\)/gi, "")
+    .trim();
+  if (!text) {
+    return { countries: [], continents: [], cities: [] };
+  }
+  const configuredCountries = new Set((state.config?.countries || []).map((value) => String(value || "").trim()).filter(Boolean));
+  const configuredContinents = new Set((state.config?.continents || []).map((value) => String(value || "").trim()).filter(Boolean));
+  const countries = [];
+  const continents = [];
+  const cities = [];
+  text.split(",").map((value) => value.trim()).filter(Boolean).forEach((value) => {
+    if (configuredCountries.has(value)) {
+      if (!countries.includes(value)) countries.push(value);
+      return;
+    }
+    if (configuredContinents.has(value)) {
+      if (!continents.includes(value)) continents.push(value);
+      return;
+    }
+    if (!cities.includes(value)) {
+      cities.push(value);
+    }
+  });
+  return { countries, continents, cities };
+}
+
 function projectPayloadForSave() {
   const briefPayload = buildBriefPayload();
   const projectName = document.getElementById("project-name").value.trim();
@@ -1672,6 +1718,7 @@ function formValuesFromProject(project) {
   const brief = project?.latest_brief_json || {};
   const meta = brief.ui_meta || {};
   const geography = brief.geography || {};
+  const geographyFallback = parseTargetGeographySummary(project?.target_geography || "");
   const breakdown = brief.jd_breakdown && typeof brief.jd_breakdown === "object" && !Array.isArray(brief.jd_breakdown)
     ? { ...brief.jd_breakdown }
     : null;
@@ -1693,9 +1740,9 @@ function formValuesFromProject(project) {
     notes: project?.notes || "",
     assignedRecruiterIds: (project?.assigned_recruiters || []).map((user) => user.id),
     titles: meta.titles || brief.titles || [],
-    countries: meta.countries || (geography.country ? [geography.country] : []),
-    continents: meta.continents || [],
-    cities: meta.cities || (geography.location_name && geography.location_name !== geography.country ? [geography.location_name] : []),
+    countries: meta.countries || (geography.country ? [geography.country] : geographyFallback.countries),
+    continents: meta.continents || geographyFallback.continents,
+    cities: meta.cities || (geography.location_name && geography.location_name !== geography.country ? [geography.location_name] : geographyFallback.cities),
     companyTargets: meta.company_targets || brief.company_targets || [],
     peerCompanyTargets: meta.peer_company_targets || brief.peer_company_targets || [],
     mustHaveKeywords: meta.must_have_keywords || brief.required_keywords || [],
@@ -1827,10 +1874,11 @@ function projectMetricChips(project) {
   if (!project) return "";
   const chips = [];
   const runCount = safeNumber(project.run_count);
-  const latestCandidates = safeNumber(project.latest_run_candidate_count);
   const summary = latestRunSummary(project);
   const verifiedCount = safeNumber(summary.verified_count);
   const reviewCount = safeNumber(summary.review_count);
+  const rejectCount = safeNumber(summary.reject_count);
+  const latestCandidates = safeNumber(project.latest_run_candidate_count || summary.candidate_count || summary.returned_candidate_count);
   const yieldStatus = String(summary.quality_diagnostics?.yield_status || "").toLowerCase();
 
   if (project.target_geography) {
@@ -1845,6 +1893,9 @@ function projectMetricChips(project) {
   }
   if (reviewCount > 0) {
     chips.push(`<span class="info-chip ${verifiedCount > 0 ? "" : "chip-warn"}">${escapeHtml(String(reviewCount))} Review</span>`);
+  }
+  if (rejectCount > 0) {
+    chips.push(`<span class="info-chip">${escapeHtml(String(rejectCount))} Rejected</span>`);
   }
   if (yieldStatus === "low" && latestCandidates > 0) {
     chips.push(`<span class="info-chip chip-warn">Low Yield</span>`);
@@ -2375,6 +2426,59 @@ function selectedProjectForView() {
   return state.selectedProject || selectedProjectFromList() || null;
 }
 
+function booleanValue(value, fallback = false) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (["true", "1", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
+function latestBriefConfig(project = selectedProjectForView()) {
+  return project && typeof project.latest_brief_json === "object" && project.latest_brief_json
+    ? project.latest_brief_json
+    : {};
+}
+
+function strictScopeSettings(project = selectedProjectForView()) {
+  const brief = latestBriefConfig(project);
+  const clarifications =
+    brief && typeof brief.brief_clarifications === "object" && brief.brief_clarifications
+      ? brief.brief_clarifications
+      : {};
+  const allowAdjacentTitles = booleanValue(
+    brief.allow_adjacent_titles ?? clarifications.allow_adjacent_titles,
+    true,
+  );
+  const exactCompanyScope = booleanValue(
+    brief.exact_company_scope ?? clarifications.exact_company_scope,
+    false,
+  );
+  const strictMarketScope = booleanValue(
+    brief.strict_market_scope ?? clarifications.strict_market_scope,
+    false,
+  );
+  return {
+    allowAdjacentTitles,
+    exactCompanyScope,
+    strictMarketScope,
+    enabled: exactCompanyScope || strictMarketScope || !allowAdjacentTitles,
+  };
+}
+
+function strictScopeActiveForView(project = selectedProjectForView()) {
+  return strictScopeSettings(project).enabled;
+}
+
 function resetLoadedProjectState() {
   state.currentReport = null;
   state.currentRuns = [];
@@ -2606,14 +2710,60 @@ function currentCandidates() {
   return Array.isArray(state.currentReport?.candidates) ? state.currentReport.candidates : [];
 }
 
+const LINKEDIN_HOST_LOCATION_HINTS = {
+  "ae.linkedin.com": "UAE",
+  "sa.linkedin.com": "Saudi Arabia",
+  "kw.linkedin.com": "Kuwait",
+  "qa.linkedin.com": "Qatar",
+  "om.linkedin.com": "Oman",
+  "in.linkedin.com": "India",
+  "uk.linkedin.com": "UK",
+  "de.linkedin.com": "Germany",
+  "fr.linkedin.com": "France",
+  "it.linkedin.com": "Italy",
+  "sg.linkedin.com": "Singapore",
+  "hk.linkedin.com": "Hong Kong",
+};
+
+function candidateLocationFromLink(candidate) {
+  const urls = [candidate?.linkedin_url, candidate?.source_url].filter(Boolean);
+  for (const value of urls) {
+    try {
+      const host = new URL(String(value)).hostname.toLowerCase().replace(/^www\./, "");
+      if (LINKEDIN_HOST_LOCATION_HINTS[host]) {
+        return LINKEDIN_HOST_LOCATION_HINTS[host];
+      }
+    } catch (error) {
+      continue;
+    }
+  }
+  return "";
+}
+
 function candidateLocationLabel(candidate) {
-  const location = String(candidate?.location_name || "").trim();
-  return location || "Unknown Location";
+  const location = String(candidate?.location_name || candidate?.current_location || "").trim();
+  if (location) {
+    return location;
+  }
+  const hint = candidateLocationFromLink(candidate);
+  if (hint) {
+    return `${hint} (link hint)`;
+  }
+  return "Unknown Location";
+}
+
+function acceptedCandidateCount(candidates = currentCandidates()) {
+  return candidates.filter((candidate) => statusFromCandidate(candidate).key !== "reject").length;
+}
+
+function visibleCandidatePool() {
+  return currentCandidates();
 }
 
 function candidateLocationBuckets() {
+  const pool = visibleCandidatePool();
   const counts = new Map();
-  currentCandidates().forEach((candidate) => {
+  pool.forEach((candidate) => {
     const location = candidateLocationLabel(candidate);
     counts.set(location, (counts.get(location) || 0) + 1);
   });
@@ -2642,7 +2792,8 @@ function currentRequestedCandidateLimit() {
 function filteredCandidates() {
   const query = String(state.candidateSearchQuery || "").trim().toLowerCase();
   const locationFilter = String(state.candidateLocationFilter || "all");
-  return currentCandidates().filter((candidate) => {
+  const baseCandidates = state.candidateStatusFilter === "all" ? visibleCandidatePool() : currentCandidates();
+  return baseCandidates.filter((candidate) => {
     const status = statusFromCandidate(candidate).key;
     if (state.candidateStatusFilter !== "all" && status !== state.candidateStatusFilter) {
       return false;
@@ -2658,7 +2809,7 @@ function filteredCandidates() {
       candidateDisplayName(candidate),
       candidate.current_title,
       candidateDisplayCompany(candidate),
-      candidate.location_name,
+      candidateLocation,
       candidate.summary,
     ]
       .filter(Boolean)
@@ -2803,6 +2954,61 @@ function candidateInsightBuckets(candidate) {
   return { positives, gaps };
 }
 
+function candidateRejectionReasons(candidate) {
+  const rawNotes = Array.isArray(candidate.verification_notes) ? candidate.verification_notes : [];
+  const reasons = [];
+  rawNotes.forEach((raw) => {
+    const note = String(raw || "").trim();
+    if (!note) return;
+    if (note.startsWith("current_function_fit:title_overlap_but_strict_scope")) {
+      reasons.push("Title overlaps, but not closely enough for the strict title scope.");
+      return;
+    }
+    if (note.startsWith("current_function_fit:family_overlap_but_strict_scope")) {
+      reasons.push("Profile is in the broader function family, but outside the strict title scope.");
+      return;
+    }
+    if (note.startsWith("current_function_fit:weak")) {
+      reasons.push("Current role is not aligned enough with the requested titles.");
+      return;
+    }
+    if (note.startsWith("ranker_penalty:current_title_not_aligned")) {
+      reasons.push("Current title is not aligned enough with the requested target titles.");
+      return;
+    }
+    if (note.startsWith("geo_mismatch")) {
+      reasons.push("Location evidence is outside the allowed geography or too weak to verify confidently.");
+      return;
+    }
+    if (note.startsWith("company_mismatch")) {
+      reasons.push("Current or past company evidence does not match the target company list closely enough.");
+      return;
+    }
+    if (note.startsWith("industry_fit:missing")) {
+      reasons.push("Public profile lacks strong industry evidence for the brief.");
+      return;
+    }
+    if (note.startsWith("parser_confidence:title_looks_like_company")) {
+      reasons.push("Profile parsing is noisy, so title/company evidence is unreliable.");
+      return;
+    }
+    if (note.startsWith("evidence_quality:weak") || note.startsWith("evidence_quality:no_public")) {
+      reasons.push("Public evidence is too weak to verify confidently.");
+      return;
+    }
+  });
+  const uniqueReasons = Array.from(new Set(reasons)).slice(0, 3);
+  if (uniqueReasons.length) {
+    return uniqueReasons;
+  }
+  const fallback = rawNotes
+    .map((note) => humanizeNote(note))
+    .filter(Boolean)
+    .filter((note) => !/role family match|title match|primary title match|company consensus|current role proof|strong company identity|semantic fit|feedback calibration/i.test(note))
+    .slice(0, 3);
+  return Array.from(new Set(fallback));
+}
+
 function compactFeatureSummary(candidate) {
   const signals = candidateSignalEntries(candidate);
   if (!signals.length) {
@@ -2931,7 +3137,10 @@ function renderResultsSummary() {
   }
   const summary = state.currentReport.summary || {};
   const cards = [
-    { label: "Candidates", value: safeNumber(summary.candidate_count, state.currentReport.candidates?.length || 0) },
+    {
+      label: "Candidates",
+      value: safeNumber(summary.candidate_count, state.currentReport.candidates?.length || 0),
+    },
     { label: "Verified", value: safeNumber(summary.verified_count) },
     { label: "Needs Review", value: safeNumber(summary.review_count) },
     { label: "Rejected", value: safeNumber(summary.reject_count) },
@@ -3034,8 +3243,10 @@ function candidateCardMarkup(candidate) {
   const status = statusFromCandidate(candidate);
   const signals = compactFeatureSummary(candidate);
   const insights = candidateInsightBuckets(candidate);
+  const rejectionReasons = candidateRejectionReasons(candidate);
   const displayName = candidateDisplayName(candidate);
   const displayCompany = candidateDisplayCompany(candidate);
+  const displayLocation = candidateLocationLabel(candidate);
   const links = [];
   if (candidate.linkedin_url) links.push(`<a class="inline-link" href="${escapeHtml(candidate.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>`);
   if (candidate.source_url) links.push(`<a class="inline-link" href="${escapeHtml(candidate.source_url)}" target="_blank" rel="noreferrer">Source</a>`);
@@ -3048,7 +3259,7 @@ function candidateCardMarkup(candidate) {
             <h4>${escapeHtml(displayName)}</h4>
             <span class="status-pill status-${escapeHtml(status.key)}">${escapeHtml(status.label)}</span>
           </div>
-          <p class="candidate-subtitle">${escapeHtml(candidate.current_title || "No title")} | ${escapeHtml(displayCompany)} | ${escapeHtml(candidate.location_name || "No location")}</p>
+          <p class="candidate-subtitle">${escapeHtml(candidate.current_title || "No title")} | ${escapeHtml(displayCompany)} | ${escapeHtml(displayLocation)}</p>
           <div class="candidate-meta">
             ${links.join("<span class=\"divider\">|</span>")}
             ${registrySeen > 1 ? `<span class="muted">Seen in ${registrySeen} runs</span>` : `<span class="muted">New to the registry</span>`}
@@ -3061,6 +3272,7 @@ function candidateCardMarkup(candidate) {
       ${signals}
       ${insights.positives.length ? `<p class="candidate-notes"><strong>Why it matched:</strong> ${escapeHtml(insights.positives.join(" | "))}</p>` : ""}
       ${insights.gaps.length ? `<p class="candidate-notes muted"><strong>Evidence gaps:</strong> ${escapeHtml(insights.gaps.join(" | "))}</p>` : ""}
+      ${status.key === "reject" && rejectionReasons.length ? `<p class="candidate-notes muted"><strong>Why rejected:</strong> ${escapeHtml(rejectionReasons.join(" | "))}</p>` : ""}
       ${feedbackFormMarkup(candidate)}
     </article>
   `;
@@ -3071,6 +3283,7 @@ function candidateTableRowMarkup(candidate, selectedRef) {
   const candidateRef = candidateIdentityRef(candidate);
   const displayName = candidateDisplayName(candidate);
   const displayCompany = candidateDisplayCompany(candidate);
+  const displayLocation = candidateLocationLabel(candidate);
   const links = [];
   if (candidate.linkedin_url) {
     links.push(`<a class="inline-link" href="${escapeHtml(candidate.linkedin_url)}" target="_blank" rel="noreferrer">LinkedIn</a>`);
@@ -3083,7 +3296,7 @@ function candidateTableRowMarkup(candidate, selectedRef) {
       <td>
         <div class="candidate-primary">
           <strong>${escapeHtml(displayName)}</strong>
-          <span class="candidate-secondary">${escapeHtml(candidate.location_name || "No location")}</span>
+          <span class="candidate-secondary">${escapeHtml(displayLocation)}</span>
         </div>
       </td>
       <td>${escapeHtml(candidate.current_title || "No title")}</td>
@@ -3153,10 +3366,10 @@ function renderCandidatesSummary() {
       `;
       return;
     }
-    const summary = state.currentReport?.summary || {};
-    const requested = currentRequestedCandidateLimit();
+  const summary = state.currentReport?.summary || {};
+  const requested = currentRequestedCandidateLimit();
   const cards = [
-    { label: "Returned", value: candidates.length },
+    { label: "Candidates", value: candidates.length },
     { label: "Verified", value: bucketCountFor("verified") },
     { label: "Needs Review", value: bucketCountFor("review") },
     { label: "Rejected", value: bucketCountFor("reject") },
@@ -3191,6 +3404,7 @@ function renderCandidateControls() {
   const exportNote = document.getElementById("candidate-export-note");
   const locationSelect = document.getElementById("candidate-location-filter");
   const locationNote = document.getElementById("candidate-location-note");
+  const visibleCount = visibleCandidatePool().length;
   const buckets = [
     { id: "all", label: "All", count: currentCandidates().length },
     { id: "verified", label: "Verified", count: bucketCountFor("verified") },
@@ -3366,7 +3580,7 @@ function renderCandidates() {
   const bucketLabel = titleCaseWords(state.candidateStatusFilter === "all" ? "all" : state.candidateStatusFilter);
   tableRoot.innerHTML = `
     <div class="candidate-table-meta">
-      <p class="muted">Showing ${escapeHtml(String(candidates.length))} of ${escapeHtml(String(currentCandidates().length))} candidates.</p>
+      <p class="muted">Showing ${escapeHtml(String(candidates.length))} of ${escapeHtml(String(visibleCandidatePool().length))} candidates.</p>
       <p class="muted">Bucket: ${escapeHtml(bucketLabel)} | Location: ${escapeHtml(locationFilterLabel)}</p>
     </div>
     <div class="candidate-table-wrap">
@@ -3392,6 +3606,9 @@ function renderCandidates() {
     row.addEventListener("click", () => {
       state.selectedCandidateRef = row.dataset.candidateRow || "";
       renderCandidates();
+      requestAnimationFrame(() => {
+        document.getElementById("candidate-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     });
   });
   attachFeedbackHandlers();
@@ -3421,7 +3638,6 @@ function attachFeedbackHandlers() {
             action,
             reason_code: reasonCode,
             note,
-            feedback_db: state.settings.feedback_db,
             brief: state.selectedProject?.latest_brief_json || {},
           },
         });
@@ -3495,12 +3711,15 @@ function renderResults() {
   if (card) card.hidden = false;
   const summary = state.currentReport.summary || {};
   const requested = currentRequestedCandidateLimit();
-  const returned = currentCandidates().length;
+  const strictScope = strictScopeActiveForView();
+  const returned = strictScope
+    ? Math.max(safeNumber(summary.accepted_candidate_count), acceptedCandidateCount())
+    : currentCandidates().length;
   root.innerHTML = `
     <div class="list-row list-row-detail">
       <div>
         <strong>${escapeHtml(formatTimestamp(state.currentReport.generated_at))}</strong>
-        <p>${escapeHtml(state.selectedProject.role_title || state.selectedProject.name)} | Requested ${escapeHtml(String(requested))} candidates | Returned ${escapeHtml(String(returned))}</p>
+        <p>${escapeHtml(state.selectedProject.role_title || state.selectedProject.name)} | Requested ${escapeHtml(String(requested))} candidates | ${strictScope ? "Candidates" : "Returned"} ${escapeHtml(String(returned))}</p>
       </div>
       <div class="list-meta run-history-meta">
         <span>${escapeHtml(String(summary.verified_count || 0))} Verified</span>
@@ -4114,7 +4333,8 @@ async function loadProjectRun(projectId, runId = "", options = {}) {
     }
     return;
   }
-  const query = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+  const resolvedRunId = String(runId || latestCompletedRunIdForProject(projectId) || "").trim();
+  const query = resolvedRunId ? `?run_id=${encodeURIComponent(resolvedRunId)}` : "";
   try {
     const timeoutMs = safeNumber(options.timeoutMs, 0);
     const payload = await fetchJSON(
@@ -4957,7 +5177,8 @@ function bindEvents() {
   document.getElementById("top-run-button").addEventListener("click", runSearch);
   document.getElementById("refresh-results-button").addEventListener("click", async () => {
     if (!state.selectedProjectId) return;
-    await loadProjectRun(state.selectedProjectId);
+    const latestRunId = latestCompletedRunIdForProject(state.selectedProjectId);
+    await loadProjectRun(state.selectedProjectId, latestRunId);
     setStatus("Results refreshed.", "success", "The latest saved run has been loaded.");
   });
   document.getElementById("refresh-feedback-button").addEventListener("click", async () => {

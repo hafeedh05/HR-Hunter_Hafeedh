@@ -67,6 +67,8 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
     geographies = [value for value in [*brief.cities[:6], *brief.countries[:6]] if str(value).strip()] or [""]
     executive_search = understanding.role_family == "executive"
     large_executive_search = executive_search and brief.target_count >= 500
+    strict_company_scope = bool(brief.exact_company_scope and brief.company_targets)
+    strict_market_scope = bool(brief.strict_market_scope and any(geo for geo in geographies if str(geo).strip()))
     must_company_limit = 24 if large_executive_search else 24 if executive_search else 8
     peer_company_limit = 16 if large_executive_search else 18 if executive_search else 8
     must_companies = []
@@ -75,10 +77,11 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
         if text and text not in must_companies:
             must_companies.append(text)
     peer_companies = []
-    for value in brief.peer_company_targets[:peer_company_limit]:
-        text = str(value or "").strip()
-        if text and text not in must_companies and text not in peer_companies:
-            peer_companies.append(text)
+    if not strict_company_scope:
+        for value in brief.peer_company_targets[:peer_company_limit]:
+            text = str(value or "").strip()
+            if text and text not in must_companies and text not in peer_companies:
+                peer_companies.append(text)
     companies = [*must_companies, *peer_companies]
     skills = [value for value in understanding.inferred_skills[:6] if str(value).strip()]
     queries: list[QueryTask] = []
@@ -115,9 +118,13 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
         text = str(value or "").strip()
         if text and normalize_text(text) not in {normalize_text(existing) for existing in explicit_titles}:
             explicit_titles.append(text)
-    exact_titles = (explicit_titles[:8] if executive_search else understanding.title_variants[:8]) or [brief.role_title]
+    exact_titles = (
+        explicit_titles[:8]
+        if (executive_search or not brief.allow_adjacent_titles)
+        else understanding.title_variants[:8]
+    ) or [brief.role_title]
     adjacent_titles = []
-    if profile.adjacent_titles_enabled:
+    if brief.allow_adjacent_titles and profile.adjacent_titles_enabled:
         if executive_search and companies:
             adjacent_titles = understanding.adjacent_titles[:2 if large_executive_search else 1]
         else:
@@ -128,7 +135,7 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
         priority_geo_count = 2 if large_executive_search else 2
         executive_title_clause = " OR ".join(f'"{title}"' for title in exact_titles[:3 if large_executive_search else 4]) if executive_search else ""
         for company in must_companies:
-            if executive_title_clause:
+            if executive_title_clause and not strict_market_scope:
                 add(
                     f'site:linkedin.com/in ({executive_title_clause}) "{company}"',
                     "company_leadership_priority",
@@ -150,18 +157,19 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
                         "leadership",
                     )
             for title in exact_titles[:priority_title_count]:
-                add(
-                    f'site:linkedin.com/in "{title}" "{company}"',
-                    "company_exact_priority",
-                    "professional",
-                    page_budget=2 if large_executive_search and title == exact_titles[0] else None,
-                )
-                if large_executive_search:
+                if not strict_market_scope:
                     add(
-                        f'site:theorg.com "{title}" "{company}"',
-                        "company_org_title_priority",
-                        "leadership",
+                        f'site:linkedin.com/in "{title}" "{company}"',
+                        "company_exact_priority",
+                        "professional",
+                        page_budget=2 if large_executive_search and title == exact_titles[0] else None,
                     )
+                    if large_executive_search:
+                        add(
+                            f'site:theorg.com "{title}" "{company}"',
+                            "company_org_title_priority",
+                            "leadership",
+                        )
                 for geography in geographies[:priority_geo_count]:
                     if geography:
                         add(
@@ -176,7 +184,7 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
         peer_geo_count = 2 if large_executive_search else 2
         executive_title_clause = " OR ".join(f'"{title}"' for title in exact_titles[:3 if large_executive_search else 3]) if executive_search else ""
         for company in peer_companies:
-            if executive_title_clause:
+            if executive_title_clause and not strict_market_scope:
                 add(
                     f'site:linkedin.com/in ({executive_title_clause}) "{company}"',
                     "peer_leadership_priority",
@@ -198,18 +206,19 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
                         "leadership",
                     )
             for title in exact_titles[:peer_title_count]:
-                add(
-                    f'site:linkedin.com/in "{title}" "{company}"',
-                    "peer_company_exact_priority",
-                    "professional",
-                    page_budget=2 if large_executive_search and title == exact_titles[0] else None,
-                )
-                if large_executive_search:
+                if not strict_market_scope:
                     add(
-                        f'site:theorg.com "{title}" "{company}"',
-                        "peer_org_title_priority",
-                        "leadership",
+                        f'site:linkedin.com/in "{title}" "{company}"',
+                        "peer_company_exact_priority",
+                        "professional",
+                        page_budget=2 if large_executive_search and title == exact_titles[0] else None,
                     )
+                    if large_executive_search:
+                        add(
+                            f'site:theorg.com "{title}" "{company}"',
+                            "peer_org_title_priority",
+                            "leadership",
+                        )
                 for geography in geographies[:peer_geo_count]:
                     if geography:
                         add(
@@ -222,16 +231,19 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
     generic_title_limit = 4 if large_executive_search else 3 if executive_search else len(exact_titles)
     generic_geo_limit = 2 if large_executive_search and companies else 2 if executive_search and companies else 4
     generic_site_budget = min(profile.source_site_budget, 2 if large_executive_search and companies else 2 if executive_search and companies else profile.source_site_budget)
-    for title in exact_titles[:generic_title_limit]:
-        for geography in geographies[:generic_geo_limit]:
-            query = " ".join(
-                part
-                for part in [f'"{title}"', f'"{geography}"' if geography else "", *profile.family_terms[: profile.family_term_budget]]
-                if part
-            )
-            add(query, "exact_title_geo", "general")
-            for site in source_sites[: generic_site_budget]:
-                add(f'{site} "{title}" "{geography}"' if geography else f'{site} "{title}"', "exact_title_source", site)
+    if not strict_company_scope:
+        for title in exact_titles[:generic_title_limit]:
+            for geography in geographies[:generic_geo_limit]:
+                query = " ".join(
+                    part
+                    for part in [f'"{title}"', f'"{geography}"' if geography else "", *profile.family_terms[: profile.family_term_budget]]
+                    if part
+                )
+                add(query, "exact_title_geo", "general")
+                for site in source_sites[: generic_site_budget]:
+                    if strict_market_scope and not geography:
+                        continue
+                    add(f'{site} "{title}" "{geography}"' if geography else f'{site} "{title}"', "exact_title_source", site)
 
     for title in adjacent_titles:
         for geography in geographies[:2 if executive_search else 3]:
@@ -248,7 +260,8 @@ def build_query_plan(brief: SearchBrief) -> QueryPlan:
     if not executive_search:
         for title in exact_titles[:4]:
             for company in companies:
-                add(f'site:linkedin.com/in "{title}" "{company}"', "company_exact", "professional")
+                if not strict_market_scope:
+                    add(f'site:linkedin.com/in "{title}" "{company}"', "company_exact", "professional")
                 for geography in geographies[:3]:
                     if geography:
                         add(f'site:linkedin.com/in "{title}" "{company}" "{geography}"', "company_geo", "professional")

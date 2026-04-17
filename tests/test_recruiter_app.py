@@ -69,7 +69,7 @@ def test_build_ui_brief_payload_maps_company_mode_and_location_targets():
     assert brief.geography.country == "United Arab Emirates"
     assert brief.anchor_weights["company_match"] > 0
     assert brief.provider_settings["registry_memory"]["enabled"] is False
-    assert brief.provider_settings["retrieval"]["include_history_slices"] is True
+    assert brief.provider_settings["retrieval"]["include_history_slices"] is False
 
 
 def test_safe_artifact_path_allows_configured_shared_output(monkeypatch, tmp_path: Path):
@@ -175,7 +175,7 @@ def test_assess_ui_brief_quality_asks_market_scope_question_for_multimarket_brie
 
     assert market_scope_question["label"] == "Market Scope"
     assert "Dubai" in market_scope_question["prompt"]
-    assert market_scope_question["recommended_answer"] is False
+    assert market_scope_question["recommended_answer"] is True
 
 
 def test_build_app_bootstrap_exposes_supported_ui_options():
@@ -577,15 +577,17 @@ def test_build_ui_brief_payload_uses_broader_recommended_defaults_for_common_50_
     brief = payload["brief_config"]
 
     assert brief["brief_search_profile"] == "focused"
-    assert brief["brief_clarifications"]["allow_adjacent_titles"] is True
+    assert brief["brief_clarifications"]["allow_adjacent_titles"] is False
     assert brief["brief_clarifications"]["expand_search_when_thin"] is True
+    assert brief["brief_clarifications"]["strict_market_scope"] is True
     assert payload["internal_fetch_limit"] == 100
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] == 100
     assert brief["provider_settings"]["reranker"]["top_n"] == 100
     assert brief["provider_settings"]["verification"]["top_n"] == 50
-    assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is True
+    assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is False
     assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
     assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
+    assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 18
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["trade_directory_pages"] == 8
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["industry_association_pages"] == 6
@@ -682,7 +684,7 @@ def test_build_ui_brief_payload_applies_exact_company_and_market_scope_clarifica
 
     assert brief["brief_clarifications"]["exact_company_scope"] is True
     assert brief["brief_clarifications"]["strict_market_scope"] is True
-    assert brief["company_match_mode"] == "current_only"
+    assert brief["company_match_mode"] == "both"
     assert brief["provider_settings"]["retrieval"]["include_history_slices"] is False
     assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is False
     assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
@@ -731,15 +733,16 @@ def test_build_ui_brief_payload_top_up_round_auto_broadens_focused_searches():
 
     assert brief["top_up_round"] == 2
     assert brief["top_up_strategy"]["auto_broadened"] is True
-    assert brief["expand_title_keywords"] is True
-    assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is True
+    assert brief["expand_title_keywords"] is False
+    assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is False
     assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
-    assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is True
-    assert brief["provider_settings"]["retrieval"]["max_geo_groups"] >= 4
-    assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is True
+    assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
+    assert brief["provider_settings"]["retrieval"]["max_geo_groups"] == 3
+    assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
     assert brief["provider_settings"]["scrapingbee_google"]["max_queries"] >= 200
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["profile_like_public_pages"] == 14
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["trade_directory_pages"] == 6
+    assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["industry_association_pages"] == 5
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["team_leadership_pages"] == 2
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["speaker_bio_pages"] == 0
     assert brief["provider_settings"]["scrapingbee_google"]["query_family_budgets"]["award_industry_pages"] == 0
@@ -767,7 +770,10 @@ def test_build_ui_brief_payload_top_up_round_respects_explicit_opt_outs():
     brief = payload["brief_config"]
 
     assert brief["top_up_round"] == 3
-    assert brief["top_up_strategy"]["auto_broadened"] is False
+    assert brief["top_up_strategy"]["auto_broadened"] is True
+    assert brief["top_up_strategy"]["steps"] == [
+        "increased strict-scope retrieval depth without widening titles, companies, or geography"
+    ]
     assert brief["expand_title_keywords"] is False
     assert brief["provider_settings"]["retrieval"]["include_broad_slice"] is False
     assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is False
@@ -801,9 +807,9 @@ def test_build_ui_brief_payload_technical_top_up_overrides_strict_market_cage() 
     assert brief["top_up_round"] == 2
     assert brief["top_up_strategy"]["auto_broadened"] is True
     assert brief["brief_clarifications"]["strict_market_scope"] is True
-    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is True
-    assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is True
-    assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is True
+    assert brief["provider_settings"]["retrieval"]["include_discovery_slices"] is False
+    assert brief["provider_settings"]["retrieval"]["geo_fanout_enabled"] is False
+    assert brief["provider_settings"]["scrapingbee_google"]["include_country_only_queries"] is False
 
 
 def test_build_ui_brief_payload_high_volume_technical_search_verifies_full_target() -> None:

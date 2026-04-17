@@ -200,7 +200,8 @@ def _build_transformer_brief(brief: SearchBrief, *, requested_limit: int, payloa
     from hr_hunter_transformer.models import SearchBrief as TransformerSearchBrief
 
     countries, cities = _normalize_locations(brief, payload)
-    peer_company_targets = list(brief.peer_company_targets or brief.sourcing_company_targets or [])
+    strict_company_scope = bool(brief.exact_company_scope and brief.company_targets)
+    peer_company_targets = [] if strict_company_scope else list(brief.peer_company_targets or brief.sourcing_company_targets or [])
     return TransformerSearchBrief(
         role_title=brief.role_title,
         titles=list(brief.titles),
@@ -208,10 +209,16 @@ def _build_transformer_brief(brief: SearchBrief, *, requested_limit: int, payloa
         cities=cities,
         company_targets=list(brief.company_targets),
         peer_company_targets=[value for value in peer_company_targets if value not in set(brief.company_targets)],
+        exclude_title_keywords=list(brief.exclude_title_keywords),
+        exclude_company_keywords=list(brief.exclude_company_keywords),
         required_keywords=list(brief.required_keywords),
         preferred_keywords=list(brief.preferred_keywords),
         industry_keywords=list(brief.industry_keywords),
         target_count=max(1, int(requested_limit or brief.max_profiles or 300)),
+        company_match_mode=str(brief.company_match_mode or "both"),
+        allow_adjacent_titles=bool(brief.allow_adjacent_titles),
+        exact_company_scope=strict_company_scope,
+        strict_market_scope=bool(brief.strict_market_scope),
     )
 
 
